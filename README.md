@@ -44,7 +44,7 @@ python3 tools/package.py
 python3 tools/verify_static.py
 ```
 
-Packaging produces `target/civilizations-0.1.2.hnmod` (source-only; the
+Packaging produces `target/civilizations-0.1.3.hnmod` (source-only; the
 launcher compiles it). The template is based on the **native hook-point**
 pattern used by the official Horizon SMP mod. The compatibility pin is in
 `compatibility.json`; the source was inspected but not compiled in this workspace.
@@ -75,7 +75,7 @@ to compile/trust the native mod before the game can run.
 
 1. Install the official Horizon launcher from <https://playhorizon.dev/>.
 2. Create a separate test instance and back up the world.
-3. Put `civilizations-0.1.2.hnmod` in that instance's `horizon-native-mods/`
+3. Put `civilizations-0.1.3.hnmod` in that instance's `horizon-native-mods/`
    directory. The native build requires the launcher's explicit trust action.
 4. Let the launcher **build** the modded game and review build logs. If you see
    `target not found`, hook schema incompatibility, or Rust errors, stop: the
@@ -160,3 +160,7 @@ The pinned native Horizon compile gate has passed ([GitHub run 42375553368](http
 The mod now persists each spawned villager's actual Horizon entity UUID as a 32-character hex string. All movement and building checks use UUID lookup, not a visible name. Existing v0.1.2 worlds have no UUID fields; an operator must visit loaded original villagers and run `/civ reconcile Ashford` exactly once to bind unique, tagged legacy NPCs. Ambiguous names, unavailable UUIDs and collisions are skipped. No automatic respawn is attempted. The migration works only in a disposable test world until the actual in-game E2E passes.
 
 The module is checked with `game.native_on("civilizations")` before world commands and simulation ticks; native addon disable stops further simulation/writes.
+
+## First NPC dialogue (0.1.3 experimental)
+
+After `/civ actors Ashford` has created and persistently UUID-bound the village actors, **right-click one of those villagers** to display their identity, job, home settlement, morale, and how to join or trade. Only a known UUID-bound civilization villager claims the interaction. Ordinary Minecraft villagers and unmatched actors retain their vanilla behavior. The response is currently a chat line, not a custom GUI or a quest engine. Requires in-game validation on a disposable world.

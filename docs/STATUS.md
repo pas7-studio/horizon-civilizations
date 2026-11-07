@@ -67,3 +67,7 @@ The historical verification table above describes the original prototype, **not*
 ## UUID binding / mod-disabled guard (implementation branch)
 
 Each new spawned NPC is bound to its persistent Horizon UUID, saved after each spawn. Loaded-actor navigation/building verifies UUID lookup, not a custom name. Legacy actors require operator-invoked `/civ reconcile NAME`; no auto rebinding or respawn occurs. World validation prevents duplicate/zero UUIDs and rejects malformed hex or resident IDs. Hooks exit while the mod is disabled. CI and actual in-game verification must still be checked on this branch.
+
+## 0.1.3 dialogue hook (feature branch)
+
+Introduced the native `native_interact_entity` hook and UUID-only NPC dialogue, with vanilla interaction fallback for unknown entities. Revisions, static packaging and Windows local installer were updated to 0.1.3. This is a text conversation seed, not a custom menu, trade UI or quest engine. Native compile and in-game validation required.

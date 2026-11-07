@@ -43,3 +43,7 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
 25. Use the v0.1.2 save schema with missing UUID fields. Before `/civ reconcile NAME`, `/civ roster` must show zero UUID-linked actors. Reconcile from the loaded village as OP and verify ten links saved; repeat is idempotent. Duplicate names / modified impostors must be skipped or manually reviewed.
 26. Force partial spawning, restart and verify actors never auto-spawn a second batch. An unbound physical actor can be recovered only with the explicit operator command.
 27. Disable `civilizations` using Horizon's native-mod switch: server and level ticks must not advance civilization state or issue block commands while disabled. Re-enable and verify state continuity.
+
+28. **NPC right-click:** click a UUID-bound resident, get identity/profession/settlement/morale and join/trade instructions in the acting player's chat; claimed interaction blocks vanilla trade menu for this bound villager only.
+29. **Vanilla safety:** right-click vanilla villagers, unbound legacy villagers, and a renamed impostor: they must retain vanilla interaction, never expose another village's identity or consume the event. Repeat while mod disabled.
+30. **Reload and multiplayer:** reopen world, interact with an NPC whose UUID is saved; confirm same identity. Guest A's right-click must not write into Guest B's chat. Check with both hands and an item held.
