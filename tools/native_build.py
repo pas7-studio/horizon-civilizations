@@ -36,14 +36,35 @@ def checkout_repo(url: str, directory: Path, revision: str) -> None:
         raise RuntimeError(f'dirty checkout at {directory}; refused')
 
 
-def prepare_pristine_source(checkout: Path, staged: Path) -> None:
-    """Make a symlink-free copy for horizon-mixins without touching pinned Git."""
+def prepare_pristine_source(checkout: Path, staged: Path, revision: str) -> None:
+    """Create a detached Git worktree with correct revision, no input symlinks.
+
+    The mixin plan checks the worktree's HEAD against the manifest pin; a
+    filesystem-only copy without .git would accidentally pick the *mod* repo's
+    HEAD instead. We change only this disposable worktree, never checkout.
+    """
     if staged.exists():
         shutil.rmtree(staged)
-    shutil.copytree(
-        checkout, staged, symlinks=False,
-        ignore=shutil.ignore_patterns('.git', 'target'),
-    )
+    run('git', '-C', str(checkout), 'worktree', 'prune')
+    run('git', '-C', str(checkout), 'worktree', 'add', '--force', '--detach', str(staged), revision)
+    observed = subprocess.check_output(
+        ['git', '-C', str(staged), 'rev-parse', 'HEAD'], text=True,
+    ).strip()
+    if observed != revision:
+        raise RuntimeError(f'native staging revision {observed} != {revision}')
+    for link in list(staged.rglob('*')):
+        if not link.is_symlink():
+            continue
+        target = link.resolve(strict=True)
+        try:
+            target.relative_to(staged.resolve())
+        except ValueError as err:
+            raise RuntimeError(f'external symlink refused: {link}') from err
+        if not target.is_file():
+            raise RuntimeError(f'non-file symlink refused: {link}')
+        data = target.read_bytes()
+        link.unlink()
+        link.write_bytes(data)
     links = [str(path.relative_to(staged)) for path in staged.rglob('*') if path.is_symlink()]
     if links:
         raise RuntimeError(f'unresolved symlinks in native stage: {links}')
@@ -63,7 +84,7 @@ def main():
     plan = NATIVE / 'plan.json'
     checkout_repo(COMPAT['horizon_repository'], source, COMPAT['horizon_revision'])
     checkout_repo(COMPAT['horizon_mixins_repository'], transformer, COMPAT['horizon_mixins_revision'])
-    prepare_pristine_source(source, staged_source)
+    prepare_pristine_source(source, staged_source, COMPAT['horizon_revision'])
     run('cargo', 'build', '--locked', '--manifest-path', str(transformer / 'Cargo.toml'),
         '-p', 'horizon-mixins-cli')
     binary = transformer / 'target/debug' / ('horizon-mixins.exe' if os.name == 'nt' else 'horizon-mixins')
