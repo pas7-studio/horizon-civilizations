@@ -1579,8 +1579,15 @@ impl World {
                     && (!gather.issued || gather.worker_id.is_none()) {
                     return Err("native edit receipt without issued worker identity".into());
                 }
-                if gather.pickup_witnessed && !gather.native_edit_confirmed {
-                    return Err("pickup witness without confirmed native block edit".into());
+                // Historic PR #30 saves can contain a witnessed pickup
+                // without the new post-command acknowledgement field.
+                // Accept that save structurally so the whole settlement
+                // remains loadable; the native adapter QUARANTINES this
+                // ambiguous Issued job before processing any more receipts.
+                // Never infer native_edit_confirmed from pickup_witnessed.
+                if gather.pickup_witnessed
+                    && (!gather.issued || gather.worker_id.is_none()) {
+                    return Err("pickup witness without issued worker identity".into());
                 }
                 let [x, y, z] = gather.position;
                 let [sx, sy, sz] = gather.stand;
