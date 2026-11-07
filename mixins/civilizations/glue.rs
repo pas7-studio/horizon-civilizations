@@ -259,9 +259,17 @@ fn guide_actors(game: &mut Game<'_>, world: &World) {
                     || (job.good == Good::Stone && resident.job == Job::Miner))
             {
                 let target = village.gather_job.as_ref().expect("gather exists");
-                [f64::from(target.stand[0]) + 0.5,
-                 f64::from(target.stand[1]),
-                 f64::from(target.stand[2]) + 0.5]
+                if target.issued {
+                    // A log or stone is not credited until its worker
+                    // visibly returns to the town hall's receiving area.
+                    [f64::from(village.center[0]) + 0.5,
+                     f64::from(village.center[1]),
+                     f64::from(village.center[2] - 3) + 0.5]
+                } else {
+                    [f64::from(target.stand[0]) + 0.5,
+                     f64::from(target.stand[1]),
+                     f64::from(target.stand[2]) + 0.5]
+                }
             } else if phase.on_shift(resident.job) && resident.job == Job::Farmer {
                 if let Some(farm) = &village.farm {
                     [f64::from(farm.origin[0]) + 0.5,
@@ -278,9 +286,17 @@ fn guide_actors(game: &mut Game<'_>, world: &World) {
                      f64::from(job.origin[1]),
                      f64::from(job.origin[2] - 4) + 0.5]
                 } else if let Some(job) = &village.visual_job {
-                    [f64::from(job.origin[0]) + 0.5,
-                     f64::from(job.origin[1]),
-                     f64::from(job.origin[2] - 4) + 0.5]
+                    if village.hall_complete && !village.hut_supplies_reserved {
+                        // Builders visit the actual town hall barrels first
+                        // to extract their physical bill of materials.
+                        [f64::from(village.center[0]) + 0.5,
+                         f64::from(village.center[1]),
+                         f64::from(village.center[2] - 3) + 0.5]
+                    } else {
+                        [f64::from(job.origin[0]) + 0.5,
+                         f64::from(job.origin[1]),
+                         f64::from(job.origin[2] - 4) + 0.5]
+                    }
                 } else {
                     [f64::from(village.center[0] + offset[0]) + 0.5,
                      f64::from(village.center[1] + offset[1]),
@@ -1911,6 +1927,23 @@ fn gather_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
     let before = state.world.as_ref().unwrap().clone();
     if job.issued {
         if name == "minecraft:air" {
+            let world = state.world.as_ref().unwrap();
+            let v = &world.settlements[&id];
+            let role = if job.good == Good::Wood { Job::Lumberjack } else { Job::Miner };
+            let linked = loaded_actors(game, world, id);
+            let delivered = v.residents.iter().filter(|r| r.alive && r.job == role).any(|r| {
+                linked.iter().any(|(known, mob)| *known == r.id
+                    && game.native_mob(&dimension, *mob).is_some_and(|actor| {
+                        let dx = actor.pos[0] - f64::from(v.center[0]);
+                        let dz = actor.pos[2] - f64::from(v.center[2]);
+                        dx * dx + dz * dz <= 8.0 * 8.0
+                    }))
+            });
+            if !delivered {
+                // No resource is credited simply because a log disappeared:
+                // the named worker must return to the loaded receiving area.
+                return Ok(());
+            }
             state.world.as_mut().unwrap().confirm_gather(id)?;
         } else {
             // Commands can be refused or a plot may be modified. Never
@@ -2008,6 +2041,13 @@ pub fn level_tick(game: &mut Game<'_>, dimension: &str) {
         }
     }
     if state.physical_ticks % 8 == 0 {
+        if let Err(error) = barrel_one_step(game, state) {
+            log::warn!("[civilizations] native barrel transfer paused: {error}");
+            if error.starts_with("persistence:") {
+                state.problem = Some(error);
+                return;
+            }
+        }
         if let Err(error) = gather_one_step(game, state) {
             log::warn!("[civilizations] physical gathering paused: {error}");
             if error.starts_with("persistence:") {
