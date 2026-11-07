@@ -582,3 +582,14 @@ failing step log. No GitHub Actions or deployment are run.
 The 10/10 local Python mock harness tests are NOT real
 Rust compilation, nor Minecraft gameplay tests; use a
 disposable game instance with owned Java assets for E2E.
+
+## Updated local order: diagnose actual compiler errors first
+
+On `fix/first-play-binary-evidence-v0115`, run
+`py -3 tools/first_play_gate.py --build-client` without source
+formatting. Gate now executes `cargo test` before Clippy/formatting,
+so the first build failure is actionable. Formatting must still PASS;
+the script never silently changes Rust source. Open
+`target/first-play-gate/<UTC>/report.md` for the first blocker.
+The runner's 12/12 mock harness tests passed on Linux; native
+compilation/Minecraft gameplay remain unverified.
