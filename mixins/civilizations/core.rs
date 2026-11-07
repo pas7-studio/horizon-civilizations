@@ -1620,11 +1620,12 @@ impl World {
         }
         let good = t.good;
         let direction = t.direction;
+        let count = t.count;
         match direction {
-            BarrelDirection::ToBarrel => v.warehouse_debit(good, t.count)?,
+            BarrelDirection::ToBarrel => v.warehouse_debit(good, count)?,
             BarrelDirection::ToBuilder => {
                 let previous = v.build_escrow.get(&good).copied().unwrap_or(0);
-                let next = previous.checked_add(t.count).ok_or("building escrow overflow")?;
+                let next = previous.checked_add(count).ok_or("building escrow overflow")?;
                 v.build_escrow.insert(good, next);
             }
         }
