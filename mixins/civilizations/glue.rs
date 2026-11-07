@@ -492,10 +492,12 @@ pub fn interact_entity(game: &mut Game<'_>, entity: i32, kind: &str, claimed: &m
     } else {
         format!("To join this settlement: /civ join {}", village.name)
     };
+    let phase = DailyPhase::at(game.world.day_time);
+    let duty = if phase.on_shift(resident.job) { "on duty" } else { "off duty" };
     let message = format!(
-        "{} — {} of {} (morale {}). {} View: /civ info {}. Trade: /civ buy/sell <good> <amount>.",
+        "{} — {} of {} (morale {}). Routine: {} / {}. {} View: /civ info {}. Trade: /civ buy/sell <good> <amount>.",
         resident.name, resident.job.name(), village.name, village.morale,
-        invitation, village.name
+        phase.name(), duty, invitation, village.name
     );
     drop(guard);
     // Do not consume a vanilla interaction unless the information was sent.
