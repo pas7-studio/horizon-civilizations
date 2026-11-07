@@ -1502,9 +1502,11 @@ impl World {
             return Err("gather only in the village outer work area".into());
         }
         for other in self.settlements.values().filter(|s| s.dimension == v.dimension) {
-            if near_plot(other.center, position)
-                || other.player_parcels.iter().any(|lot| near_plot(lot.origin, position))
-                || other.visual_sites.iter().any(|site| near_plot(*site, position))
+            if near_plot(other.center, position) || near_plot(other.center, stand)
+                || other.player_parcels.iter().any(|lot|
+                    near_plot(lot.origin, position) || near_plot(lot.origin, stand))
+                || other.visual_sites.iter().any(|site|
+                    near_plot(*site, position) || near_plot(*site, stand))
                 || other.visual_job.as_ref().is_some_and(|job| near_plot(job.origin, position))
                 || other.farm.as_ref().is_some_and(|farm| near_plot(farm.origin, position)) {
                 return Err("natural resource overlaps a building, town hall or player claim".into());
@@ -3446,7 +3448,8 @@ mod civic_hall_warehouse_tests {
         assert!(!v.hall_complete);
         assert!(v.hall_job.is_none());
         let mut older = serde_json::to_value(&world).unwrap();
-        let v = older["settlements"][id.to_string()].as_object_mut().unwrap();
+        let v = older["settlements"].as_object_mut().unwrap()
+            .get_mut(&id.to_string()).unwrap().as_object_mut().unwrap();
         v.remove("warehouse");
         v.remove("hall_job");
         v.remove("hall_complete");
