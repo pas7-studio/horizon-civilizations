@@ -1,5 +1,12 @@
 ## Latest stacked Draft: partial NPC spawn recovery (source-only)
 
+**Startup safety update:** both autonomous first-village spawning and OP `/civ actors NAME`
+now share a live survey: ten living unbound residents, no already-loaded tagged
+villagers, and ten natural, loaded, two-air, unoccupied spawn spots. The older
+manual fixed-coordinate spawn path was removed. An incomplete survey creates
+**no** reservation and spawns **no** entity; it can be rerun once the area is safe.
+This hardening remains source-only until real Rust/Horizon/Minecraft tests.
+
 Branch: `feat/guarded-partial-villager-recovery-v0115`, based on
 PR #33. **Not yet compiled or gameplay-verified.** `main`
 unchanged and GitHub Actions disabled.
