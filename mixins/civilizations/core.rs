@@ -6,6 +6,9 @@ use std::collections::{BTreeMap, BTreeSet};
 pub const SCHEMA: u32 = 1;
 pub const MAX_SETTLEMENTS: usize = 64;
 pub const MAX_SIM_DAYS: u32 = 30;
+/// Limit catch-up when a server clock jumps far forward, without spinning.
+/// A skipped gap is intentional; no endless offline farming minting.
+pub const MAX_HOST_CATCHUP_DAYS: u32 = 30;
 /// Bounded on-disk audit of observed visual harvests.
 pub const MAX_HARVEST_RECEIPTS: usize = 32;
 pub const MIN_SETTLEMENT_DISTANCE: i64 = 192;
@@ -578,6 +581,10 @@ impl Settlement {
 pub struct World {
     pub schema: u32,
     pub day: u64,
+    /// Last authoritative Horizon world day already observed by simulation.
+    /// Old saves bootstrap this cursor on the next server tick, with no backlog.
+    #[serde(default)]
+    pub last_host_day: Option<i64>,
     pub next_id: u64,
     pub settlements: BTreeMap<u64, Settlement>,
     pub players: BTreeMap<String, Player>,
@@ -589,6 +596,7 @@ impl Default for World {
         Self {
             schema: SCHEMA,
             day: 0,
+            last_host_day: None,
             next_id: 1,
             settlements: BTreeMap::new(),
             players: BTreeMap::new(),
@@ -1076,6 +1084,28 @@ impl World {
         self.settlements.get_mut(&b).unwrap().relationships.insert(a, -40);
         self.event(format!("peace between {a} and {b}"));
         Ok(())
+    }
+
+    /// Synchronize the abstract economy to the real Horizon day counter.
+    /// On first run/reload from an old save, anchor without manufacturing
+    /// historical output. Time rewinds never replay already accounted days.
+    /// A giant forward jump catches up only MAX_HOST_CATCHUP_DAYS once.
+    pub fn observe_host_day(&mut self, host_day: i64) -> Result<bool, String> {
+        match self.last_host_day {
+            None => {
+                self.last_host_day = Some(host_day);
+                Ok(true)
+            }
+            Some(previous) if host_day <= previous => Ok(false),
+            Some(previous) => {
+                // i128 prevents overflow across the entire signed i64 range.
+                let elapsed = (i128::from(host_day) - i128::from(previous))
+                    .min(i128::from(MAX_HOST_CATCHUP_DAYS)) as u32;
+                self.advance(elapsed)?;
+                self.last_host_day = Some(host_day);
+                Ok(true)
+            }
+        }
     }
 
     pub fn advance(&mut self, days: u32) -> Result<(), String> {
@@ -1788,5 +1818,74 @@ mod harvest_full_cycle_in_memory_tests {
         let loaded: World = serde_json::from_str(&serde_json::to_string(&world).unwrap()).unwrap();
         loaded.validate().unwrap();
         assert_eq!(loaded.settlements[&id].farm.as_ref().unwrap().harvest_sequence, 1);
+    }
+}
+
+#[cfg(test)]
+mod world_host_clock_tests {
+    use super::*;
+
+    fn world() -> World {
+        let mut w = World::default();
+        w.found("Ashford", "minecraft:overworld", [0, 70, 0], "operator").unwrap();
+        w
+    }
+
+    #[test]
+    fn bootstrap_is_nonproductive_and_legacy_json_is_compatible() {
+        let mut w = world();
+        let before = w.settlements[&1].stock.clone();
+        assert!(w.observe_host_day(5_000).unwrap());
+        assert_eq!(w.day, 0);
+        assert_eq!(w.settlements[&1].stock, before);
+        assert_eq!(w.last_host_day, Some(5_000));
+        let value = serde_json::to_value(&w).unwrap();
+        let mut old = value;
+        old.as_object_mut().unwrap().remove("last_host_day");
+        let mut loaded: World = serde_json::from_value(old).unwrap();
+        assert_eq!(loaded.last_host_day, None);
+        assert!(loaded.observe_host_day(5_100).unwrap());
+        assert_eq!(loaded.day, 0);
+        loaded.validate().unwrap();
+    }
+
+    #[test]
+    fn restart_and_clock_rewinds_never_double_apply_day() {
+        let mut w = world();
+        w.observe_host_day(100).unwrap();
+        assert!(w.observe_host_day(101).unwrap());
+        assert_eq!(w.day, 1);
+        assert!(!w.observe_host_day(101).unwrap());
+        assert!(!w.observe_host_day(90).unwrap());
+        assert_eq!(w.day, 1);
+        let mut reloaded: World = serde_json::from_str(&serde_json::to_string(&w).unwrap()).unwrap();
+        assert!(!reloaded.observe_host_day(100).unwrap());
+        assert!(!reloaded.observe_host_day(101).unwrap());
+        assert_eq!(reloaded.day, 1);
+        assert!(reloaded.observe_host_day(102).unwrap());
+        assert_eq!(reloaded.day, 2);
+        reloaded.validate().unwrap();
+    }
+
+    #[test]
+    fn fast_forward_is_bounded_and_does_not_repeat_on_followup_tick() {
+        let mut w = world();
+        w.observe_host_day(5).unwrap();
+        assert!(w.observe_host_day(5 + 100_000).unwrap());
+        assert_eq!(w.day, u64::from(MAX_HOST_CATCHUP_DAYS));
+        assert_eq!(w.last_host_day, Some(100_005));
+        assert!(!w.observe_host_day(100_005).unwrap());
+        assert_eq!(w.day, u64::from(MAX_HOST_CATCHUP_DAYS));
+        assert!(w.observe_host_day(100_006).unwrap());
+        assert_eq!(w.day, u64::from(MAX_HOST_CATCHUP_DAYS) + 1);
+    }
+
+    #[test]
+    fn extremely_large_time_delta_is_safe_from_arithmetic_overflow() {
+        let mut w = world();
+        w.observe_host_day(i64::MIN).unwrap();
+        w.observe_host_day(i64::MAX).unwrap();
+        assert_eq!(w.day, u64::from(MAX_HOST_CATCHUP_DAYS));
+        w.validate().unwrap();
     }
 }
