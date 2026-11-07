@@ -417,3 +417,30 @@ provenance. A player-grown oak outside registered parcel protections
 looks identical to a world-generated oak. Do not use in important worlds.
 See TEST_PLAN 189-199; true multi-log tree felling and replanting
 remain separate work.
+
+## First-play: sequential short-oak logging (unreleased source)
+
+New stacked branch: `feat/verified-oak-stem-harvest-v0115`, **not** main.
+
+```powershell
+git fetch origin
+git switch feat/verified-oak-stem-harvest-v0115
+.\scripts\validate-local.ps1 -Format
+.\scripts\validate-local.ps1 -BuildClient
+```
+
+Do not start GitHub Actions. Build/check locally, then import the EXACT
+new compiled client EXE using the official Horizon launcher and legally
+owned Minecraft Java resources. Test only a disposable world.
+
+After /civ found Ashford, use /civ diagnose Ashford and /civ warehouse
+Ashford. A small 3-4 log natural oak can produce several physical logs,
+**one verified log for each returning lumberjack trip**. OP
+/civ gathercheck Ashford shows the step; it does not modify stock.
+Do not infer Minecraft item carrying animation from the domain delivery
+receipt. Unsupported tall trees are untouched. NO sapling replanting or
+whole-forest renewable production is implemented yet. Follow TEST_PLAN
+200–211 and back up the entire disposable save before fault injection.
+
+Older instructions below refer to historical releases and capabilities;
+their previous local/native assurance does NOT carry over to this branch.
