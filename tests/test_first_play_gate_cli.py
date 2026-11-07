@@ -56,7 +56,10 @@ class LocalReleaseGateHarnessTests(unittest.TestCase):
         self.bin.mkdir()
         self._exe("rustc", '#!/bin/sh\necho "rustc 1.95.0 (mock)"\n')
         self._exe("rustfmt", '#!/bin/sh\necho "rustfmt 1.95.0 (mock)"\n')
-        self._exe("cargo", '#!/bin/sh\nif [ "$1" = "test" ] && [ "${FAIL_TEST:-}" = "yes" ]; then exit 9; fi\necho "cargo 1.95.0 (mock)"\n')
+        self._exe("cargo", '#!/bin/sh\n'
+                  'if [ "$1" = "test" ] && [ "${FAIL_TEST:-}" = "yes" ]; then exit 9; fi\n'
+                  'if [ "$1" = "fmt" ] && [ "${FAIL_FORMAT:-}" = "yes" ]; then exit 8; fi\n'
+                  'echo "cargo 1.95.0 (mock)"\n')
         self.git("init", "-q")
         self.git("checkout", "-qb", BRANCH)
         self.git("-c", "user.email=test@invalid.local", "-c", "user.name=Test",
@@ -73,6 +76,7 @@ class LocalReleaseGateHarnessTests(unittest.TestCase):
             if name == "cargo":
                 text = ('@echo off\n'
                         'if "%1"=="test" if "%FAIL_TEST%"=="yes" exit /b 9\n'
+                        'if "%1"=="fmt" if "%FAIL_FORMAT%"=="yes" exit /b 8\n'
                         'echo cargo 1.95.0 (mock)\n')
             elif name == "rustc":
                 version = "1.94.2" if "1.94.2" in text else "1.95.0"
@@ -111,6 +115,23 @@ class LocalReleaseGateHarnessTests(unittest.TestCase):
         self.assertEqual(len(data["steps"]), 7)
         self.assertEqual(data["gameplay_e2e"], "NOT_TESTED")
         self.assertTrue(data["clean_end"])
+
+    def test_compiler_failure_is_reported_before_formatting(self):
+        result = self.run_gate(extra_env={"FAIL_TEST": "yes", "FAIL_FORMAT": "yes"})
+        self.assertEqual(result.returncode, 1)
+        data = self.latest_report()
+        self.assertEqual([step["name"] for step in data["steps"]], ["cargo-test"])
+        self.assertEqual(data["steps"][0]["exit_code"], 9)
+        self.assertEqual(data["gate"], "BLOCKED")
+
+    def test_format_remains_mandatory_after_compilation(self):
+        result = self.run_gate(extra_env={"FAIL_FORMAT": "yes"})
+        self.assertEqual(result.returncode, 1)
+        data = self.latest_report()
+        self.assertEqual([step["name"] for step in data["steps"]],
+                         ["cargo-test", "clippy", "cargo-fmt"])
+        self.assertEqual(data["steps"][-1]["exit_code"], 8)
+        self.assertEqual(data["gate"], "BLOCKED")
 
     def test_mock_native_build_marks_only_ready_for_gameplay_not_playable(self):
         result = self.run_gate("--build-client")
