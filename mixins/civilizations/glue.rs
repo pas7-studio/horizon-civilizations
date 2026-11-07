@@ -276,7 +276,11 @@ fn guide_actors(game: &mut Game<'_>, world: &World) {
             } else {
                 None
             };
+            // Morning/evening meals must not occupy all work hours when
+            // the physical bread barrel is empty; the farm and bakery must
+            // still be able to produce food for the next service window.
             let meal_due = village.hall_complete
+                && matches!(phase, DailyPhase::Dawn | DailyPhase::Evening)
                 && village.meal_day == Some(game.world.day_time.div_euclid(24_000))
                 && !village.meal_served.contains(&resident.id);
             let pos = if meal_due {
@@ -290,12 +294,11 @@ fn guide_actors(game: &mut Game<'_>, world: &World) {
             } else if let Some(home) = home_target {
                 home
             } else if phase.on_shift(resident.job)
-                && matches!(resident.job, Job::Lumberjack | Job::Miner)
+                && matches!(resident.job, Job::Lumberjack | Job::Miner | Job::Digger)
                 && village.gather_job.as_ref().is_some_and(|job|
                     !job.blocked
                         && job.worker_id.is_none_or(|assigned| assigned == resident_id)
-                        && ((job.good == Good::Wood && resident.job == Job::Lumberjack)
-                            || (job.good == Good::Stone && resident.job == Job::Miner)))
+                        && job.good.job() == Some(resident.job))
             {
                 let target = village.gather_job.as_ref().expect("gather exists");
                 if target.issued && target.pickup_witnessed {
@@ -4185,7 +4188,7 @@ fn gather_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
         return Ok(());
     };
     let (id, job) = eligible[slot].clone();
-    let role = if job.good == Good::Wood { Job::Lumberjack } else { Job::Miner };
+    let Some(role) = job.good.job() else { return Ok(()); };
     if !DailyPhase::at(game.world.day_time).on_shift(role) {
         return Ok(());
     }
@@ -4211,7 +4214,7 @@ fn gather_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
         if name == "minecraft:air" {
             let world = state.world.as_ref().unwrap();
             let v = &world.settlements[&id];
-            let role = if job.good == Good::Wood { Job::Lumberjack } else { Job::Miner };
+            let Some(role) = job.good.job() else { return Ok(()); };
             let linked = loaded_actors(game, world, id);
             if !job.pickup_witnessed {
                 // Seeing air alone is not proof of resource custody. Check
@@ -4268,7 +4271,7 @@ fn gather_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
     }
     let world = state.world.as_ref().unwrap();
     let v = &world.settlements[&id];
-    let profession = job.good.job().unwrap_or(Job::Miner);
+    let profession = role;
     let camp_kind = PostKind::for_good(job.good);
     // A camp already bound to one resident is serviced by that resident only:
     // the name on the camp sign and the worker who delivers stay the same.
