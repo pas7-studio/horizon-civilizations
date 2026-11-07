@@ -167,6 +167,8 @@ pub fn register(commands: &mut Vec<NativeCommand>) {
         "civ day [days:integer]", "civ construct <name:word>",
         "civ approvehouse <name:word> <slot:integer> <y:integer>",
         "civ autonomy <name:word> <mode:word>",
+        "civ barrelcheck <name:word>",
+        "civ resolvebarrel <name:word> <mode:word> <count:integer>",
         "civ farm <name:word>", "civ recoverfarm <name:word>",
         "civ buyplot <name:word>", "civ buyhouse <name:word>", "civ commission <name:word>",
         "civ war <from:word> <to:word>",
@@ -978,7 +980,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
     let actor = format!("{:032x}", player.uuid);
     let action = args.next().unwrap_or("help");
     if action == "help" {
-        reply(game, "Civilizations: /civ list | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | hall <name> | warehouse <name> | buyplot <name> | buyhouse <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, day [days], construct <name>, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
+        reply(game, "Civilizations: /civ list | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | hall <name> | warehouse <name> | buyplot <name> | buyhouse <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, barrelcheck <name>, resolvebarrel <name> confirm|cancel <observed_count>, day [days], construct <name>, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
         return;
     }
     if action == "list" {
@@ -1059,6 +1061,37 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
                 } else { "Warehouse transfer journal clear" }
             ));
         }
+        return;
+    }
+    if action == "barrelcheck" {
+        if player.permission < 2 {
+            error(game, "warehouse recovery inspection requires server operator level 2");
+            return;
+        }
+        let name = args.next().unwrap_or("");
+        let Some(v) = world.by_name(name) else {
+            error(game, "unknown settlement: /civ barrelcheck <name>");
+            return;
+        };
+        if v.dimension != player.dimension {
+            error(game, "enter the settlement dimension before inspecting its native barrel");
+            return;
+        }
+        if v.market_purchase.is_some() {
+            error(game, "an unresolved player purchase exists; barrel recovery is not safe");
+            return;
+        }
+        let Some(t) = &v.barrel_transfer else {
+            reply(game, format!("{}: no pending physical barrel transfer", v.name));
+            return;
+        };
+        let observed = plain_barrel_count(game, &v.dimension, t.position, t.good);
+        let expected = t.expected_after();
+        reply(game, format!(
+            "{} native barrel audit: {:?} {} x{} at {:?}, phase {:?}, saved before {}, expected after {:?}, current native count {:?}. Use /civ resolvebarrel {} confirm|cancel <observed_count> ONLY after manually examining real barrel inventory and logs. This command changes nothing.",
+            v.name, t.direction, t.good.as_str(), t.count, t.position,
+            t.phase, t.before, expected, observed, v.name
+        ));
         return;
     }
     if action == "bakery" {
@@ -1494,6 +1527,56 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
                 site, price, village.name
             ))
         })(),
+        "resolvebarrel" if player.permission >= 2 => (|| {
+            let name = args.next().ok_or(
+                "usage: /civ resolvebarrel <village> confirm|cancel <observed_count>"
+            )?;
+            let mode = args.next().ok_or("specify confirm or cancel")?;
+            let manually_observed = args.next().ok_or(
+                "type exact observed native item count after /civ barrelcheck"
+            )?.parse::<u32>().map_err(|_| "invalid native item count")?;
+            if args.next().is_some() {
+                return Err("unexpected arguments in native recovery command".into());
+            }
+            let v = previous.by_name(name).ok_or("unknown village")?;
+            if v.dimension != player.dimension {
+                return Err("load the official village warehouse in its own dimension".into());
+            }
+            if v.market_purchase.is_some() {
+                return Err("unresolved player market purchase; never reconcile two journals together".into());
+            }
+            let t = v.barrel_transfer.as_ref().ok_or("no warehouse transfer to recover")?;
+            let actual = plain_barrel_count(game, &v.dimension, t.position, t.good)
+                .ok_or("official native barrel is unavailable/unloaded or invalid")?;
+            if actual != manually_observed {
+                return Err("native barrel changed since manual inspection; inspect again".into());
+            }
+            match mode {
+                "cancel" => {
+                    if t.phase != BarrelPhase::Planned || actual != t.before {
+                        return Err("only a never-issued Planned intent with unchanged native count may be canceled".into());
+                    }
+                    state.world.as_mut().unwrap().cancel_planned_barrel_transfer(v.id)?;
+                    Ok(format!(
+                        "{}: canceled an UNISSUED native barrel intent; no items changed. Check /civ warehouse {}.",
+                        v.name, v.name
+                    ))
+                }
+                "confirm" => {
+                    if t.phase != BarrelPhase::Blocked
+                        || t.expected_after() != Some(actual) {
+                        return Err("only a Blocked intent matching exact native after-count can be confirmed".into());
+                    }
+                    state.world.as_mut().unwrap()
+                        .reconcile_blocked_barrel_transfer(v.id, actual)?;
+                    Ok(format!(
+                        "{}: reconciled BLOCKED native receipt, without repeating extraction or insertion. Recheck /civ warehouse {}.",
+                        v.name, v.name
+                    ))
+                }
+                _ => Err("use confirm or cancel, with exact observed count".into()),
+            }
+        })(),
         "recoverfarm" if player.permission >= 2 => (|| {
             let name = args.next().ok_or("usage: /civ recoverfarm <name>")?;
             let settlement = previous.by_name(name).ok_or("unknown settlement")?;
@@ -1762,7 +1845,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
                 Ok(format!("Spawned and UUID-linked {spawned} villagers. Reopen world and verify /civ roster {name}."))
             }
         })(),
-        "found" | "day" | "war" | "peace" | "actors" | "construct" | "approvehouse" | "autonomy" | "farm" | "recoverfarm" | "reconcile" => Err("requires server operator level 2".into()),
+        "found" | "day" | "war" | "peace" | "actors" | "construct" | "approvehouse" | "autonomy" | "farm" | "recoverfarm" | "reconcile" | "barrelcheck" | "resolvebarrel" => Err("requires server operator level 2".into()),
         _ => Err("unknown subcommand. Use /civ help".into()),
     };
     match result {
@@ -2445,30 +2528,30 @@ fn refresh_hall_boards(game: &mut Game<'_>, world: &World) {
         let Some(stored) = physical_barrel_stock(game, &dimension, village.center) else {
             continue;
         };
-        let count = |good: Good| stored.iter()
-            .find(|(item, _)| *item == good).map(|(_, amount)| *amount).unwrap_or(0);
-        let next = if village.visual_job.is_some() || village.pending_visual_buildings > 0 {
-            (crate::game::civilizations_core::HUT_WOOD_LOGS,
-             crate::game::civilizations_core::HUT_COBBLESTONE)
-        } else { (0, 0) };
-        let (wood_missing, stone_missing) = (
-            next.0.saturating_sub(count(Good::Wood).saturating_add(
-                village.build_escrow.get(&Good::Wood).copied().unwrap_or(0))),
-            next.1.saturating_sub(count(Good::Stone).saturating_add(
-                village.build_escrow.get(&Good::Stone).copied().unwrap_or(0))),
-        );
+        // Signs use the SAME combined physical-demand routine as the actual
+        // gather planner. Never display stale "0 needed" while an external
+        // native receipt may still be pending or the barrel is unavailable.
+        let journal_unsettled = village.barrel_transfer.is_some()
+            || village.market_purchase.is_some();
+        let (wood_missing, stone_missing) =
+            crate::game::civilizations_core::physical_construction_shortfall(village, &stored);
         let [mayor_sign, needs_sign] = hall_board_positions(village.center);
         for (pos, lines) in [
             (mayor_sign, [
                 "TOWN HALL".to_owned(), village.name.clone(),
                 format!("MAYOR {mayor}"), format!("POP {}", village.population()),
             ]),
-            (needs_sign, [
-                "VILLAGE NEEDS".to_owned(),
-                format!("WOOD -{wood_missing}"),
-                format!("STONE -{stone_missing}"),
-                format!("NO HOME {homeless}"),
-            ]),
+            (needs_sign, if journal_unsettled {
+                ["STOCK CHECK".to_owned(),
+                 "PENDING TX".to_owned(),
+                 "SEE WAREHOUSE".to_owned(),
+                 format!("NO HOME {homeless}")]
+            } else {
+                ["VILLAGE NEEDS".to_owned(),
+                 format!("WOOD -{wood_missing}"),
+                 format!("STONE -{stone_missing}"),
+                 format!("NO HOME {homeless}")]
+            }),
         ] {
             if world_block(game, &dimension, pos).as_deref() != Some("minecraft:oak_sign") {
                 continue;

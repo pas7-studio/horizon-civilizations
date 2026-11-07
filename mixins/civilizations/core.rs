@@ -2002,6 +2002,56 @@ impl World {
         Ok(())
     }
 
+    /// An operator may cancel ONLY a never-issued Planned intent, after the
+    /// adapter compares a loaded official native barrel's exact item count to
+    /// the saved before-count. No external mutation is possible before Issued
+    /// is durably persisted by the normal bridge.
+    pub fn cancel_planned_barrel_transfer(&mut self, id: u64) -> Result<(), String> {
+        let v = self.settlements.get_mut(&id).ok_or("unknown settlement")?;
+        if v.market_purchase.is_some() {
+            return Err("cannot cancel while a player purchase is unresolved".into());
+        }
+        let t = v.barrel_transfer.as_ref().ok_or("no warehouse transfer")?;
+        if t.phase != BarrelPhase::Planned {
+            return Err("only a never-issued planned transfer can be canceled".into());
+        }
+        v.barrel_transfer = None;
+        let name = v.name.clone();
+        self.event(format!("{name}: operator canceled an unissued native barrel plan"));
+        Ok(())
+    }
+
+    /// An operator may explicitly reconcile an already BLOCKED receipt only
+    /// after confirming the exact expected native after-count via a fresh
+    /// loaded snapshot. No item is inserted/extracted by this operation.
+    /// We reuse the normal once-only receipt transition and rollback on any
+    /// domain error; this NEVER retries an uncertain native API call.
+    pub fn reconcile_blocked_barrel_transfer(
+        &mut self, id: u64, observed_after: u32,
+    ) -> Result<(), String> {
+        let v = self.settlements.get(&id).ok_or("unknown settlement")?;
+        if v.market_purchase.is_some() {
+            return Err("cannot reconcile while player market purchase is unresolved".into());
+        }
+        let t = v.barrel_transfer.as_ref().ok_or("no warehouse transfer")?;
+        if t.phase != BarrelPhase::Blocked
+            || t.expected_after() != Some(observed_after) {
+            return Err("blocked receipt does not match the verified native count".into());
+        }
+        let backup = self.clone();
+        self.settlements.get_mut(&id).unwrap().barrel_transfer.as_mut().unwrap().phase =
+            BarrelPhase::Issued;
+        if let Err(error) = self.confirm_barrel_transfer(id, observed_after) {
+            *self = backup;
+            return Err(error);
+        }
+        let name = self.settlements[&id].name.clone();
+        self.event(format!(
+            "{name}: operator reconciled one blocked barrel receipt against actual native inventory"
+        ));
+        Ok(())
+    }
+
     /// Called only after the adapter has checked a live barrel slot, the
     /// authenticated player identity, and available inventory space.
     /// Coins are durably debited BEFORE the native item extraction.
@@ -4718,5 +4768,78 @@ mod physical_logistics_hardening_tests {
         assert!(world.validate().is_ok());
         world.settlements.get_mut(&id).unwrap().bakery = None;
         assert!(world.validate().is_err());
+    }
+}
+
+#[cfg(test)]
+mod manual_warehouse_recovery_tests {
+    use super::*;
+
+    fn ready() -> (World, u64, [i32; 3]) {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0, 70, 0], "owner").unwrap();
+        world.settlements.get_mut(&id).unwrap().hall_complete = true;
+        let pos = hall_storage_positions([0, 70, 0])[0];
+        (world, id, pos)
+    }
+
+    #[test]
+    fn unissued_native_intent_can_be_canceled_once() {
+        let (mut world, id, pos) = ready();
+        world.settlements.get_mut(&id).unwrap().warehouse_credit(Good::Wood, 8).unwrap();
+        world.plan_barrel_transfer(id, pos, Good::Wood,
+            BarrelDirection::ToBarrel, 0, 8, None).unwrap();
+        world.cancel_planned_barrel_transfer(id).unwrap();
+        assert!(world.settlements[&id].barrel_transfer.is_none());
+        assert_eq!(world.settlements[&id].warehouse_quantity(Good::Wood), 8);
+        assert!(world.cancel_planned_barrel_transfer(id).is_err());
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn issued_and_blocked_transactions_cannot_be_canceled_without_evidence() {
+        let (mut world, id, pos) = ready();
+        world.settlements.get_mut(&id).unwrap().warehouse_credit(Good::Stone, 3).unwrap();
+        world.plan_barrel_transfer(id, pos, Good::Stone,
+            BarrelDirection::ToBarrel, 0, 3, None).unwrap();
+        world.issue_barrel_transfer(id).unwrap();
+        assert!(world.cancel_planned_barrel_transfer(id).is_err());
+        world.block_barrel_transfer(id).unwrap();
+        assert!(world.cancel_planned_barrel_transfer(id).is_err());
+        assert_eq!(world.settlements[&id].warehouse_quantity(Good::Stone), 3);
+    }
+
+    #[test]
+    fn blocked_receipt_matches_exact_physical_after_count_only() {
+        let (mut world, id, pos) = ready();
+        world.settlements.get_mut(&id).unwrap().warehouse_credit(Good::Wood, 4).unwrap();
+        world.plan_barrel_transfer(id, pos, Good::Wood,
+            BarrelDirection::ToBarrel, 10, 4, None).unwrap();
+        world.issue_barrel_transfer(id).unwrap();
+        world.block_barrel_transfer(id).unwrap();
+        let prior = serde_json::to_value(&world).unwrap();
+        assert!(world.reconcile_blocked_barrel_transfer(id, 10).is_err());
+        assert_eq!(serde_json::to_value(&world).unwrap(), prior);
+        world.reconcile_blocked_barrel_transfer(id, 14).unwrap();
+        assert!(world.settlements[&id].barrel_transfer.is_none());
+        assert_eq!(world.settlements[&id].warehouse_quantity(Good::Wood), 0);
+        assert!(world.reconcile_blocked_barrel_transfer(id, 14).is_err());
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn reconciliation_rolls_back_when_inbound_receipt_was_lost() {
+        let (mut world, id, pos) = ready();
+        world.settlements.get_mut(&id).unwrap().warehouse_credit(Good::Wood, 4).unwrap();
+        world.plan_barrel_transfer(id, pos, Good::Wood,
+            BarrelDirection::ToBarrel, 0, 4, None).unwrap();
+        world.issue_barrel_transfer(id).unwrap();
+        world.block_barrel_transfer(id).unwrap();
+        world.settlements.get_mut(&id).unwrap().warehouse_debit(Good::Wood, 4).unwrap();
+        let prior = serde_json::to_value(&world).unwrap();
+        assert!(world.reconcile_blocked_barrel_transfer(id, 4).is_err());
+        assert_eq!(serde_json::to_value(&world).unwrap(), prior);
+        assert_eq!(world.settlements[&id].barrel_transfer.as_ref().unwrap().phase,
+            BarrelPhase::Blocked);
     }
 }

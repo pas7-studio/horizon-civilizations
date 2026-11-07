@@ -1,3 +1,35 @@
+# Unreleased source: operator-assisted warehouse recovery and accurate hall signs
+
+Branch `feat/operator-warehouse-recovery-v0115` (stacked on PR #23).
+No new verified release: package still **0.1.14**, GitHub Actions remain OFF.
+
+- [x] Added OP-only read-only `/civ barrelcheck <village>`. Shows native
+  physical barrel item count next to saved `before`, `expected_after`,
+  direction, phase and source position. Does not change items or save state.
+- [x] Added OP-only `/civ resolvebarrel <village> cancel <observed_count>`
+  for **Planned only** with unchanged actual native count. It cannot cancel
+  Issued or Blocked receipts, because they may have changed Minecraft items.
+- [x] Added OP-only `/civ resolvebarrel <village> confirm <observed_count>`
+  for **Blocked only** when freshly observed native after-count equals the
+  saved expected value. Reuses the one-time domain receipt reconciliation,
+  never repeats Minecraft item insertion/extraction. An accounting failure
+  restores the blocked journal. A market order always blocks recovery.
+- [x] Native signs now use the same combined construction-demand function as
+  actual village material gathering and operator warehouse diagnostics.
+  When any native journal is unresolved, they display `STOCK CHECK` and
+  `PENDING TX` instead of unverified stock shortfalls.
+- [x] Four Rust domain regression cases and six Python source contracts
+  **written**; game/native verification and Rust/Python execution NOT RUN.
+- [ ] Manual comparison of logs, official Minecraft barrels and save backup
+  is still mandatory; a matching item count alone cannot prove item identity
+  or cross-file crash atomicity. Never auto-confirm or auto-refund.
+- [ ] Native Horizon build and real game-world tests before enabling normal
+  multiplayer usage or calling the mod playable.
+
+See TEST_PLAN 167–174 for a disposable-world verification matrix.
+
+---
+
 # Current unreleased source stabilization — physical logistics hardening
 
 Branch `feat/physical-logistics-hardening-v0115`, stacked on Draft PR #22 (bakery).

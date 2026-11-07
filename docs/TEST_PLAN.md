@@ -464,3 +464,42 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
      and E2E: NPC pathfinding, chunk unload/reload, two-building funding,
      actual game item counts, shift changes and crash windows. Preserve
      screenshots/world/logs; no GitHub Actions or automated merge.
+
+
+## OP warehouse recovery and bulletin acceptance (unreleased source)
+
+167. On disposable world from exact stacked latest branch, build native
+     Horizon, pass `cargo fmt --all --check`, `cargo test`, Clippy,
+     Python tests and package verification. Do not count source assertions
+     as a native build. Confirm current save backup and pinned Horizon SHA.
+168. Save a `Planned` deposit receipt with unchanged real barrel stock;
+     `/civ barrelcheck Ashford` must show saved before/after and actual
+     native count. Non-OP may not inspect or resolve. A loaded physical
+     barrel is required; no remote unloaded-JSON-only recovery is allowed.
+169. OP: `/civ resolvebarrel Ashford cancel 0` (with 0 equal to the
+     observed original count, replace with actual value in the test).
+     Original Planned receipt clears once, incoming goods remain pending.
+     No Minecraft items are inserted or removed by cancellation.
+170. After an `Issued` state, even if the current barrel count equals the
+     originally observed before-count, `cancel` must refuse. A Blocked
+     receipt must also refuse `cancel`; never silently refund inventory.
+171. Simulate a physically completed native deposit followed by a crash
+     before JSON confirmation: mark receipt `Blocked`, verify actual
+     count equals expected_after; OP explicitly enters
+     `/civ resolvebarrel Ashford confirm <actual_count>`. Only the saved
+     warehouse receipt is committed; exactly one native inventory change
+     must be observed across reload and subsequent planner ticks.
+172. If actual count differs, chunk is unloaded, wrong dimension, a market
+     order is present, input count is stale or receipt is not Blocked,
+     `confirm` must refuse and leave world.json and native items unchanged.
+     Test an accounting failure after preflight to ensure original blocked
+     journal is restored, not cleared.
+173. With a bakery plus unfinished public hut and empty barrels, town-hall
+     NEEDS sign and `/civ warehouse Ashford` must display the same 44
+     logs / 58 cobblestone. With any unsettled native receipt the sign must
+     display `STOCK CHECK / PENDING TX`, not guessed shortages. After
+     reconciliation and refresh, its normal shortages must return.
+174. Verify no stock duplication under restart, neighboring hopper action,
+     external OP barrel edits or native chunk save failure. A matching total
+     alone is not proof of origin; OP must compare detailed slots and logs.
+     Keep multiplayer disabled until verified.
