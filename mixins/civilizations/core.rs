@@ -116,6 +116,41 @@ pub enum Job {
     Merchant,
 }
 
+/// Physical actor presence is an authoritative 3D observation, not an
+/// X/Z-only check. A villager in a cave below the hall is not a courier.
+/// The target is the native block coordinate (centered in X/Z), while the
+/// entity Y is its feet position. No unseen actor or nonfinite coordinate
+/// can authorize a physical resource transaction.
+pub fn native_worker_near(
+    actor: [f64; 3], target: [i32; 3], horizontal_radius: f64, vertical_radius: f64,
+) -> bool {
+    if !actor.iter().all(|v| v.is_finite())
+        || !horizontal_radius.is_finite() || horizontal_radius < 0.0
+        || !vertical_radius.is_finite() || vertical_radius < 0.0 {
+        return false;
+    }
+    let dx = actor[0] - (f64::from(target[0]) + 0.5);
+    let dy = actor[1] - f64::from(target[1]);
+    let dz = actor[2] - (f64::from(target[2]) + 0.5);
+    dy.abs() <= vertical_radius && dx * dx + dz * dz <= horizontal_radius * horizontal_radius
+}
+
+/// A native worker may only harvest a block inside a plausible 3D reach
+/// sphere, measured from eye height (feet + 1.5). This prevents a worker
+/// standing at the tree's root from felling a remote or elevated log merely
+/// because the horizontal X/Z distance is small.
+pub fn native_worker_reaches_block(
+    actor: [f64; 3], block: [i32; 3], reach: f64,
+) -> bool {
+    if !actor.iter().all(|v| v.is_finite()) || !reach.is_finite() || reach < 0.0 {
+        return false;
+    }
+    let dx = actor[0] - (f64::from(block[0]) + 0.5);
+    let dy = actor[1] + 1.5 - (f64::from(block[1]) + 0.5);
+    let dz = actor[2] - (f64::from(block[2]) + 0.5);
+    dx * dx + dy * dy + dz * dz <= reach * reach
+}
+
 impl Job {
     pub fn name(self) -> &'static str {
         match self {
@@ -5411,5 +5446,45 @@ mod verified_short_oak_stem_tests {
         assert!(!inspect_oak_stem(&stem, |p|
             if p == [0,72,0] { None }
             else { Some(blocks.get(&p).cloned().unwrap_or("minecraft:air".into())) }));
+    }
+}
+
+#[cfg(test)]
+mod native_worker_distance_contract_tests {
+    use super::*;
+
+    #[test]
+    fn worker_directly_at_hall_is_near_but_same_xz_deep_below_is_not() {
+        let hall = [20, 70, 35];
+        assert!(native_worker_near([20.5, 70.0, 35.5], hall, 8.0, 4.0));
+        assert!(!native_worker_near([20.5, 45.0, 35.5], hall, 8.0, 4.0));
+        assert!(!native_worker_near([20.5, 93.0, 35.5], hall, 8.0, 4.0));
+        assert!(!native_worker_near([40.5, 70.0, 35.5], hall, 8.0, 4.0));
+    }
+
+    #[test]
+    fn worker_can_reach_verified_short_tree_without_felling_distant_trunks() {
+        let feet = [17.5, 70.0, 0.5];
+        assert!(native_worker_reaches_block(feet, [16, 70, 0], 4.5));
+        assert!(native_worker_reaches_block(feet, [16, 73, 0], 4.5));
+        assert!(!native_worker_reaches_block(feet, [16, 76, 0], 4.5));
+        assert!(!native_worker_reaches_block(feet, [30, 73, 0], 4.5));
+        assert!(!native_worker_reaches_block([17.5, 40.0, 0.5], [16, 73, 0], 4.5));
+    }
+
+    #[test]
+    fn invalid_actor_or_radius_cannot_authorize_native_delivery() {
+        assert!(!native_worker_near(
+            [f64::NAN, 70.0, 0.5], [0, 70, 0], 8.0, 4.0
+        ));
+        assert!(!native_worker_near(
+            [0.5, 70.0, 0.5], [0, 70, 0], f64::INFINITY, 4.0
+        ));
+        assert!(!native_worker_near(
+            [0.5, 70.0, 0.5], [0, 70, 0], 8.0, -1.0
+        ));
+        assert!(!native_worker_reaches_block(
+            [0.5, f64::INFINITY, 0.5], [0, 70, 0], 4.5
+        ));
     }
 }
