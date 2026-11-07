@@ -427,3 +427,40 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
      physical bakery under construction, completed workbench/smoker,
      wheat extraction, real bread stack and successful bought bread.
      Source-based tests do NOT close this gameplay acceptance gate.
+
+
+## Physical logistics stabilization acceptance (unreleased, stacked on v0.1.14)
+
+159. Run local `cargo fmt --all --check`, `cargo test`,
+     `cargo clippy --all-targets -- -D warnings`, `python -m unittest discover -s tests`,
+     `python tools/package.py`, and `python tools/verify_static.py` on
+     `feat/physical-logistics-hardening-v0115`. Record exact output, commit
+     SHA, installed Rust version and pinned Horizon revision. Do not infer
+     compile success from source-text checks.
+160. With a completed hall and both a planned bakery and a pending public hut,
+     but empty barrels/receiving queue, verify planner demand is **44 oak logs
+     and 58 cobblestone**. It must not stop after bakery-only 24/33.
+161. Seed native hall barrels with 12 logs and 10 cobblestone. Place 5 logs
+     in confirmed inbound steward queue, 6 in bakery-specific construction
+     escrow and 4 in hut-specific escrow. Remaining wood demand must be
+     exactly **17 logs**; no stock can be reused to satisfy two separate bills.
+162. Start a native barrel transfer, stop after the journal is persisted in
+     Planned/Issued phase, then resume. Physical gathering planning should
+     pause until a later native observation reconciles it. Blocked phase must
+     NOT produce a fresh pickup/harvest; `/civ warehouse` must show the
+     unsettled transfer and an **unknown** shortfall, not invented zeros.
+163. Test the same planner with one or both native hall barrel block entities
+     unloaded/missing. No scavenging of neighboring player containers and
+     no claim that missing stock equals zero. Restore the barrel and confirm
+     the planner resumes only from a complete native snapshot.
+164. Mark bakery physical construction blocked by changed blocks, while a hut
+     still needs real materials. Baker's construction reserve should not
+     increase and the remaining hut demand should be computed independently.
+165. Test a saved `ToBakeryBuilder` or `ToBakerIngredients` journal without
+     a matching real bakery. `World::validate` must refuse the save rather
+     than continue with a dangling material extraction intent. Preserve a
+     backup of the damaged file, do not overwrite it.
+166. Before enabling non-disposable survival play, run native Windows build
+     and E2E: NPC pathfinding, chunk unload/reload, two-building funding,
+     actual game item counts, shift changes and crash windows. Preserve
+     screenshots/world/logs; no GitHub Actions or automated merge.
