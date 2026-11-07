@@ -155,7 +155,7 @@ class GuardedPartialVillagerRecoveryContracts(unittest.TestCase):
         self.assertLess(handler.index("if already_saved {"),
                         handler.index("state.world = Some(previous)", handler.index("Err(message) =>")))
 
-    def test_core_regression_module_includes_seven_cases(self):
+    def test_core_regression_module_includes_eight_cases(self):
         chunk = CORE.split("mod guarded_partial_native_actor_recovery_tests", 1)[1]
         self.assertEqual(chunk.count("#[test]"), 8)
 
