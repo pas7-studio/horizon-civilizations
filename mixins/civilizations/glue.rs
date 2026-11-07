@@ -519,14 +519,19 @@ pub fn interact_entity(game: &mut Game<'_>, entity: i32, kind: &str, claimed: &m
     };
     let phase = DailyPhase::at(game.world.day_time);
     let duty = if phase.on_shift(resident.job) { "on duty" } else { "off duty" };
+    let council = village.council_priorities().first()
+        .map(|priority| format!(
+            "Council: {} {}/100", priority.need.label(), priority.urgency
+        ))
+        .unwrap_or_else(|| "Council: stable".to_owned());
     let home = match village.home_slot(resident.id) {
         Some(slot) => format!("Hut {:?}, place {} (physical blocks checked at night)", slot.site, slot.lane + 1),
         None => "Commons (no completed physical home)".to_owned(),
     };
     let message = format!(
-        "{} — {} of {} (morale {}). Routine: {} / {}. Home: {}. {} View: /civ info {}. Trade: /civ buy/sell <good> <amount>.",
+        "{} — {} of {} (morale {}). Routine: {} / {}. Home: {}. {}. {} View: /civ info {}. Trade: /civ buy/sell <good> <amount>.",
         resident.name, resident.job.name(), village.name, village.morale,
-        phase.name(), duty, home, invitation, village.name
+        phase.name(), duty, home, council, invitation, village.name
     );
     drop(guard);
     // Do not consume a vanilla interaction unless the information was sent.
