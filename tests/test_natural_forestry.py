@@ -40,6 +40,7 @@ class NaturalForestryAndGatherJournalContracts(unittest.TestCase):
     def test_live_source_provenance_is_checked_at_issue_time(self):
         runner = GLUE.split("fn gather_one_step(", 1)[1].split("\n}", 1)[0]
         self.assertIn("!seems_natural_resource(game, &dimension, job.position, job.good)", runner)
+        self.assertIn("!state.world.as_ref().unwrap().gather_site_unclaimed(id, job.position, job.stand)", runner)
         self.assertLess(runner.index("!seems_natural_resource("),
                         runner.index("mark_gather_issued(id)?"))
 
@@ -63,6 +64,23 @@ class NaturalForestryAndGatherJournalContracts(unittest.TestCase):
         for unsafe in ("game.native_run_command(", "native_extract_item(",
                        "native_give_items(", "warehouse_credit("):
             self.assertNotIn(unsafe, method)
+
+    def test_registered_land_is_revalidated_using_shared_policy(self):
+        checker = CORE.split("pub fn gather_site_unclaimed(", 1)[1].split("\n    }", 1)[0]
+        plan = CORE.split("pub fn plan_gather(", 1)[1].split("\n    }", 1)[0]
+        self.assertIn("other.player_parcels.iter().any", checker)
+        self.assertIn("other.visual_sites.iter().any", checker)
+        self.assertIn("other.bakery.as_ref().is_some_and", checker)
+        self.assertIn("other.farm.as_ref().is_some_and", checker)
+        self.assertIn("self.gather_site_unclaimed(village_id, position, stand)", plan)
+
+    def test_diagnostics_distinguish_issued_quarantine(self):
+        diagnosis = GLUE.split('if action == "diagnose" {', 1)[1].split(
+            'if action == "gathercheck" {', 1
+        )[0]
+        self.assertIn("job.issued", diagnosis)
+        self.assertIn("issued wood/stone gather QUARANTINED", diagnosis)
+        self.assertIn("never-issued gather candidate blocked", diagnosis)
 
     def test_operators_can_audit_live_source_without_mutating(self):
         self.assertIn('"civ gathercheck <name:word>"', GLUE)
