@@ -957,6 +957,46 @@ pub struct Settlement {
     pub farm: Option<FarmPlot>,
 }
 
+/// Compute *combined* outstanding construction demand using verified native
+/// barrel counts and confirmed inbound receipts. Each project's escrow is
+/// deducted from its OWN bill, never reused to satisfy another project.
+/// Caller must pass a fresh complete snapshot of BOTH native hall barrels.
+/// No virtual daily stock is involved.
+pub fn physical_construction_shortfall(
+    village: &Settlement, native_stock: &[(Good, u32)],
+) -> (u32, u32) {
+    let bakery = village.bakery.as_ref().filter(|b| {
+        !b.supplies_reserved
+            && b.building.as_ref().is_some_and(|job| !job.blocked)
+    });
+    let hut_needed = village.visual_job.as_ref().is_some_and(|job| {
+        !job.blocked && !village.hut_supplies_reserved
+    }) || (village.visual_job.is_none()
+        && village.pending_visual_buildings > 0
+        && village.physical_housing().2 > 0);
+
+    let unpaid = |good: Good| {
+        let bakery_bill = if let Some(b) = bakery {
+            let total = if good == Good::Wood { BAKERY_WOOD_LOGS }
+                else { BAKERY_COBBLESTONE };
+            total.saturating_sub(b.construction_escrow.get(&good).copied().unwrap_or(0))
+        } else { 0 };
+        let hut_bill = if hut_needed {
+            let total = if good == Good::Wood { HUT_WOOD_LOGS }
+                else { HUT_COBBLESTONE };
+            total.saturating_sub(village.build_escrow.get(&good).copied().unwrap_or(0))
+        } else { 0 };
+        bakery_bill.saturating_add(hut_bill)
+    };
+    let available = |good: Good| {
+        let stored = native_stock.iter().find(|(g, _)| *g == good)
+            .map(|(_, count)| *count).unwrap_or(0);
+        stored.saturating_add(village.warehouse_quantity(good))
+    };
+    (unpaid(Good::Wood).saturating_sub(available(Good::Wood)),
+     unpaid(Good::Stone).saturating_sub(available(Good::Stone)))
+}
+
 impl Settlement {
     pub fn count(&self, job: Job) -> u32 {
         self.residents.iter().filter(|r| r.alive && r.job == job).count() as u32
@@ -1362,7 +1402,6 @@ impl World {
                         return Err("native barrel deposit cannot name a slot".into()),
                     _ => {}
                 }
-            }
                 match t.direction {
                     BarrelDirection::ToBakeryBuilder if t.slot.is_none()
                         || !matches!(t.good, Good::Wood | Good::Stone)
@@ -1373,6 +1412,7 @@ impl World {
                         return Err("invalid native baker wheat extraction".into()),
                     _ => {}
                 }
+            }
             if village.hall_complete && village.hall_job.is_some() {
                 return Err("civic hall cannot be simultaneously complete and under construction".into());
             }
@@ -4576,6 +4616,68 @@ mod native_bakery_economy_tests {
         world.settlements.get_mut(&id).unwrap().bakery.as_mut().unwrap()
             .building.as_mut().unwrap().cursor=0;
         world.settlements.get_mut(&id).unwrap().bakery.as_mut().unwrap().wheat_escrow=13;
+        assert!(world.validate().is_err());
+    }
+}
+
+#[cfg(test)]
+mod physical_logistics_hardening_tests {
+    use super::*;
+
+    fn with_bakery_and_hut() -> (World, u64) {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0, 70, 0], "owner").unwrap();
+        world.settlements.get_mut(&id).unwrap().hall_complete = true;
+        world.start_bakery(id, [24, 70, 0]).unwrap();
+        let village = world.settlements.get_mut(&id).unwrap();
+        village.houses = 1;
+        village.pending_visual_buildings = 1;
+        (world, id)
+    }
+
+    #[test]
+    fn two_unfunded_projects_need_both_bills_not_only_bakery() {
+        let (world, id) = with_bakery_and_hut();
+        let village = &world.settlements[&id];
+        assert_eq!(physical_construction_shortfall(village, &[]),
+            (BAKERY_WOOD_LOGS + HUT_WOOD_LOGS,
+             BAKERY_COBBLESTONE + HUT_COBBLESTONE));
+    }
+
+    #[test]
+    fn project_escrows_are_not_double_counted_as_public_stock() {
+        let (mut world, id) = with_bakery_and_hut();
+        let village = world.settlements.get_mut(&id).unwrap();
+        village.build_escrow.insert(Good::Wood, 4);
+        village.bakery.as_mut().unwrap().construction_escrow.insert(Good::Wood, 6);
+        village.warehouse_credit(Good::Wood, 5).unwrap();
+        let stock = [(Good::Wood, 12), (Good::Stone, 10)];
+        // 44 total wood - 10 in protected project escrows - 17 available.
+        assert_eq!(physical_construction_shortfall(village, &stock), (17, 48));
+    }
+
+    #[test]
+    fn blocked_bakery_does_not_induce_more_resource_harvests() {
+        let (mut world, id) = with_bakery_and_hut();
+        let village = world.settlements.get_mut(&id).unwrap();
+        village.bakery.as_mut().unwrap().building.as_mut().unwrap().blocked = true;
+        assert_eq!(physical_construction_shortfall(village, &[]),
+            (HUT_WOOD_LOGS, HUT_COBBLESTONE));
+        village.pending_visual_buildings = 0;
+        assert_eq!(physical_construction_shortfall(village, &[]), (0, 0));
+    }
+
+    #[test]
+    fn saved_bakery_transfer_requires_a_real_bakery_after_reboot() {
+        let (mut world, id) = with_bakery_and_hut();
+        let barrel = hall_storage_positions([0, 70, 0])[0];
+        world.settlements.get_mut(&id).unwrap().barrel_transfer = Some(BarrelTransfer {
+            position: barrel, good: Good::Wheat,
+            direction: BarrelDirection::ToBakerIngredients,
+            phase: BarrelPhase::Planned, before: 2, count: 1, slot: Some(0),
+        });
+        assert!(world.validate().is_ok());
+        world.settlements.get_mut(&id).unwrap().bakery = None;
         assert!(world.validate().is_err());
     }
 }
