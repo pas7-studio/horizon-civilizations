@@ -1,3 +1,22 @@
+# Latest worktree — source pickup witness gate (2026-11-08)
+
+- `feat/source-pickup-witness-v0115` stacks after PR #29. Keep all
+  stacked PRs Draft; no Actions, no main merge, no playable claims
+  until actual cargo, Python and native Horizon game-world E2E.
+- `GatherJob.pickup_witnessed: bool` is serde-default false. New
+  issued native edits do NOT route the courier home until the same
+  saved UUID-bound source worker is seen at the original work stand,
+  within 3D reach, with source block air. Persist this phase BEFORE
+  worker moves toward the hall; only then may a separately observed
+  3D hall return credit one unit.
+- `witness_gather_pickup` checks issued/nonblocked and exact resident
+  ID; `confirm_gather` rejects unwitnessed source. New oak segments
+  keep worker ID but reset witness to false. Old saves remain loadable.
+- Exact native acceptance TEST_PLAN 234-244. No actual compiled client
+  or game-world E2E run here: local toolchain unavailable.
+
+---
+
 # Latest assignment gate — 2026-11-08
 
 - Work on `feat/assigned-resource-courier-v0115`, stacked on PR #28.
