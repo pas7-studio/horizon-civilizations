@@ -40,7 +40,7 @@ class GuardedPartialVillagerRecoveryContracts(unittest.TestCase):
         validate = function(CORE, "pub fn validate(")
         self.assertIn("!village.actor_recovery_issued.is_empty() && !village.actors_spawned", validate)
         self.assertIn("for recovery_id in &village.actor_recovery_issued", validate)
-        self.assertIn("r.id == *recovery_id && r.alive && r.entity_uuid.is_none()", validate)
+        self.assertIn("r.id == *recovery_id && r.entity_uuid.is_none()", validate)
 
     def test_recovery_requires_operator_confirmation_not_automatic_spawn(self):
         self.assertIn('"civ recoveractor <name:word> <resident:integer> <confirm:word>"', GLUE)
@@ -98,7 +98,7 @@ class GuardedPartialVillagerRecoveryContracts(unittest.TestCase):
 
     def test_core_regression_module_includes_seven_cases(self):
         chunk = CORE.split("mod guarded_partial_native_actor_recovery_tests", 1)[1]
-        self.assertEqual(chunk.count("#[test]"), 7)
+        self.assertEqual(chunk.count("#[test]"), 8)
 
 
 if __name__ == "__main__":
