@@ -1,7 +1,8 @@
 // Horizon bridge. All world logic lives in civilizations_core; this module
 // translates server hooks, commands, inventory changes, and native NPC spawns.
 use crate::game::{
-    civilizations_core::{hut_plan, inspect_hut, is_ground, BuildInspection, Good, World, MAX_SIM_DAYS},
+    civilizations_core::{farm_plan, hut_plan, inspect_farm, inspect_hut, is_ground,
+        BuildInspection, FarmBlock, FarmDecision, FarmStage, Good, Job, World, MAX_SIM_DAYS},
     native_mobs::NativeSpawn,
     native_server::{NativeCommand, NativeServerPlayer},
     Game,
@@ -117,7 +118,7 @@ pub fn register(commands: &mut Vec<NativeCommand>) {
     for usage in [
         "civ", "civ help", "civ list", "civ info", "civ info <name:word>",
         "civ roster <name:word>",
-        "civ construction <name:word>",
+        "civ construction <name:word>", "civ farming <name:word>",
         "civ join <name:word>", "civ title", "civ promote", "civ history",
         "civ sell <good:word> <amount:integer>", "civ buy <good:word> <amount:integer>",
     ] {
@@ -127,6 +128,7 @@ pub fn register(commands: &mut Vec<NativeCommand>) {
         "civ found <name:word>", "civ actors <name:word>",
         "civ reconcile <name:word>",
         "civ day [days:integer]", "civ construct <name:word>",
+        "civ farm <name:word>",
         "civ war <from:word> <to:word>",
         "civ peace <from:word> <to:word>",
     ] {
@@ -189,7 +191,12 @@ fn guide_actors(game: &mut Game<'_>, world: &World) {
         for (resident_id, mob_id) in loaded_actors(game, world, village.id) {
             let Some(resident) = village.residents.iter().find(|r| r.id == resident_id && r.alive) else { continue; };
             let offset = resident.job.workplace(resident_id);
-            let pos = if resident.job == crate::game::civilizations_core::Job::Builder {
+            let pos = if resident.job == Job::Farmer && village.farm.is_some() {
+                let farm = village.farm.as_ref().unwrap();
+                [f64::from(farm.origin[0]) + 0.5,
+                 f64::from(farm.origin[1]),
+                 f64::from(farm.origin[2] - 3) + 0.5]
+            } else if resident.job == Job::Builder {
                 if let Some(job) = &village.visual_job {
                     [f64::from(job.origin[0]) + 0.5, f64::from(job.origin[1]), f64::from(job.origin[2] - 4) + 0.5]
                 } else {
@@ -317,6 +324,91 @@ fn build_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), St
     }
 }
 
+
+fn world_farm_block(game: &Game<'_>, dimension: &str, pos: [i32; 3]) -> Option<FarmBlock> {
+    if game.dim.id() != dimension || !game.world.loaded(pos[0], pos[2])
+        || pos[1] < game.world.shape.min_y || pos[1] >= game.world.shape.max_y() {
+        return None;
+    }
+    game.pack.assets.registry.state(game.world.block(pos[0], pos[1], pos[2]))
+        .map(|state| FarmBlock {
+            name: state.name.to_string(),
+            age: state.properties.get("age").and_then(|value| value.parse::<u8>().ok()),
+        })
+}
+
+fn check_empty_farm_site(game: &Game<'_>, dimension: &str, origin: [i32; 3]) -> Result<(), String> {
+    for z in -1..=1 {
+        for x in -1..=1 {
+            let ground = [origin[0] + x, origin[1] - 1, origin[2] + z];
+            let name = world_block(game, dimension, ground).ok_or("farm plot is not loaded")?;
+            if !is_ground(&name) {
+                return Err(format!("farm ground must be natural and flat at {ground:?}: {name}"));
+            }
+            let above = [origin[0] + x, origin[1], origin[2] + z];
+            let name = world_block(game, dimension, above).ok_or("farm plot is not loaded")?;
+            if name != "minecraft:air" {
+                return Err(format!("farm plot has an obstruction at {above:?}: {name}"));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// Authoritative one-step physical farming, bounded to an already-loaded
+/// level. The vanilla crop's age property determines maturity; neither
+/// harvested items nor simulated wheat stock are minted by this phase.
+fn farm_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), String> {
+    let dim = game.dim.id().to_owned();
+    let selected = state.world.as_ref().and_then(|world| {
+        world.next_farm(&dim, (state.physical_ticks / 8) as usize, |pos| {
+            game.world.loaded(pos[0], pos[2])
+        })
+    });
+    let Some((village_id, farm)) = selected else { return Ok(()); };
+    let world = state.world.as_ref().expect("active civilization world");
+    let linked = loaded_actors(game, world, village_id);
+    let farmers: Vec<_> = world.settlements[&village_id].residents.iter()
+        .filter(|resident| resident.alive && resident.job == Job::Farmer)
+        .filter_map(|resident| linked.iter()
+            .find(|(id, _)| *id == resident.id).map(|(_, mob)| *mob))
+        .collect();
+    let near = farmers.iter().any(|&id| game.native_mob(&dim, id).is_some_and(|mob| {
+        let dx = mob.pos[0] - f64::from(farm.origin[0]);
+        let dz = mob.pos[2] - f64::from(farm.origin[2]);
+        dx * dx + dz * dz <= 8.0 * 8.0
+    }));
+    if !near { return Ok(()); }
+
+    let decision = inspect_farm(&farm, |pos| world_farm_block(game, &dim, pos));
+    match &decision {
+        FarmDecision::Unloaded | FarmDecision::Paused => Ok(()),
+        FarmDecision::InvalidCursor => Err(format!("invalid farm cursor for settlement {village_id}")),
+        FarmDecision::Place { position, old_block, new_block } => {
+            let [x, y, z] = *position;
+            // A successful command does not advance the JSON cursor; it must
+            // be observed on a future tick, avoiding command-vs-save races.
+            let cmd = format!(
+                "execute in {dim} if block {x} {y} {z} {old_block} run setblock {x} {y} {z} {new_block} replace"
+            );
+            if !game.native_run_command(&cmd) {
+                log::warn!("[civilizations] conditional farm command refused: {cmd}");
+            }
+            Ok(())
+        }
+        _ => {
+            let changed = state.world.as_mut().unwrap().advance_farm(village_id, decision.clone())?;
+            if changed {
+                save(state).map_err(|e| format!("persistence: {e}"))?;
+            }
+            if let FarmDecision::Blocked { position, found } = &decision {
+                return Err(format!("farm blocked at {position:?} by {found}"));
+            }
+            Ok(())
+        }
+    }
+}
+
 /// Right-click dialogue for a UUID-bound civilization villager. Unbound or
 /// vanilla villagers keep their normal Minecraft interaction.
 pub fn interact_entity(game: &mut Game<'_>, entity: i32, kind: &str, claimed: &mut bool) {
@@ -388,7 +480,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
     let actor = format!("{:032x}", player.uuid);
     let action = args.next().unwrap_or("help");
     if action == "help" {
-        reply(game, "Civilizations: /civ list | info [name] | roster <name> | construction <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, day [days], construct <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
+        reply(game, "Civilizations: /civ list | info [name] | roster <name> | construction <name> | farming <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, day [days], construct <name>, farm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
         return;
     }
     if action == "list" {
@@ -405,6 +497,25 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
         let linked = loaded_actors(game, world, s.id);
         let listing: Vec<_> = s.residents.iter().map(|r| format!("{}:{}", r.name, r.job.name())).collect();
         reply(game, format!("{} actors: {}/{} nearby and loaded | {}", s.name, linked.len(), s.population(), listing.join(", ")));
+        return;
+    }
+    if action == "farming" {
+        let name = args.next().unwrap_or("");
+        let Some(settlement) = world.by_name(name) else {
+            error(game, "unknown settlement");
+            return;
+        };
+        let message = if let Some(farm) = &settlement.farm {
+            format!(
+                "{} 3x3 crop field at {:?}: {:?}, {}/{} steps, blocked={}, completed visual cycles={}. No farm stock is minted.",
+                settlement.name, farm.origin, farm.stage, farm.cursor,
+                if farm.stage == FarmStage::Preparing { farm_plan(farm.origin).len() } else { 8 },
+                farm.blocked, farm.completed_cycles,
+            )
+        } else {
+            format!("{} has no farm; OP: select empty 3x3 natural patch 12..80 blocks away, /civ farm {}", settlement.name, settlement.name)
+        };
+        reply(game, message);
         return;
     }
     if action == "construction" {
@@ -450,6 +561,19 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
     let previous = world.clone();
     let mut already_saved = false;
     let result: Result<String, String> = match action {
+        "farm" if player.permission >= 2 => (|| {
+            let name = args.next().ok_or("usage: /civ farm <name>")?;
+            let settlement = previous.by_name(name).ok_or("unknown settlement")?;
+            if settlement.dimension != player.dimension {
+                return Err("enter the settlement dimension".into());
+            }
+            let origin = player.position.map(|value| value.floor() as i32);
+            check_empty_farm_site(game, &settlement.dimension, origin)?;
+            state.world.as_mut().unwrap().start_farm(settlement.id, origin)?;
+            Ok(format!(
+                "Approved 3x3 irrigated crop field at {origin:?}. UUID-bound farmers work when loaded and near the site. /civ farming {name}"
+            ))
+        })(),
         "construct" if player.permission >= 2 => (|| {
             let name = args.next().ok_or("usage: /civ construct <name>")?;
             let s = previous.by_name(name).ok_or("unknown settlement")?;
@@ -627,7 +751,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
                 Ok(format!("Spawned and UUID-linked {spawned} villagers. Reopen world and verify /civ roster {name}."))
             }
         })(),
-        "found" | "day" | "war" | "peace" | "actors" | "construct" | "reconcile" => Err("requires server operator level 2".into()),
+        "found" | "day" | "war" | "peace" | "actors" | "construct" | "farm" | "reconcile" => Err("requires server operator level 2".into()),
         _ => Err("unknown subcommand. Use /civ help".into()),
     };
     match result {
@@ -675,6 +799,17 @@ pub fn level_tick(game: &mut Game<'_>, dimension: &str) {
                 // manual recovery, without pretending the write succeeded.
                 state.problem = Some(error);
                 return;
+            }
+        }
+    }
+    if state.physical_ticks % 8 == 0 {
+        if let Err(error) = farm_one_step(game, state) {
+            if error.contains("unloaded") || error.contains("not loaded") {
+                return;
+            }
+            log::warn!("[civilizations] physical farm paused: {error}");
+            if error.starts_with("persistence:") {
+                state.problem = Some(error);
             }
         }
     }
