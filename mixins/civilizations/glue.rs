@@ -2794,6 +2794,19 @@ fn gather_stand(game: &Game<'_>, dimension: &str, pos: [i32; 3]) -> Option<[i32;
     None
 }
 
+/// A saved work stand was clear when planned, but it can become a wall,
+/// cave or player-built obstruction before the villager arrives. Reobserve
+/// both standing blocks and actual floor at the native issue boundary.
+fn gather_stand_still_clear(game: &Game<'_>, dimension: &str, stand: [i32; 3]) -> bool {
+    let [x, y, z] = stand;
+    let (Some(head), Some(floor)) = (y.checked_add(1), y.checked_sub(1))
+    else { return false; };
+    world_block(game, dimension, stand).as_deref() == Some("minecraft:air")
+        && world_block(game, dimension, [x, head, z]).as_deref() == Some("minecraft:air")
+        && world_block(game, dimension, [x, floor, z])
+            .is_some_and(|block| is_ground(&block))
+}
+
 /// Local material source recognition. Naturalness is conservative but not
 /// provable from block state alone: player protection claims and the structure
 /// exclusion remain mandatory; no guaranteed anti-grief for other mods.
@@ -2858,6 +2871,7 @@ fn gather_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
     };
     if name != job.source_block()
         || !valid_resource
+        || !gather_stand_still_clear(game, &dimension, job.stand)
         || !state.world.as_ref().unwrap().gather_site_unclaimed(id, job.position, job.stand) {
         // Physical resource or land ownership may change after a saved plan.
         // Recheck tree/stone provenance and every registered parcel/worksite
@@ -2872,7 +2886,8 @@ fn gather_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
     let near = v.residents.iter().filter(|r| r.alive && r.job == profession)
         .any(|r| actors.iter().any(|(rid, mob)| {
             *rid == r.id && game.native_mob(&dimension, *mob).is_some_and(|actor| {
-                native_worker_reaches_block(actor.pos, job.position, 4.5)
+                native_worker_near(actor.pos, job.stand, 2.5, 2.0)
+                    && native_worker_reaches_block(actor.pos, job.position, 4.5)
             })
         }));
     if !near { return Ok(()); }
