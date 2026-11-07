@@ -113,10 +113,10 @@ Run [TEST_PLAN](TEST_PLAN.md) steps 60–66, preserving screenshots and
 logs for actual pathfinding evidence. No sleeps/beds or full house
 ownership are claimed; no Actions workflows are used.
 
-## Offline-first local compile (stacked v0.1.12, no GitHub Actions)
+## Offline-first local compile (stacked v0.1.13, no GitHub Actions)
 
 PR #20 is stacked on #19 → #18 → #17 → #16 → #15. Check out
-`feat/physical-town-hall-warehouse-v0112` when testing **all six
+`feat/native-barrel-inventory-v0113` when testing **all six
 features together**, not `main` or an older GitHub Windows artifact.
 
 From PowerShell in the local repository with Rust 1.95.0, Git, Python 3.11+
@@ -167,7 +167,7 @@ as an exact future simulation or a financial ledger.
 
 Instead of manually repeating the Rust and Python commands above, use
 `./scripts/validate-local.ps1 -Format` on a fresh checkout of
-`feat/physical-town-hall-warehouse-v0112`, followed by
+`feat/native-barrel-inventory-v0113`, followed by
 `./scripts/validate-local.ps1 -BuildClient` for the pinned native
 integration and executable. Omit `-Format` to refuse unformatted sources
 without modifying them. `-Format` explicitly changes local source files;
@@ -227,7 +227,7 @@ cases 99–102.
 
 ## First real town hall and resource acquisition test — v0.1.12
 
-Use `feat/physical-town-hall-warehouse-v0112`, not `main`. The previous
+Use `feat/native-barrel-inventory-v0113`, not `main`. The previous
 autonomous-source release can appear idle because it only had virtual
 materials and no central functional building. In a **disposable** grassy
 world, issue `/civ found Ashford`; wait for loaded NPCs and run:
@@ -259,3 +259,37 @@ This code does **not** yet make the barrels real vanilla inventory gateways.
 Their block contents are not mapped to the saved warehouse ledger. Do not
 assume that putting items manually into a barrel credits the settlement.
 GitHub Actions are intentionally disabled; run only local validation.
+
+## Real native barrel / NPC courier acceptance — v0.1.13
+
+The newest full stacked implementation lives on
+`feat/native-barrel-inventory-v0113`. In a **disposable** world with a
+completed physical civic hall, keep the central chunks loaded. Use:
+
+```text
+/civ hall Ashford
+/civ warehouse Ashford
+/civ roster Ashford
+/civ development Ashford
+/civ sell wood 16
+/civ sell stone 16
+```
+
+Watch the UUID-linked mayor/steward physically attend the hall. Sold items
+should move from the saved incoming delivery queue to **visible native
+barrel stacks**. A builder with a new 5x5 hut job must first go to hall,
+extract 20 oak logs +25 cobblestone, then walk to the construction site.
+Farmers and lumberjacks/miners should return to hall before their
+confirmed crop/wood/stone deliveries become available.
+
+To purchase from an actual barrel, stand within 12 blocks and run
+`/civ buy wood 4` (requires player inventory room, sufficient civic
+coins and a plain native barrel slot containing at least four logs).
+Ordinary players cannot freely open public barrels. An operator can
+inspect them, but **manual changes while a transaction is active can
+quarantine the entire operation**. Other vanilla barrels are unaffected.
+
+Do not use a valuable world for initial tests. Check [TEST_PLAN](TEST_PLAN.md)
+cases 120–138 and preserve logs if a transaction is blocked; there is
+intentionally NO blind recovery path. Native console/physical E2E is
+not done. GitHub Actions remain disabled.
