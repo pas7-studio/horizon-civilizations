@@ -2176,6 +2176,31 @@ impl World {
         Ok(())
     }
 
+    /// Re-evaluate live settlement ownership before executing an already
+    /// planned physical resource action. Land may be bought or new buildings
+    /// reserved between the initial plan and the worker reaching its target.
+    /// This is shared with planning so neither path can bypass a new parcel.
+    pub fn gather_site_unclaimed(
+        &self, village_id: u64, position: [i32; 3], stand: [i32; 3],
+    ) -> bool {
+        let Some(village) = self.settlements.get(&village_id) else { return false; };
+        let protected = |other: &Settlement| {
+            near_plot(other.center, position) || near_plot(other.center, stand)
+                || other.player_parcels.iter().any(|lot|
+                    near_plot(lot.origin, position) || near_plot(lot.origin, stand))
+                || other.visual_sites.iter().any(|site|
+                    near_plot(*site, position) || near_plot(*site, stand))
+                || other.visual_job.as_ref().is_some_and(|job|
+                    near_plot(job.origin, position) || near_plot(job.origin, stand))
+                || other.farm.as_ref().is_some_and(|farm|
+                    near_plot(farm.origin, position) || near_plot(farm.origin, stand))
+                || other.bakery.as_ref().is_some_and(|b|
+                    near_plot(b.origin, position) || near_plot(b.origin, stand))
+        };
+        !self.settlements.values().filter(|other| other.dimension == village.dimension)
+            .any(protected)
+    }
+
     /// Planning creates no items. Both native and domain checks forbid
     /// extraction inside the town hall, another structure or player lot.
     pub fn plan_gather(
@@ -2205,19 +2230,8 @@ impl World {
         if !(12_i128 * 12..=80_i128 * 80).contains(&(dx * dx + dz * dz)) {
             return Err("gather only in the village outer work area".into());
         }
-        for other in self.settlements.values().filter(|s| s.dimension == v.dimension) {
-            if near_plot(other.center, position) || near_plot(other.center, stand)
-                || other.player_parcels.iter().any(|lot|
-                    near_plot(lot.origin, position) || near_plot(lot.origin, stand))
-                || other.visual_sites.iter().any(|site|
-                    near_plot(*site, position) || near_plot(*site, stand))
-                || other.visual_job.as_ref().is_some_and(|job| near_plot(job.origin, position))
-                || other.farm.as_ref().is_some_and(|farm| near_plot(farm.origin, position))
-                || other.bakery.as_ref().is_some_and(|b| {
-                    near_plot(b.origin, position) || near_plot(b.origin, stand)
-                }) {
-                return Err("natural resource overlaps a building, town hall or player claim".into());
-            }
+        if !self.gather_site_unclaimed(village_id, position, stand) {
+            return Err("natural resource overlaps a building, town hall or player claim".into());
         }
         self.settlements.get_mut(&village_id).unwrap().gather_job = Some(GatherJob {
             position, stand, good, issued: false, blocked: false,
@@ -5009,6 +5023,36 @@ mod native_forest_origin_tests {
         assert!(!is_rooted_oak_harvest_origin([0, 70, 0], |p|
             if p == [1, 72, 0] { None }
             else { Some(b.get(&p).cloned().unwrap_or("minecraft:air".into())) }));
+    }
+
+
+    #[test]
+    fn resource_job_queued_before_lot_purchase_loses_permission() {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0, 70, 0], "owner").unwrap();
+        let origin = [24, 70, 0];
+        let stand = [25, 70, 0];
+        assert!(world.gather_site_unclaimed(id, origin, stand));
+        world.plan_gather(id, Good::Wood, origin, stand).unwrap();
+        world.settlements.get_mut(&id).unwrap().player_parcels.push(PlayerParcel {
+            origin, owner: "owner".into(), commissioned: false,
+        });
+        assert!(!world.gather_site_unclaimed(id, origin, stand));
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn worksite_cannot_approach_occupied_housing_or_bakery_from_side() {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0,70,0], "owner").unwrap();
+        let origin = [32,70,0];
+        assert!(world.gather_site_unclaimed(id, origin, [33,70,0]));
+        world.settlements.get_mut(&id).unwrap().player_parcels.push(PlayerParcel {
+            origin: [39,70,0], owner: "owner".into(), commissioned: false,
+        });
+        // The harvesting BLOCK is distant, but the worker stand touches
+        // somebody else's registered parcel exclusion radius.
+        assert!(!world.gather_site_unclaimed(id, origin, [34,70,0]));
     }
 
     #[test]
