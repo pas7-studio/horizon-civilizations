@@ -1420,6 +1420,13 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
                 }
                 already_saved = true;
                 Ok(format!("Sold {count} {} for {payout} coins", good.as_str()))
+            } else if previous.settlements[&village_id].hall_complete {
+                // After the hall is built, the source of truth for a shop
+                // purchase is an ACTUAL native vanilla barrel slot.
+                buy_from_real_barrel(
+                    game, state, &actor, village_id, good, count,
+                    player.position, &mut already_saved,
+                )
             } else {
                 if game.native_room_for(item) < count { return Err("not enough inventory space".into()); }
                 let cost = state.world.as_mut().unwrap().buy(&actor, village_id, good, count)?;
