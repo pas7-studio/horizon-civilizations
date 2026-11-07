@@ -406,7 +406,6 @@ pub const HUT_COBBLESTONE: u32 = 25;
 pub const BAKERY_WOOD_LOGS: u32 = 24;
 pub const BAKERY_COBBLESTONE: u32 = 33;
 pub const BREAD_WHEAT_RECIPE: u32 = 3;
-pub const MAX_BAKERY_WHEAT_ESCROW: u32 = 12;
 
 
 pub fn town_hall_plan(origin: [i32; 3]) -> Vec<HutBlock> {
