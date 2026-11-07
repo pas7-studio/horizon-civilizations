@@ -987,10 +987,33 @@ impl World {
         }
         let mut seen = BTreeSet::new();
         let mut all_entity_uuids = BTreeSet::new();
+        let mut all_parcels: Vec<(String, [i32; 3])> = Vec::new();
         for (&id, village) in &self.settlements {
             if village.id != id { return Err("settlement id/key mismatch".into()); }
             let normalized = village.name.to_ascii_lowercase();
             if !seen.insert(normalized) { return Err("duplicate settlement names".into()); }
+            if village.player_parcels.len() > MAX_PLAYER_PARCELS { return Err("too many player parcels".into()); }
+            for parcel in &village.player_parcels {
+                if parcel.owner.is_empty() || !self.players.contains_key(&parcel.owner) {
+                    return Err("parcel owner has no player record".into());
+                }
+                let [x, y, z] = parcel.origin;
+                if i64::from(x).abs() > 29_999_990 || i64::from(z).abs() > 29_999_990
+                    || !(-2048..=2048).contains(&y) {
+                    return Err("parcel outside world bounds".into());
+                }
+                if all_parcels.iter().any(|(dimension, point)| {
+                    dimension == &village.dimension && near_plot(*point, parcel.origin)
+                }) {
+                    return Err("overlapping player land parcels".into());
+                }
+                if parcel.commissioned
+                    && !village.visual_sites.contains(&parcel.origin)
+                    && !village.visual_job.as_ref().is_some_and(|job| job.origin == parcel.origin) {
+                    return Err("commissioned parcel has no recorded house job or completed hut".into());
+                }
+                all_parcels.push((village.dimension.clone(), parcel.origin));
+            }
             if village.residents.len() > 128 { return Err("resident cap exceeded".into()); }
             let mut resident_ids = BTreeSet::new();
             for resident in &village.residents {
@@ -1375,11 +1398,11 @@ impl World {
             return Err("farm outside safe build coordinates".into());
         }
         let distance = |a: [i32; 3], b: [i32; 3]| {
-            let dx = i64::from(a[0]) - i64::from(b[0]);
-            let dz = i64::from(a[2]) - i64::from(b[2]);
+            let dx = i128::from(a[0]) - i128::from(b[0]);
+            let dz = i128::from(a[2]) - i128::from(b[2]);
             dx * dx + dz * dz
         };
-        if !(12 * 12..=80 * 80).contains(&distance(village.center, origin)) {
+        if !(12_i128 * 12..=80_i128 * 80).contains(&distance(village.center, origin)) {
             return Err("farm must be 12..80 blocks from the village center".into());
         }
         for s in self.settlements.values().filter(|s| s.dimension == village.dimension) {
