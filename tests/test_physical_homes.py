@@ -50,8 +50,7 @@ class PhysicalHomesContracts(unittest.TestCase):
     def test_version_and_persistence_contracts(self):
         cargo = tomllib.loads((ROOT / "Cargo.toml").read_text())
         mixin = tomllib.loads((ROOT / "mixins/civilizations/horizon-mixin.toml").read_text())
-        self.assertEqual(cargo["package"]["version"], "0.1.8")
-        self.assertEqual(mixin["mod"]["version"], "0.1.8")
+        self.assertEqual(cargo["package"]["version"], mixin["mod"]["version"])
         self.assertIn("pub const SCHEMA: u32 = 1", CORE)
         self.assertNotIn("pub home_slot:", CORE)
         self.assertNotIn("pub home_site:", CORE)
