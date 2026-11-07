@@ -286,11 +286,49 @@ fn guide_actors(game: &mut Game<'_>, world: &World) {
                      f64::from(village.center[1] + offset[1]),
                      f64::from(village.center[2] + offset[2]) + 0.5]
                 }
+            } else if phase.on_shift(resident.job) && resident.job == Job::Baker {
+                if let Some(bakery) = &village.bakery {
+                    if bakery.complete {
+                        if bakery.bread_in_transit > 0 || bakery.wheat_escrow < crate::game::civilizations_core::BREAD_WHEAT_RECIPE {
+                            // Baker returns to the hall to deliver bread or
+                            // receive exactly three physical wheat items.
+                            [f64::from(village.center[0]) + 0.5,
+                             f64::from(village.center[1]),
+                             f64::from(village.center[2] - 3) + 0.5]
+                        } else {
+                            // Actual crafting table inside the completed
+                            // public bakery, not an abstract job offset.
+                            [f64::from(bakery.origin[0]) + 0.5,
+                             f64::from(bakery.origin[1]),
+                             f64::from(bakery.origin[2] - 3) + 0.5]
+                        }
+                    } else {
+                        [f64::from(village.center[0]) + 0.5,
+                         f64::from(village.center[1]),
+                         f64::from(village.center[2] - 3) + 0.5]
+                    }
+                } else {
+                    [f64::from(village.center[0] + offset[0]) + 0.5,
+                     f64::from(village.center[1] + offset[1]),
+                     f64::from(village.center[2] + offset[2]) + 0.5]
+                }
             } else if phase.on_shift(resident.job) && resident.job == Job::Builder {
                 if let Some(job) = &village.hall_job {
                     [f64::from(job.origin[0]) + 0.5,
                      f64::from(job.origin[1]),
                      f64::from(job.origin[2] - 4) + 0.5]
+                } else if village.bakery.as_ref().is_some_and(|b| b.building.is_some()) {
+                    let bakery = village.bakery.as_ref().unwrap();
+                    let site = bakery.building.as_ref().unwrap();
+                    if !bakery.supplies_reserved {
+                        [f64::from(village.center[0]) + 0.5,
+                         f64::from(village.center[1]),
+                         f64::from(village.center[2] - 3) + 0.5]
+                    } else {
+                        [f64::from(site.origin[0]) + 0.5,
+                         f64::from(site.origin[1]),
+                         f64::from(site.origin[2] - 4) + 0.5]
+                    }
                 } else if let Some(job) = &village.visual_job {
                     if village.hall_complete && !village.hut_supplies_reserved {
                         // Builders visit the actual town hall barrels first
