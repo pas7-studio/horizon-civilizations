@@ -170,6 +170,8 @@ pub fn register(commands: &mut Vec<NativeCommand>) {
         "civ approvehouse <name:word> <slot:integer> <y:integer>",
         "civ autonomy <name:word> <mode:word>",
         "civ barrelcheck <name:word>",
+        "civ gathercheck <name:word>",
+        "civ discardgather <name:word> <observed:word>",
         "civ resolvebarrel <name:word> <mode:word> <count:integer>",
         "civ farm <name:word>", "civ recoverfarm <name:word>",
         "civ buyplot <name:word>", "civ buyhouse <name:word>", "civ commission <name:word>",
@@ -982,7 +984,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
     let actor = format!("{:032x}", player.uuid);
     let action = args.next().unwrap_or("help");
     if action == "help" {
-        reply(game, "Civilizations: /civ list | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | hall <name> | warehouse <name> | diagnose <name> | buyplot <name> | buyhouse <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, barrelcheck <name>, resolvebarrel <name> confirm|cancel <observed_count>, day [days], construct <name>, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
+        reply(game, "Civilizations: /civ list | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | hall <name> | warehouse <name> | diagnose <name> | buyplot <name> | buyhouse <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, barrelcheck <name>, resolvebarrel <name> confirm|cancel <observed_count>, gathercheck <name>, discardgather <name> intact|empty, day [days], construct <name>, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
         return;
     }
     if action == "list" {
@@ -1154,6 +1156,32 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             loaded_role(Job::Baker), loaded_role(Job::Merchant),
             phase.name(), hall_status, bakery_status, v.farm.is_some(),
             v.gather_job.is_some(), blocker
+        ));
+        return;
+    }
+    if action == "gathercheck" {
+        if player.permission < 2 {
+            error(game, "resource gathering audit requires server operator level 2");
+            return;
+        }
+        let name = args.next().unwrap_or("");
+        let Some(v) = world.by_name(name) else {
+            error(game, "unknown settlement: /civ gathercheck <name>");
+            return;
+        };
+        if v.dimension != player.dimension {
+            error(game, "visit the settlement dimension for native block inspection");
+            return;
+        }
+        let Some(job) = &v.gather_job else {
+            reply(game, format!("{}: no pending natural wood/stone gather", v.name));
+            return;
+        };
+        let observed = world_block(game, &v.dimension, job.position);
+        reply(game, format!(
+            "{} gather audit: {:?} at {:?}, worker stand {:?}, planned native block {}, issued={}, blocked={}, live native block {:?}. Blocked ISSUED receipts are quarantined. Inspect world save and original block before OP /civ discardgather {} intact|empty; abandonment provides ZERO materials.",
+            v.name, job.good, job.position, job.stand, job.source_block(),
+            job.issued, job.blocked, observed, v.name
         ));
         return;
     }
@@ -1621,6 +1649,36 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
                 site, price, village.name
             ))
         })(),
+        "discardgather" if player.permission >= 2 => (|| {
+            let name = args.next().ok_or("usage: /civ discardgather <village> intact|empty")?;
+            let evidence = args.next().ok_or("confirm actual observed block: intact or empty")?;
+            if args.next().is_some() {
+                return Err("unexpected arguments for gather abandonment".into());
+            }
+            let v = previous.by_name(name).ok_or("unknown settlement")?;
+            if v.dimension != player.dimension {
+                return Err("inspect resource inside its own settlement dimension".into());
+            }
+            let job = v.gather_job.as_ref().ok_or("no gather receipt")?;
+            if !job.blocked || !job.issued {
+                return Err("only a blocked ISSUED gather can be manually abandoned".into());
+            }
+            let observed = world_block(game, &v.dimension, job.position)
+                .ok_or("original native source block unavailable; load the chunk")?;
+            let matches_evidence = match evidence {
+                "intact" => observed == job.source_block(),
+                "empty" => observed == "minecraft:air",
+                _ => return Err("use intact or empty after /civ gathercheck".into()),
+            };
+            if !matches_evidence {
+                return Err("native block changed since audit; gather receipt still quarantined".into());
+            }
+            state.world.as_mut().unwrap().abandon_blocked_issued_gather(v.id)?;
+            Ok(format!(
+                "{}: abandoned uncertain {:?} gather with {} source observed. ZERO resource credit. New physical jobs may be planned after the next tick.",
+                v.name, job.good, evidence
+            ))
+        })(),
         "resolvebarrel" if player.permission >= 2 => (|| {
             let name = args.next().ok_or(
                 "usage: /civ resolvebarrel <village> confirm|cancel <observed_count>"
@@ -1939,7 +1997,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
                 Ok(format!("Spawned and UUID-linked {spawned} villagers. Reopen world and verify /civ roster {name}."))
             }
         })(),
-        "found" | "day" | "war" | "peace" | "actors" | "construct" | "approvehouse" | "autonomy" | "farm" | "recoverfarm" | "reconcile" | "barrelcheck" | "resolvebarrel" => Err("requires server operator level 2".into()),
+        "found" | "day" | "war" | "peace" | "actors" | "construct" | "approvehouse" | "autonomy" | "farm" | "recoverfarm" | "reconcile" | "barrelcheck" | "resolvebarrel" | "gathercheck" | "discardgather" => Err("requires server operator level 2".into()),
         _ => Err("unknown subcommand. Use /civ help".into()),
     };
     match result {
@@ -2478,12 +2536,18 @@ fn autonomous_village_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Resu
         && actors.iter().any(|(known, _)| *known == r.id));
     // Recover from a refused/modified extraction without paying any wood or
     // stone; the next planning cycle may choose another untouched source.
-    if village.gather_job.as_ref().is_some_and(|job| job.blocked) {
+    if village.gather_job.as_ref().is_some_and(|job| job.blocked && !job.issued) {
+        // No Minecraft edit was dispatched. Discard this stale Planned
+        // candidate without a receipt and survey a different source later.
         let before = state.world.as_ref().unwrap().clone();
         state.world.as_mut().unwrap().discard_blocked_gather(id)?;
         save_autonomous(state, before)?;
         return Ok(());
     }
+    // A blocked *Issued* gather might already have changed native blocks.
+    // Keep its durable receipt quarantined until OP inspection. Planning
+    // other civic tasks may continue, but no further gather is scheduled
+    // while the uncertain source remains recorded.
 
     // Resource demand MUST include real native barrel contents, saved
     // incoming deliveries and physically extracted, project-specific
