@@ -1335,8 +1335,7 @@ pub fn level_tick(game: &mut Game<'_>, dimension: &str) {
             log::warn!("[civilizations] autonomous planning stopped: {error}");
             // A failed identity or persistence step must never cause
             // repeated spawning or untracked world mutations.
-            if error.starts_with("persistence:") || error.contains("UUID")
-                || error.contains("spawn") {
+            if error.starts_with("persistence:") || error.contains("UUID") {
                 state.problem = Some(format!("automatic village action halted: {error}"));
                 return;
             }
