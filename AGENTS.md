@@ -1,3 +1,21 @@
+# Newest stacked source branch — 3D native worker guards
+
+- Branch `feat/three-dimensional-native-worker-guards-v0115` now contains
+  all prior short-oak, journal, warehouse and bakery work. PR is Draft,
+  main unchanged, Actions OFF. 3D code is not a native/game PASS.
+- `native_worker_near` in core.rs rejects vertical cave/sky mismatch;
+  `native_worker_reaches_block` bounds eye-to-block 3D distance.
+  Always check the saved worker stand is loaded, two-high air, supported
+  on walkable native ground BEFORE issuing any world edit.
+- Added Rust pure numerical tests and Python source contract tests in
+  `tests/test_native_worker_3d.py`. Test cases 212-222 in
+  `docs/TEST_PLAN.md` must be run in a disposable native Minecraft world.
+- Handoff gate: build exact current SHA locally using Rust 1.95 + Python 3.11,
+  then capture errors and in-game evidence. Do not use an older main EXE
+  or auto-dispatch Actions.
+
+---
+
 # CURRENT SOURCE HANDOFF — verified short oak stem (2026-11-08)
 
 - Latest source branch: `feat/verified-oak-stem-harvest-v0115`, stacked after

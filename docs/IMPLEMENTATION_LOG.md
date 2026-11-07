@@ -402,3 +402,22 @@
   They were NOT executed with Rust/Python toolchains in this environment.
 - Source-only; actual native compile, server tick behavior, loaded chunk
   logic, legacy save migration and game E2E remain unverified.
+
+## 2026-11-08 — 3D worker presence, block reach and work-stand revalidation
+
+- Found native actors near hall/farm/bakery were recognized by horizontal X/Z
+  alone. This could let a UUID-linked villager below a village in a cave
+  authorize wood, stone, wheat or bread production while not physically
+  present. Added reusable finite-checked 3D actor proximity with vertical
+  bounds; used by all physical resource work and deliveries.
+- Resource extraction additionally requires 4.5 blocks of physical eye-to-
+  block reach and being near the saved accessible worker stand. That stand
+  is freshly re-observed (feet/head air, walkable floor) immediately
+  before issuing any native Minecraft block command. A new obstacle or
+  unloaded stand fails closed.
+- Navigation now considers vertical mismatch, rather than indefinitely
+  treating a vertically displaced NPC as arrived.
+- Source-only tests: 3 Rust numerical regression examples, 11 Python
+  source contracts. 17/17 initial static assertions passed before the
+  stand recheck; refreshed final checks pending. No runtime tests or native
+  game build were run. GitHub Actions intentionally remain off.

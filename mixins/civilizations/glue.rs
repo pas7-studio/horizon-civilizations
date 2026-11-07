@@ -4,6 +4,7 @@ use crate::game::{
     civilizations_core::{farm_plan, hut_plan, town_hall_plan, bakery_plan, hall_storage_positions,
         BarrelDirection, BarrelPhase, inspect_farm, inspect_hut, inspect_town_hall, inspect_bakery, is_ground,
         is_rooted_oak_harvest_origin, short_oak_stem_height, inspect_oak_stem,
+        native_worker_near, native_worker_reaches_block,
         BuildInspection, DailyPhase, FarmBlock, FarmDecision, FarmStage, Good, HomeSlot, Job, VisualBuildJob,
         World, inspect_home, hall_board_positions, HOUSING_PLOT_OFFSETS, MAX_HOUSING_SURVEY_RESULTS,
         MAX_SIM_DAYS},
@@ -222,9 +223,8 @@ fn loaded_actors(game: &mut Game<'_>, world: &World, settlement_id: u64) -> Vec<
             return None;
         }
         let mob = game.native_mob(&dimension, mob_id)?;
-        let dx = mob.pos[0] - f64::from(village.center[0]);
-        let dz = mob.pos[2] - f64::from(village.center[2]);
-        (dx * dx + dz * dz < 96.0 * 96.0).then_some((resident.id, mob_id))
+        native_worker_near(mob.pos, village.center, 96.0, 48.0)
+            .then_some((resident.id, mob_id))
     }).collect()
 }
 
@@ -370,8 +370,9 @@ fn guide_actors(game: &mut Game<'_>, world: &World) {
     for (mob_id, pos) in targets {
         if let Some(mob) = game.native_mob(&current_dim, mob_id) {
             let dx = mob.pos[0] - pos[0];
+            let dy = mob.pos[1] - pos[1];
             let dz = mob.pos[2] - pos[2];
-            if dx * dx + dz * dz > 3.0 * 3.0 {
+            if dx * dx + dz * dz > 3.0 * 3.0 || dy.abs() > 2.5 {
                 let _ = game.native_mob_navigate(&current_dim, mob_id, pos, 2, 0.65);
             }
         }
@@ -446,9 +447,7 @@ fn build_town_hall_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Res
             let near = v.residents.iter().filter(|r| r.alive && r.job == Job::Builder)
                 .any(|r| builders.iter().any(|(id, mob)| {
                     *id == r.id && game.native_mob(&dimension, *mob).is_some_and(|actor| {
-                        let dx = actor.pos[0] - f64::from(job.origin[0]);
-                        let dz = actor.pos[2] - f64::from(job.origin[2]);
-                        dx * dx + dz * dz <= 9.0 * 9.0
+                        native_worker_near(actor.pos, job.origin, 9.0, 6.0)
                     })
                 }));
             if !near { return Ok(()); }
@@ -519,9 +518,7 @@ fn build_bakery_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result
                 .filter(|r| r.alive && r.job == Job::Builder)
                 .any(|r| linked.iter().any(|(known, mob)| *known == r.id
                     && game.native_mob(&dimension, *mob).is_some_and(|actor| {
-                        let dx = actor.pos[0] - f64::from(job.origin[0]);
-                        let dz = actor.pos[2] - f64::from(job.origin[2]);
-                        dx * dx + dz * dz <= 9.0 * 9.0
+                        native_worker_near(actor.pos, job.origin, 9.0, 6.0)
                     })));
             if !nearby_builder { return Ok(()); }
             let [x,y,z] = position;
@@ -601,9 +598,7 @@ fn build_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), St
                 .filter_map(|r| linked.iter().find(|(id, _)| *id == r.id).map(|(_, mob)| *mob))
                 .collect();
             let near = builders.iter().any(|&id| game.native_mob(&dim, id).is_some_and(|mob| {
-                let dx = mob.pos[0] - f64::from(job.origin[0]);
-                let dz = mob.pos[2] - f64::from(job.origin[2]);
-                dx * dx + dz * dz <= 9.0 * 9.0
+                native_worker_near(mob.pos, job.origin, 9.0, 6.0)
             }));
             if !near {
                 return Ok(());
@@ -684,9 +679,7 @@ fn farm_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), Str
             .find(|(id, _)| *id == resident.id).map(|(_, mob)| *mob))
         .collect();
     let near = farmers.iter().any(|&id| game.native_mob(&dim, id).is_some_and(|mob| {
-        let dx = mob.pos[0] - f64::from(farm.origin[0]);
-        let dz = mob.pos[2] - f64::from(farm.origin[2]);
-        dx * dx + dz * dz <= 8.0 * 8.0
+        native_worker_near(mob.pos, farm.origin, 8.0, 4.0)
     }));
     if !near { return Ok(()); }
 
@@ -2143,9 +2136,7 @@ fn storage_worker_near(game: &mut Game<'_>, world: &World, id: u64, role: Job) -
     v.residents.iter().filter(|r| r.alive && r.job == role).any(|r| {
         linked.iter().any(|(known, mob)| *known == r.id
             && game.native_mob(&v.dimension, *mob).is_some_and(|actor| {
-                let dx = actor.pos[0] - f64::from(v.center[0]);
-                let dz = actor.pos[2] - f64::from(v.center[2]);
-                dx * dx + dz * dz <= 8.0 * 8.0
+                native_worker_near(actor.pos, v.center, 8.0, 4.0)
             }))
     })
 }
@@ -2455,9 +2446,7 @@ fn farmer_delivery_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Res
         let returned = v.residents.iter().filter(|r| r.alive && r.job == Job::Farmer)
             .any(|r| loaded.iter().any(|(known, mob)| *known == r.id
                 && game.native_mob(&dim, *mob).is_some_and(|actor| {
-                    let dx = actor.pos[0] - f64::from(v.center[0]);
-                    let dz = actor.pos[2] - f64::from(v.center[2]);
-                    dx * dx + dz * dz <= 8.0 * 8.0
+                    native_worker_near(actor.pos, v.center, 8.0, 4.0)
                 })));
         if !returned { continue; }
         let before = state.world.as_ref().unwrap().clone();
@@ -2514,9 +2503,7 @@ fn baker_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), St
         let working = village.residents.iter().filter(|r| r.alive && r.job == Job::Baker)
             .any(|r| actors.iter().any(|(known,mob)| *known == r.id
                 && game.native_mob(&dimension, *mob).is_some_and(|actor| {
-                    let dx = actor.pos[0] - f64::from(b.origin[0]);
-                    let dz = actor.pos[2] - f64::from(b.origin[2]);
-                    dx * dx + dz * dz <= 6.0 * 6.0
+                    native_worker_near(actor.pos, b.origin, 6.0, 4.0)
                 })));
         if !working { continue; }
         let before = state.world.as_ref().unwrap().clone();
@@ -2807,6 +2794,19 @@ fn gather_stand(game: &Game<'_>, dimension: &str, pos: [i32; 3]) -> Option<[i32;
     None
 }
 
+/// A saved work stand was clear when planned, but it can become a wall,
+/// cave or player-built obstruction before the villager arrives. Reobserve
+/// both standing blocks and actual floor at the native issue boundary.
+fn gather_stand_still_clear(game: &Game<'_>, dimension: &str, stand: [i32; 3]) -> bool {
+    let [x, y, z] = stand;
+    let (Some(head), Some(floor)) = (y.checked_add(1), y.checked_sub(1))
+    else { return false; };
+    world_block(game, dimension, stand).as_deref() == Some("minecraft:air")
+        && world_block(game, dimension, [x, head, z]).as_deref() == Some("minecraft:air")
+        && world_block(game, dimension, [x, floor, z])
+            .is_some_and(|block| is_ground(&block))
+}
+
 /// Local material source recognition. Naturalness is conservative but not
 /// provable from block state alone: player protection claims and the structure
 /// exclusion remain mandatory; no guaranteed anti-grief for other mods.
@@ -2844,9 +2844,7 @@ fn gather_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
             let delivered = v.residents.iter().filter(|r| r.alive && r.job == role).any(|r| {
                 linked.iter().any(|(known, mob)| *known == r.id
                     && game.native_mob(&dimension, *mob).is_some_and(|actor| {
-                        let dx = actor.pos[0] - f64::from(v.center[0]);
-                        let dz = actor.pos[2] - f64::from(v.center[2]);
-                        dx * dx + dz * dz <= 8.0 * 8.0
+                        native_worker_near(actor.pos, v.center, 8.0, 4.0)
                     }))
             });
             if !delivered {
@@ -2873,6 +2871,7 @@ fn gather_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
     };
     if name != job.source_block()
         || !valid_resource
+        || !gather_stand_still_clear(game, &dimension, job.stand)
         || !state.world.as_ref().unwrap().gather_site_unclaimed(id, job.position, job.stand) {
         // Physical resource or land ownership may change after a saved plan.
         // Recheck tree/stone provenance and every registered parcel/worksite
@@ -2887,9 +2886,8 @@ fn gather_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
     let near = v.residents.iter().filter(|r| r.alive && r.job == profession)
         .any(|r| actors.iter().any(|(rid, mob)| {
             *rid == r.id && game.native_mob(&dimension, *mob).is_some_and(|actor| {
-                let dx = actor.pos[0] - f64::from(job.position[0]);
-                let dz = actor.pos[2] - f64::from(job.position[2]);
-                dx * dx + dz * dz <= 6.0 * 6.0
+                native_worker_near(actor.pos, job.stand, 2.5, 2.0)
+                    && native_worker_reaches_block(actor.pos, job.position, 4.5)
             })
         }));
     if !near { return Ok(()); }
