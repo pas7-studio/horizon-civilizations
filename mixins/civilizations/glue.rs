@@ -701,8 +701,8 @@ pub fn interact_entity(game: &mut Game<'_>, entity: i32, kind: &str, claimed: &m
 }
 
 fn quarantined_native_purchase(state: &mut ActiveWorld, village_id: u64, reason: &str) -> String {
-    let outcome = state.world.as_mut().unwrap().block_market_purchase(village_id)
-        .and_then(|()| save(state));
+    let marked = state.world.as_mut().unwrap().block_market_purchase(village_id);
+    let outcome = marked.and_then(|()| save(state));
     if let Err(error) = outcome {
         state.problem = Some(format!("market purchase recovery halted: {error}"));
     }
@@ -794,9 +794,8 @@ fn buy_from_real_barrel(
         return Ok(quarantined_native_purchase(state, village_id,
             "player inventory did not accept the full paid stack"));
     }
-    if let Err(error) = state.world.as_mut().unwrap()
-        .complete_market_purchase(village_id, actor)
-        .and_then(|()| save(state)) {
+    let finished = state.world.as_mut().unwrap().complete_market_purchase(village_id, actor);
+    if let Err(error) = finished.and_then(|()| save(state)) {
         state.problem = Some(format!("physical market purchase final audit save failed: {error}"));
         return Ok(format!(
             "Item delivery completed, but market audit persistence FAILED: {error}. World halted to prevent duplicate grants."
