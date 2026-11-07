@@ -1013,12 +1013,19 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             "{}:{}", good.as_str(), village.build_escrow.get(good).copied().unwrap_or(0)
         )).collect::<Vec<_>>().join(" / ");
         let (hall_wood, hall_stone) = village.hall_materials_missing();
-        let demand = stored.as_ref().map(|items|
-            crate::game::civilizations_core::physical_construction_shortfall(village, items)
-        );
-        let outstanding = demand.map(|(wood, stone)|
-            format!("{wood} logs / {stone} cobble")
-        ).unwrap_or_else(|| "unknown (native barrels unloaded/unavailable)".to_owned());
+        let journal_pending = village.barrel_transfer.is_some()
+            || village.market_purchase.is_some();
+        let demand = if journal_pending { None } else {
+            stored.as_ref().map(|items|
+                crate::game::civilizations_core::physical_construction_shortfall(village, items)
+            )
+        };
+        let outstanding = if journal_pending {
+            "unknown (native transaction must reconcile first)".to_owned()
+        } else {
+            demand.map(|(wood, stone)| format!("{wood} logs / {stone} cobble"))
+                .unwrap_or_else(|| "unknown (native barrels unloaded/unavailable)".to_owned())
+        };
         let transfer = village.barrel_transfer.as_ref().map(|t| format!(
             "{:?} {:?} {} x{} at {:?}, before {}, phase {:?}",
             t.direction, t.good, t.good.item(), t.count, t.position,
