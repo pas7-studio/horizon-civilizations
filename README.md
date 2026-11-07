@@ -45,7 +45,7 @@ python3 tools/package.py
 python3 tools/verify_static.py
 ```
 
-Packaging produces `target/civilizations-0.1.9.hnmod` (source-only; the
+Packaging produces `target/civilizations-0.1.10.hnmod` (source-only; the
 launcher compiles it). The template is based on the **native hook-point**
 pattern used by the official Horizon SMP mod. The compatibility pin is in
 `compatibility.json`; the source was inspected but not compiled in this workspace.
@@ -76,7 +76,7 @@ to compile/trust the native mod before the game can run.
 
 1. Install the official Horizon launcher from <https://playhorizon.dev/>.
 2. Create a separate test instance and back up the world.
-3. Put `civilizations-0.1.9.hnmod` in that instance's `horizon-native-mods/`
+3. Put `civilizations-0.1.10.hnmod` in that instance's `horizon-native-mods/`
    directory. The native build requires the launcher's explicit trust action.
 4. Let the launcher **build** the modded game and review build logs. If you see
    `target not found`, hook schema incompatibility, or Rust errors, stop: the
@@ -109,7 +109,10 @@ to compile/trust the native mod before the game can run.
 | `/civ` or `/civ help` | All | Available actions |
 | `/civ list`, `/civ info [name]` | All | Inspect settlements |
 | `/civ roster NAME` | All | List professions and nearby recognized villagers |
-| `/civ construction NAME` | All | Physical hut state, verified block progress, pending count |
+| `/civ schedule NAME`, `/civ homes NAME` | All | Day/night shift and completed-hut physical allocations |
+| `/civ council NAME`, `/civ forecast NAME` | All | Read-only needs and three-day abstract economic outlook |
+| `/civ survey NAME` | All | Propose up to five loaded, unoccupied building sites; never reserves land |
+| `/civ construction NAME`, `/civ farming NAME`, `/civ harvests NAME` | All | Inspect physical build/farm progress and visual-only harvest receipts |
 | `/civ join NAME` | All | Join a settlement |
 | `/civ title`, `/civ promote` | All | View rank/coins; promote if eligible |
 | `/civ sell GOOD N`, `/civ buy GOOD N` | All | Trade with joined settlement |
@@ -117,6 +120,8 @@ to compile/trust the native mod before the game can run.
 | `/civ found NAME` | Operators lvl 2 | Create settlement at current position |
 | `/civ actors NAME` | Operators lvl 2 | Spawn named vanilla villager actors once |
 | `/civ construct NAME` | Operators lvl 2 | Approve a safe natural site at your feet for a physical 5x5 hut; requires a pending simulated house |
+| `/civ approvehouse NAME SLOT Y` | Operators lvl 2 | Confirm one numbered housing proposal near the selected plot; real blocks rechecked |
+| `/civ farm NAME`, `/civ recoverfarm NAME` | Operators lvl 2 | Approve visual crop patch or preflight recovery |
 | `/civ day [1..30]` | Operators lvl 2 | Advance abstract simulation manually |
 | `/civ war A B`, `/civ peace A B` | Operators lvl 2 | Strategic-only conflict state |
 
@@ -282,3 +287,50 @@ nothing is reserved.
 This version is source-only and **not compiled or playtested**. GitHub Actions
 remain disabled as requested; use the local commands in
 [PLAYTEST.md](docs/PLAYTEST.md) before merging the stacked drafts.
+
+## Village council: needs, priorities and economy outlook (v0.1.10 experimental)
+
+A village can now derive a **read-only** council priority board from its existing
+population, food/bread stock, three-day abstract-economy outlook, active wars,
+morale, durable UUID-linked residents, physical housing slots and future
+abstract-building material requirements. It ranks up to five urgent needs
+deterministically, with no random prompts, new save fields or autonomous
+commands. Use:
+
+- `/civ council Ashford` — see the three highest-ranked concerns, urgency
+  from 0 to 100, actual evidence and suggested next steps.
+- `/civ forecast Ashford` — inspect bread, wheat, morale, starvation,
+  simulated houses and pending visible houses for each of the next **three
+  hypothetical abstract days**.
+
+The forecast calls the existing `Settlement.day()` economic method on a
+**clone**, so it does not recalculate output using a different formula and
+cannot spend items, start construction, spawn villagers or alter the current
+world save. The forecast **excludes** separate world-level war attrition,
+player trading, Minecraft inventory, physical harvest credits, client play
+and time rewinds. It is a bounded scenario, not a guarantee of the future.
+
+The council does not bypass building approvals, military diplomacy or player
+inventory ownership. Its housing recommendation may direct an OP to
+`/civ survey Ashford`; actual land modification still needs explicit
+`/civ approvehouse` after real loaded-world block checks. Every previous
+trade/harvest caveat continues to apply. No gameplay E2E was performed
+for this version; GitHub Actions remain deliberately disabled.
+
+### Local validation without GitHub Actions
+
+On Windows 11, the repository includes a local-only PowerShell validator:
+
+```powershell
+.\scripts\validate-local.ps1 -Format
+.\scripts\validate-local.ps1 -BuildClient
+```
+
+The first command explicitly reformats local Rust sources and then runs fmt,
+Clippy, Cargo tests, all Python tests, packaging and static checks. The second
+also fetches the pinned Horizon source and builds a local Windows client.
+Run these from the **v0.1.10 stacked feature branch** when ready. A normal
+`validate-local.ps1` run checks formatting without changing source code;
+all variants may write generated files under `target/`. None trigger or
+reenable GitHub Actions. Even a successful local executable build does **not**
+prove in-world gameplay safety.

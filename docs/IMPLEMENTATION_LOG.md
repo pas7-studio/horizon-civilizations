@@ -140,3 +140,27 @@
   tests, plus acceptance plan items 67–75.
 - No GitHub Actions, Rust compilation, Python test execution, native Horizon
   integration or real gameplay E2E performed; all remain local gates.
+
+## 2026-11-07 — v0.1.10 civic council and three-day outlook (CI disabled)
+
+- Stacked source-only civic planning on top of physical housing, daily
+  routines and safe operator-approved building proposals.
+- Added pure deterministic prioritization for hunger, wars, low morale,
+  unbound or unsummoned residents, lack of real physical huts, and future
+  simulated-housing material shortage.
+- Forecast reuses the existing daily abstract economy on a **clone** for
+  three days (maximum seven for direct callers); no duplicate production
+  model or simulated trade/war execution.
+- Added read-only `/civ council NAME` and `/civ forecast NAME`, eight
+  Rust regression cases, and eight Python structural source contracts.
+- Preserved schema=1 and the six existing native hooks. No new stock
+  credits, actions, land claims, combat decisions, or world-save writes.
+- No GitHub Actions or actual Rust/Python/native/game executions. Only
+  structural source audits can be claimed until local testing.
+
+- Added a local-only PowerShell validator for formatting, Clippy, Cargo,
+  Python, packaging and optional pinned native client compilation.
+- Fixed the native test filter from `civilizations_core::tests` (which misses
+  newer sibling test modules) to `civilizations_core::` (all nested core tests).
+- Exposed the top council concern in UUID-bound resident right-click text.
+- Extended Python contracts to guard the dialogue and local validation path.

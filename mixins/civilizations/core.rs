@@ -22,6 +22,9 @@ pub const HOUSING_PLOT_OFFSETS: [[i32; 2]; 20] = [
     [40, 24], [-40, 24], [40, -24], [-40, -24],
 ];
 pub const MAX_HOUSING_SURVEY_RESULTS: usize = 5;
+/// The board forecasts a few abstract days, not simulated physical work.
+pub const COUNCIL_FORECAST_DAYS: u8 = 3;
+pub const MAX_COUNCIL_FORECAST_DAYS: u8 = 7;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -584,6 +587,54 @@ pub fn inspect_farm(plot: &FarmPlot, mut read: impl FnMut([i32; 3]) -> Option<Fa
     FarmDecision::StageComplete
 }
 
+/// Read-only, deterministic village needs; ordering is a tie-breaker, not a
+/// claim about a physical AI system or an authority to spend player resources.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
+pub enum CivicNeed {
+    Food,
+    Security,
+    Stability,
+    Identity,
+    Housing,
+    Materials,
+}
+
+impl CivicNeed {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Food => "food",
+            Self::Security => "security",
+            Self::Stability => "stability",
+            Self::Identity => "resident identity",
+            Self::Housing => "housing",
+            Self::Materials => "materials",
+        }
+    }
+}
+
+/// A council recommendation, never a ledger transaction or executable order.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CivicPriority {
+    pub need: CivicNeed,
+    pub urgency: u8,
+    pub reason: String,
+    pub next_step: String,
+}
+
+/// Snapshot of the EXISTING abstract settlement day() method run on a clone.
+/// Deliberately excludes separate world-level war attrition, player trades,
+/// physical crop harvests, inventory changes and actual NPC movement.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct AbstractDayForecast {
+    pub offset: u8,
+    pub wheat: u32,
+    pub bread: u32,
+    pub morale: i32,
+    pub starving_days: u32,
+    pub houses: u32,
+    pub pending_visual_buildings: u32,
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Settlement {
     pub id: u64,
@@ -641,6 +692,160 @@ impl Settlement {
         let site = *self.visual_sites.get(position / PHYSICAL_HOME_CAPACITY)?;
         let lane = (position % PHYSICAL_HOME_CAPACITY) as u8;
         Some(HomeSlot { site, lane })
+    }
+
+    /// Run the existing daily economy on an in-memory clone. The forecast
+    /// cannot place blocks, grant items, save data or append world history.
+    /// Only the next 1..=7 abstract days are accepted for presentation.
+    pub fn forecast_abstract_days(&self, days: u8) -> Vec<AbstractDayForecast> {
+        let mut hypothetical = self.clone();
+        let mut report = Vec::new();
+        for offset in 1..=days.min(MAX_COUNCIL_FORECAST_DAYS) {
+            // Events belong to the hypothetical clone, not World.chronicle.
+            let _discarded_events = hypothetical.day();
+            report.push(AbstractDayForecast {
+                offset,
+                wheat: hypothetical.quantity(Good::Wheat),
+                bread: hypothetical.quantity(Good::Bread),
+                morale: hypothetical.morale,
+                starving_days: hypothetical.starving_days,
+                houses: hypothetical.houses,
+                pending_visual_buildings: hypothetical.pending_visual_buildings,
+            });
+        }
+        report
+    }
+
+    /// Rank *current* settlement risks from its own already-saved economy,
+    /// population, physical housing and identity state. No AI inference,
+    /// no random actions, and no implicit permission to trade/build/fight.
+    pub fn council_priorities(&self) -> Vec<CivicPriority> {
+        let mut priorities = Vec::new();
+        let population = self.population();
+        if population == 0 {
+            return priorities;
+        }
+        let food_per_day = population.div_ceil(3);
+        let predicted = self.forecast_abstract_days(COUNCIL_FORECAST_DAYS);
+        let starvation_forecast = predicted.iter().find(|d| d.starving_days > 0)
+            .map(|d| d.offset);
+        let bread = self.quantity(Good::Bread);
+        if self.starving_days > 0 {
+            priorities.push(CivicPriority {
+                need: CivicNeed::Food, urgency: 100,
+                reason: format!(
+                    "food shortage has lasted {} day(s); {} bread/day needed",
+                    self.starving_days, food_per_day
+                ),
+                next_step: format!("Inspect /civ info {} and food production before advancing time", self.name),
+            });
+        } else if let Some(day) = starvation_forecast {
+            priorities.push(CivicPriority {
+                need: CivicNeed::Food, urgency: 90,
+                reason: format!(
+                    "abstract economy forecasts starvation on day +{}; current bread {}",
+                    day, bread
+                ),
+                next_step: format!("Inspect /civ forecast {} and bread supply; physical harvests do not credit stock", self.name),
+            });
+        } else if bread < food_per_day.saturating_mul(3) {
+            priorities.push(CivicPriority {
+                need: CivicNeed::Food, urgency: 55,
+                reason: format!(
+                    "bread reserve {} is below three-day consumption {} (forecast currently fed)",
+                    bread, food_per_day.saturating_mul(3)
+                ),
+                next_step: format!("Inspect /civ forecast {} before changing the economy", self.name),
+            });
+        }
+
+        if !self.active_wars.is_empty() {
+            priorities.push(CivicPriority {
+                need: CivicNeed::Security, urgency: 95,
+                reason: format!(
+                    "{} active war(s), {} living guard(s); warfare is abstract",
+                    self.active_wars.len(), self.count(Job::Guard)
+                ),
+                next_step: format!("Review /civ history and /civ info {}; diplomacy remains player/operator-controlled", self.name),
+            });
+        }
+        if self.morale < 30 {
+            priorities.push(CivicPriority {
+                need: CivicNeed::Stability,
+                urgency: if self.morale < 0 { 85 } else { 60 },
+                reason: format!(
+                    "morale {} below 30; recent shortage/war may be contributors",
+                    self.morale
+                ),
+                next_step: format!("Inspect /civ info {} and /civ history before making policy changes", self.name),
+            });
+        }
+        if !self.actors_spawned {
+            priorities.push(CivicPriority {
+                need: CivicNeed::Identity, urgency: 70,
+                reason: format!(
+                    "{} residents exist only in the abstract simulation; spawn not reserved",
+                    population
+                ),
+                next_step: format!("OP may use /civ actors {} once in a disposable world, then /civ roster {}", self.name, self.name),
+            });
+        } else {
+            let missing = self.residents.iter()
+                .filter(|r| r.alive && r.entity_uuid.is_none()).count();
+            if missing > 0 {
+                priorities.push(CivicPriority {
+                    need: CivicNeed::Identity, urgency: 88,
+                    reason: format!(
+                        "{} living resident(s) lack a durable entity UUID; no automatic respawn",
+                        missing
+                    ),
+                    next_step: format!("Inspect /civ roster {} and reconcile only known legacy actors; never spawn blindly", self.name),
+                });
+            }
+        }
+
+        let (_, _, homeless) = self.physical_housing();
+        if homeless > 0 {
+            let (urgency, reason, next_step) = if let Some(job) = &self.visual_job {
+                (45, format!(
+                    "{} residents lack completed physical hut slots; active build at {:?}{}",
+                    homeless, job.origin, if job.blocked { " is blocked" } else { "" }
+                ), format!("Inspect /civ construction {}; do not approve another site while a job is active", self.name))
+            } else if self.pending_visual_buildings > 0 {
+                (65, format!(
+                    "{} residents lack physical housing; {} abstract house(s) ready for visual construction",
+                    homeless, self.pending_visual_buildings
+                ), format!("Inspect /civ survey {}; OP approval is required before building", self.name))
+            } else {
+                (40, format!(
+                    "{} residents lack completed physical hut slots; no abstract house awaits visualization",
+                    homeless
+                ), format!("Inspect /civ homes {}; abstract houses cannot be auto-converted to physical huts", self.name))
+            };
+            priorities.push(CivicPriority {
+                need: CivicNeed::Housing, urgency, reason, next_step,
+            });
+        }
+
+        let desired_houses = population.div_ceil(3).saturating_add(1);
+        let wood = self.quantity(Good::Wood);
+        let stone = self.quantity(Good::Stone);
+        if self.houses < desired_houses && self.count(Job::Builder) > 0
+            && (wood < 8 || stone < 6) {
+            priorities.push(CivicPriority {
+                need: CivicNeed::Materials, urgency: 60,
+                reason: format!(
+                    "future abstract house needs 8 wood/6 stone; available {wood} wood/{stone} stone"
+                ),
+                next_step: format!(
+                    "Inspect /civ info {}; existing physical job materials were already paid in the abstract simulation",
+                    self.name
+                ),
+            });
+        }
+        priorities.sort_by(|a, b| b.urgency.cmp(&a.urgency).then(a.need.cmp(&b.need)));
+        priorities.truncate(5);
+        priorities
     }
 
     pub fn quantity(&self, good: Good) -> u32 {
@@ -2342,5 +2547,126 @@ mod safe_housing_proposal_tests {
         distant.settlements.get_mut(&other).unwrap().pending_visual_buildings = 1;
         assert!(distant.check_visual_house_site(other,
             [29_999_990, 70, 29_999_990]).is_err());
+    }
+}
+
+#[cfg(test)]
+mod civic_council_tests {
+    use super::*;
+
+    fn founded() -> (World, u64) {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0, 70, 0], "op").unwrap();
+        (world, id)
+    }
+
+    #[test]
+    fn new_village_has_unspawned_identity_and_unbuilt_housing_needs() {
+        let (world, id) = founded();
+        let needs = world.settlements[&id].council_priorities();
+        assert_eq!(needs[0].need, CivicNeed::Identity);
+        assert!(needs.iter().any(|p| p.need == CivicNeed::Housing));
+        assert!(needs.iter().all(|p| p.urgency <= 100));
+    }
+
+    #[test]
+    fn hunger_crisis_outranks_theoretical_housing_and_follows_existing_economy() {
+        let (mut world, id) = founded();
+        let settlement = world.settlements.get_mut(&id).unwrap();
+        settlement.starving_days = 3;
+        let priorities = settlement.council_priorities();
+        assert_eq!(priorities[0].need, CivicNeed::Food);
+        assert_eq!(priorities[0].urgency, 100);
+        assert!(priorities[0].reason.contains("3 day(s)"));
+    }
+
+    #[test]
+    fn economic_forecast_is_bounded_and_never_mutates_real_stock_or_world() {
+        let (world, id) = founded();
+        let before = serde_json::to_string(&world).unwrap();
+        let village = &world.settlements[&id];
+        assert!(village.forecast_abstract_days(0).is_empty());
+        let three = village.forecast_abstract_days(COUNCIL_FORECAST_DAYS);
+        assert_eq!(three.len(), 3);
+        assert_eq!(three[0].offset, 1);
+        assert_eq!(three[2].offset, 3);
+        assert_eq!(three, village.forecast_abstract_days(3));
+        assert_eq!(village.forecast_abstract_days(u8::MAX).len(), 7);
+        assert!(three[0].houses >= village.houses);
+        assert_eq!(serde_json::to_string(&world).unwrap(), before);
+    }
+
+    #[test]
+    fn forecast_detects_no_bakers_before_actual_starvation() {
+        let (mut world, id) = founded();
+        let village = world.settlements.get_mut(&id).unwrap();
+        village.stock.insert(Good::Bread, 0);
+        for person in &mut village.residents {
+            if person.job == Job::Baker { person.alive = false; }
+        }
+        let priorities = village.council_priorities();
+        let food = priorities.iter().find(|p| p.need == CivicNeed::Food).unwrap();
+        assert_eq!(food.urgency, 90);
+        assert!(food.reason.contains("day +1"));
+        assert_eq!(village.quantity(Good::Bread), 0);
+    }
+
+    #[test]
+    fn war_priority_is_abstract_security_only_no_automatic_combat() {
+        let (mut world, a) = founded();
+        let b = world.found("Brightwell", "minecraft:overworld", [300, 70, 0], "op2").unwrap();
+        world.declare_war(a, b).unwrap();
+        let priorities = world.settlements[&a].council_priorities();
+        assert_eq!(priorities[0].need, CivicNeed::Security);
+        assert_eq!(priorities[0].urgency, 95);
+        assert!(priorities[0].next_step.contains("operator-controlled"));
+    }
+
+    #[test]
+    fn materials_are_for_future_abstract_houses_not_physical_stock() {
+        let (mut world, id) = founded();
+        let village = world.settlements.get_mut(&id).unwrap();
+        village.stock.insert(Good::Wood, 1);
+        village.stock.insert(Good::Stone, 2);
+        let priorities = village.council_priorities();
+        let materials = priorities.iter().find(|p| p.need == CivicNeed::Materials).unwrap();
+        assert_eq!(materials.urgency, 60);
+        assert!(materials.reason.contains("8 wood/6 stone"));
+        village.houses = village.population().div_ceil(3) + 1;
+        assert!(!village.council_priorities().iter().any(|p| p.need == CivicNeed::Materials));
+    }
+
+    #[test]
+    fn partial_spawn_reports_identity_repair_not_a_new_spawn() {
+        let (mut world, id) = founded();
+        let village = world.settlements.get_mut(&id).unwrap();
+        village.actors_spawned = true;
+        village.residents[0].entity_uuid = Some(9);
+        let priorities = village.council_priorities();
+        let identity = priorities.iter().find(|p| p.need == CivicNeed::Identity).unwrap();
+        assert_eq!(identity.urgency, 88);
+        assert!(identity.next_step.contains("never spawn blindly"));
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn fixed_tie_order_and_no_needs_are_deterministic_without_save_fields() {
+        let (mut world, id) = founded();
+        let village = world.settlements.get_mut(&id).unwrap();
+        village.houses = 5;
+        village.visual_sites = vec![[20, 70, 0], [-20, 70, 0], [0, 70, 20], [0, 70, -20]];
+        village.actors_spawned = true;
+        for (index, resident) in village.residents.iter_mut().enumerate() {
+            resident.entity_uuid = Some(index as u128 + 1);
+        }
+        assert_eq!(village.physical_housing(), (12, 10, 0));
+        assert!(village.council_priorities().is_empty());
+        let original = serde_json::to_string(&world).unwrap();
+        assert!(!original.contains("council_priorities"));
+        assert!(!original.contains("forecast_abstract_days"));
+        world.validate().unwrap();
+        assert_eq!(serde_json::to_string(&world).unwrap(), original);
+        let recovered: World = serde_json::from_str(&original).unwrap();
+        assert!(recovered.settlements[&id].council_priorities().is_empty());
     }
 }
