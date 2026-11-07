@@ -3,6 +3,7 @@
 use crate::game::{
     civilizations_core::{farm_plan, hut_plan, town_hall_plan, bakery_plan, hall_storage_positions,
         BarrelDirection, BarrelPhase, inspect_farm, inspect_hut, inspect_town_hall, inspect_bakery, is_ground,
+        is_rooted_oak_harvest_origin,
         BuildInspection, DailyPhase, FarmBlock, FarmDecision, FarmStage, Good, HomeSlot, Job, VisualBuildJob,
         World, inspect_home, hall_board_positions, HOUSING_PLOT_OFFSETS, MAX_HOUSING_SURVEY_RESULTS,
         MAX_SIM_DAYS},
@@ -2714,24 +2715,8 @@ fn gather_stand(game: &Game<'_>, dimension: &str, pos: [i32; 3]) -> Option<[i32;
 /// exclusion remain mandatory; no guaranteed anti-grief for other mods.
 fn seems_natural_resource(game: &Game<'_>, dimension: &str, point: [i32; 3], good: Good) -> bool {
     match good {
-        Good::Wood => {
-            if world_block(game, dimension, point).as_deref() != Some("minecraft:oak_log") {
-                return false;
-            }
-            // A leaf-bearing oak tree, not a bare timber log in a wall.
-            for (dx, dy, dz) in [(0_i32, 1_i32, 0_i32), (1, 1, 0),
-                                 (-1, 1, 0), (0, 1, 1), (0, 1, -1)] {
-                let (Some(x), Some(y), Some(z)) = (
-                    point[0].checked_add(dx), point[1].checked_add(dy),
-                    point[2].checked_add(dz)
-                ) else { continue; };
-                if world_block(game, dimension, [x, y, z]).as_deref()
-                    == Some("minecraft:oak_leaves") {
-                    return true;
-                }
-            }
-            false
-        }
+        Good::Wood => is_rooted_oak_harvest_origin(point, |pos|
+            world_block(game, dimension, pos)),
         Good::Stone => world_block(game, dimension, point).as_deref() == Some("minecraft:stone"),
         _ => false,
     }
@@ -2779,7 +2764,10 @@ fn gather_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
         }
         return save_autonomous(state, before);
     }
-    if name != job.source_block() {
+    if name != job.source_block()
+        || !seems_natural_resource(game, &dimension, job.position, job.good) {
+        // Provenance can change after planning. Inspect the actual rooted
+        // tree or exposed stone again before authorizing any world mutation.
         state.world.as_mut().unwrap().block_gather(id)?;
         return save_autonomous(state, before);
     }
@@ -2801,12 +2789,19 @@ fn gather_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
         "execute in {dimension} if block {x} {y} {z} {} run setblock {x} {y} {z} minecraft:air replace",
         job.source_block()
     );
+    // Persist Issued *before* executing the conditional Minecraft edit.
+    // A crash after changing the block cannot revive a Planned job that
+    // would be reissued. If persistence fails, no native command is sent.
+    state.world.as_mut().unwrap().mark_gather_issued(id)?;
+    save_autonomous(state, before)?;
     if !game.native_run_command(&cmd) {
+        // Uncertain or refused native commands never auto-retry. Preserve
+        // Blocked in the durable journal for explicit no-credit discard.
+        let issued = state.world.as_ref().unwrap().clone();
         state.world.as_mut().unwrap().block_gather(id)?;
-    } else {
-        state.world.as_mut().unwrap().mark_gather_issued(id)?;
+        save_autonomous(state, issued)?;
     }
-    save_autonomous(state, before)
+    Ok(())
 }
 
 /// Runs after an authoritative level tick: the selected dimension and its
