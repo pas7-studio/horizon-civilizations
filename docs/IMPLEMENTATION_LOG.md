@@ -705,3 +705,39 @@
   direct GitHub DNS or Windows PowerShell in the current runner; real
   Rust/Python full suite, Windows launcher and gameplay E2E not executed.
   PR Draft, main untouched, Actions not enabled.
+
+
+## 2026-11-08 — autonomous NPC-founded frontier settlements (PR #34)
+
+- Chose the largest missing first-play game loop: source had autonomous
+  builders, farms, bakery, NPCs and physical goods, but **no natural
+  settlement founding**; an OP needed to type `/civ found`.
+- Refactored core World::found into a common founding path plus
+  `World::found_autonomous`. All initial residents/starting abstract stock,
+  native building invariants and 192-block spacing are shared. Only
+  player-founded towns grant a Lord title and +25 civic coins to a real
+  authenticated founder; NPC towns have an independent founder marker and
+  NO synthetic player record, title or payout. Cap NPC-founded towns at 8;
+  manual operator founding retains the overall 64-town rules.
+- Added bounded `autonomous_frontier_found` to authoritative loaded
+  Overworld level ticks every 2,400 ticks. It observes integrated single-
+  player host plus joined server guests; requires finite/bounded player
+  coordinates and skips explorers within 192 blocks of a known town.
+  Eight deterministic ~88–91 block offsets are scanned using only loaded
+  natural 5x5 areas with no non-air obstacles (no clearing or worldgen).
+- Critically, the trial settlement must also pass the EXACT shared
+  10-villager spawn-survey and unique-clear-position preflight BEFORE its
+  first durable save, preventing stranded paper settlements. After save,
+  existing autonomous logic owns real NPC spawning and physical work.
+- Added player-facing, read-only `/civ nearby` command: sorted by horizontal
+  distance in current dimension, bounded top four, coordinates/directions,
+  hall status and joining hint. Existing commands still available.
+- Added five Rust domain tests and eleven Python source contracts; checked
+  26/26 targeted exact-source invariants, but there is NO Rust compiler or
+  native Horizon client available in this execution environment.
+- New PLAYTEST and acceptance 307–318. No new physical resource mint,
+  external inventory effect or automatic chunk loading at founding.
+- Remaining: real native Rust/Horizon build, single-player/dedicated tests,
+  terrain generation and NPC navigation E2E, actual resource work,
+  gameplay usability and server performance. PR remains Draft, no main
+  merge/Actions enablement.
