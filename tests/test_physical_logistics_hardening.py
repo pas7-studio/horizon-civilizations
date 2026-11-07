@@ -17,6 +17,8 @@ class PhysicalLogisticsHardeningContracts(unittest.TestCase):
         self.assertEqual(section.count("match t.direction"), 2)
         self.assertIn("BarrelDirection::ToBakerIngredients", section)
         self.assertIn("BarrelDirection::ToBakeryBuilder", section)
+        self.assertIn("b.building.as_ref().is_none_or(|job| job.blocked)", section)
+        self.assertIn("!b.complete || b.bread_in_transit != 0", section)
         self.assertTrue(section.rstrip().endswith("}"))
 
     def test_combined_bills_are_distinct_and_subtract_native_and_inbound_stock_once(self):
