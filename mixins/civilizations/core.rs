@@ -1636,7 +1636,8 @@ impl World {
             }
             if other.visual_sites.iter().any(|&site| distance(site, origin) < 9_i128 * 9)
                 || other.visual_job.as_ref().is_some_and(|job| distance(job.origin, origin) < 9_i128 * 9)
-                || other.farm.as_ref().is_some_and(|farm| distance(farm.origin, origin) < 9_i128 * 9) {
+                || other.farm.as_ref().is_some_and(|farm| distance(farm.origin, origin) < 9_i128 * 9)
+                || other.bakery.as_ref().is_some_and(|b| distance(b.origin, origin) < 9_i128 * 9) {
                 return Err("plot overlaps an existing civilization structure or farm".into());
             }
         }
@@ -1794,6 +1795,7 @@ impl World {
             || s.visual_sites.iter().any(|site| near_plot(*site, v.center))
             || s.visual_job.as_ref().is_some_and(|job| near_plot(job.origin, v.center))
             || s.farm.as_ref().is_some_and(|farm| near_plot(farm.origin, v.center))
+            || s.bakery.as_ref().is_some_and(|b| near_plot(b.origin, v.center))
         }) {
             return Err("civic hall site overlaps a registered building or player parcel".into());
         }
@@ -2045,7 +2047,10 @@ impl World {
                 || other.visual_sites.iter().any(|site|
                     near_plot(*site, position) || near_plot(*site, stand))
                 || other.visual_job.as_ref().is_some_and(|job| near_plot(job.origin, position))
-                || other.farm.as_ref().is_some_and(|farm| near_plot(farm.origin, position)) {
+                || other.farm.as_ref().is_some_and(|farm| near_plot(farm.origin, position))
+                || other.bakery.as_ref().is_some_and(|b| {
+                    near_plot(b.origin, position) || near_plot(b.origin, stand)
+                }) {
                 return Err("natural resource overlaps a building, town hall or player claim".into());
             }
         }
@@ -2149,8 +2154,9 @@ impl World {
             if other.player_parcels.iter().any(|plot| near_plot(plot.origin, origin))
                 || other.visual_sites.iter().any(|site| near_plot(*site, origin))
                 || other.visual_job.as_ref().is_some_and(|job| near_plot(job.origin, origin))
-                || other.farm.as_ref().is_some_and(|farm| near_plot(farm.origin, origin)) {
-                return Err("land overlaps a registered building, field or another player's parcel".into());
+                || other.farm.as_ref().is_some_and(|farm| near_plot(farm.origin, origin))
+                || other.bakery.as_ref().is_some_and(|b| near_plot(b.origin, origin)) {
+                return Err("land overlaps a registered building, field, bakery or another player's parcel".into());
             }
         }
         self.players.get_mut(player_id).unwrap().coins -= LAND_PRICE_COINS;
@@ -2332,7 +2338,8 @@ impl World {
             }
             if s.farm.as_ref().is_some_and(|p| distance(p.origin, origin) < 9 * 9)
                 || s.visual_job.as_ref().is_some_and(|p| distance(p.origin, origin) < 9 * 9)
-                || s.visual_sites.iter().any(|&site| distance(site, origin) < 9 * 9) {
+                || s.visual_sites.iter().any(|&site| distance(site, origin) < 9 * 9)
+                || s.bakery.as_ref().is_some_and(|b| distance(b.origin, origin) < 9 * 9) {
                 return Err("farm overlaps an existing civilization structure".into());
             }
         }
