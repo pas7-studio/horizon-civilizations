@@ -150,6 +150,7 @@ pub fn register(commands: &mut Vec<NativeCommand>) {
         "civ homes <name:word>", "civ survey <name:word>",
         "civ council <name:word>", "civ forecast <name:word>",
         "civ plots <name:word>", "civ development <name:word>",
+        "civ hall <name:word>", "civ warehouse <name:word>",
         "civ construction <name:word>", "civ farming <name:word>",
         "civ harvests <name:word>",
         "civ join <name:word>", "civ title", "civ promote", "civ history",
@@ -649,7 +650,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
     let actor = format!("{:032x}", player.uuid);
     let action = args.next().unwrap_or("help");
     if action == "help" {
-        reply(game, "Civilizations: /civ list | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | buyplot <name> | buyhouse <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, day [days], construct <name>, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
+        reply(game, "Civilizations: /civ list | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | hall <name> | warehouse <name> | buyplot <name> | buyhouse <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, day [days], construct <name>, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
         return;
     }
     if action == "list" {
@@ -658,6 +659,46 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             items.push(format!("#{} {} [{}] pop={} houses={}", s.id, s.name, s.culture, s.population(), s.houses));
         }
         reply(game, if items.is_empty() { "No settlements yet. OP: /civ found Ashford".into() } else { items.join(" | ") });
+        return;
+    }
+    if action == "hall" || action == "warehouse" {
+        let name = args.next().unwrap_or("");
+        let Some(village) = world.by_name(name) else {
+            error(game, "unknown settlement: /civ hall <name>");
+            return;
+        };
+        let mayor = village.residents.iter()
+            .find(|r| r.alive && r.job == Job::Merchant)
+            .map(|r| r.name.as_str()).unwrap_or("unassigned");
+        let (hall_wood, hall_stone) = village.hall_materials_missing();
+        let (hut_wood, hut_stone) = (
+            crate::game::civilizations_core::HUT_WOOD_LOGS
+                .saturating_sub(village.warehouse_quantity(Good::Wood)),
+            crate::game::civilizations_core::HUT_COBBLESTONE
+                .saturating_sub(village.warehouse_quantity(Good::Stone)),
+        );
+        let goods = [Good::Wheat, Good::Bread, Good::Wood, Good::Stone, Good::Iron];
+        let inventory = goods.iter().map(|good| format!(
+            "{}:{}", good.as_str(), village.warehouse_quantity(*good)
+        )).collect::<Vec<_>>().join(" / ");
+        if action == "warehouse" {
+            reply(game, format!(
+                "{} PHYSICAL warehouse [{}]. Current hall needs {} logs, {} cobblestone; next hut needs {} logs, {} cobblestone. Player /civ sell <good> <amount> delivers actual inventory. Abstract daily-production stock is NOT this warehouse.",
+                village.name, inventory, hall_wood, hall_stone, hut_wood, hut_stone
+            ));
+        } else {
+            let building = village.hall_job.as_ref().map(|job| format!(
+                "{}/{} blocks verified at {:?}, blocked={}",
+                job.cursor, town_hall_plan(job.origin).len(), job.origin, job.blocked
+            )).unwrap_or_else(|| "waiting for funded construction".to_owned());
+            let state = if village.hall_complete {
+                "COMPLETED: mayor desk, resource barrels and 2 bulletin signs"
+            } else { "UNDER CONSTRUCTION / UNFUNDED" };
+            reply(game, format!(
+                "{} civic center: {}. Mayor: {} (village merchant). {}. Physical goods: [{}]. Need {} logs and {} stone to fund hall. Signs refresh when a complete hall is loaded.",
+                village.name, state, mayor, building, inventory, hall_wood, hall_stone
+            ));
+        }
         return;
     }
     if action == "development" {
