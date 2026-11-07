@@ -608,3 +608,55 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
      replenishment and bought claims. Record actual game logs, block
      evidence and item counts. Whole-tree felling, sapling sourcing,
      replanting, lumberyard/quarry buildings are NOT part of this PR.
+
+## Short rooted oak stem, per-log inventory and restart acceptance
+
+200. From the exact latest stacked branch, run local rustfmt check, cargo
+     test, clippy, full Python tests and pinned native Horizon client
+     compilation. Record SHA, first failure, versions and command output.
+     Previous Actions artifacts from main do not include this branch.
+201. In a fresh disposable world, choose a loaded ordinary rooted oak
+     with 3-4 vertically connected native logs, actual leaf crown,
+     unobstructed 2-high worker stand and village building demand.
+     Confirm one *saved* OakStem with cursor 0 and an unissued root gather.
+202. UUID-bound lumberjack arrives, original root log is removed by a
+     conditional native edit. No abstract virtual wood or player item is
+     created. Only after the same linked worker returns to the hall may
+     incoming physical wood increase from 0 to 1 and the next log at y+1
+     be planned unissued.
+203. Repeat for all 3-4 logs. Every log requires a distinct persisted
+     Issued state, actual changed native block, authoritative air read
+     and a real linked worker return. At final delivery oak_stem and
+     gather_job both disappear. Each log credits exactly one incoming
+     vanilla oak log; no duplicates after normal reload.
+204. Stop between previous log's native edit and the returning-worker
+     receipt. On restart, pending Issued state must not create a second
+     edit. When the saved job is safely observed as air and worker returns,
+     the next segment must be planned once only.
+205. Stop after one delivery saves the next unissued segment, before the
+     worker reaches it. On restart, previous log remains counted exactly
+     once, next segment unissued and its native block intact.
+206. Fault-inject failure persisting the initial multi-log plan and
+     verify old World is restored exactly, including both gather_job
+     and oak_stem. NO future tick may reference a dangling stem.
+207. Remove/replace any upper trunk log, crown leaf or source chunk
+     before its next unissued edit; job must fail closed and NEVER
+     overwrite a foreign block or issue a second native action.
+208. Purchase a player's 5x5 parcel covering tree or worker stand
+     after planning the stem (including between two logs). The next
+     segment must refuse despite saved original tree evidence.
+209. Force uncertain issued native operation, then OP
+     /civ gathercheck Ashford. Quarantined issued stem must NOT
+     auto-discard or replan; OP /civ discardgather Ashford intact|empty
+     only after live matching native observation, clearing all
+     remaining segments with ZERO extra wood credited.
+210. Test trees taller than four trunk logs, a single decorative oak log
+     with leaves, floating wood, canopy across unloaded chunk and
+     old saved single-log GatherJob without oak_stem. The new planner
+     refuses unsupported tall/uncertain stems, legacy jobs remain
+     single-log with no imaginary continuation.
+211. With multiple settlements/dimensions, compare /civ diagnose,
+     /civ gathercheck, /civ warehouse and actual world blocks/barrels,
+     after two or more relogs and day/night transitions. Keep complete
+     crash logs/screenshots. No claim of real sapling replanting,
+     full forestry building or rendered item courier at this stage.
