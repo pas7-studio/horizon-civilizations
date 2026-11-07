@@ -109,6 +109,38 @@ pub struct Resident {
     pub job: Job,
     pub age_days: u32,
     pub alive: bool,
+    /// Persistent Minecraft entity identity. No gameplay action may trust a name instead.
+    #[serde(default, with = "entity_uuid_hex", skip_serializing_if = "Option::is_none")]
+    pub entity_uuid: Option<u128>,
+}
+
+mod entity_uuid_hex {
+    use serde::{Deserialize, Deserializer, Serializer};
+
+    pub fn serialize<S>(value: &Option<u128>, serializer: S) -> Result<S::Ok, S::Error>
+    where
+        S: Serializer,
+    {
+        match value {
+            Some(uuid) => serializer.serialize_some(&format!("{uuid:032x}")),
+            None => serializer.serialize_none(),
+        }
+    }
+
+    pub fn deserialize<'de, D>(deserializer: D) -> Result<Option<u128>, D::Error>
+    where
+        D: Deserializer<'de>,
+    {
+        let value = Option::<String>::deserialize(deserializer)?;
+        value
+            .map(|hex| {
+                if hex.len() != 32 || !hex.bytes().all(|ch| ch.is_ascii_hexdigit()) {
+                    return Err(serde::de::Error::custom("entity UUID must be 32 hex characters"));
+                }
+                u128::from_str_radix(&hex, 16).map_err(serde::de::Error::custom)
+            })
+            .transpose()
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -395,11 +427,26 @@ impl World {
             return Err("settlement ID counter is not monotonic".into());
         }
         let mut seen = BTreeSet::new();
+        let mut all_entity_uuids = BTreeSet::new();
         for (&id, village) in &self.settlements {
             if village.id != id { return Err("settlement id/key mismatch".into()); }
             let normalized = village.name.to_ascii_lowercase();
             if !seen.insert(normalized) { return Err("duplicate settlement names".into()); }
             if village.residents.len() > 128 { return Err("resident cap exceeded".into()); }
+            let mut resident_ids = BTreeSet::new();
+            for resident in &village.residents {
+                if !resident_ids.insert(resident.id) {
+                    return Err("duplicate resident ID".into());
+                }
+                if let Some(uuid) = resident.entity_uuid {
+                    if uuid == 0 || !village.actors_spawned {
+                        return Err("entity UUID is invalid for this settlement".into());
+                    }
+                    if !all_entity_uuids.insert(uuid) {
+                        return Err("duplicate actor entity UUID across settlements".into());
+                    }
+                }
+            }
             if village.visual_sites.len() > 32 { return Err("visual building site cap exceeded".into()); }
             if village.visual_sites.len() as u32 > village.houses { return Err("visual buildings exceed houses".into()); }
             if village.pending_visual_buildings > village.houses { return Err("pending physical houses exceed housing".into()); }
@@ -492,6 +539,7 @@ impl World {
             job: *job,
             age_days: 20 * 365 + i as u32 * 220,
             alive: true,
+            entity_uuid: None,
         }).collect();
         let settlement = Settlement {
             id,
@@ -586,6 +634,36 @@ impl World {
         let name = village.name.clone();
         self.event(format!("{name}: house constructed at {},{},{}", origin[0], origin[1], origin[2]));
         Ok(())
+    }
+
+    /// Bind a resident to the actual saved Horizon entity UUID, once.
+    /// The operation is idempotent for the same identity and rejects reassignment.
+    pub fn bind_actor(&mut self, settlement_id: u64, resident_id: u64, uuid: u128) -> Result<bool, String> {
+        if uuid == 0 {
+            return Err("cannot bind zero entity UUID".into());
+        }
+        if self.settlements.iter().any(|(&sid, s)| {
+            s.residents.iter().any(|r| {
+                r.entity_uuid == Some(uuid) && (sid != settlement_id || r.id != resident_id)
+            })
+        }) {
+            return Err("entity UUID is already owned by another resident".into());
+        }
+        let settlement = self.settlements.get_mut(&settlement_id).ok_or("unknown settlement")?;
+        if !settlement.actors_spawned {
+            return Err("cannot bind before actor spawning has been reserved".into());
+        }
+        let resident = settlement.residents.iter_mut()
+            .find(|r| r.id == resident_id && r.alive)
+            .ok_or("unknown or inactive resident")?;
+        match resident.entity_uuid {
+            Some(existing) if existing == uuid => Ok(false),
+            Some(_) => Err("resident already bound to a different entity UUID".into()),
+            None => {
+                resident.entity_uuid = Some(uuid);
+                Ok(true)
+            }
+        }
     }
 
     pub fn by_name(&self, name: &str) -> Option<&Settlement> {
@@ -968,5 +1046,68 @@ mod tests {
         assert_eq!(loaded.schema, SCHEMA);
         assert_eq!(loaded.day, 3);
         assert_eq!(loaded.settlements[&id].founder, "player-1");
+    }
+}
+
+#[cfg(test)]
+mod actor_identity_tests {
+    use super::*;
+
+    fn ready_world() -> (World, u64, u64) {
+        let mut world = World::default();
+        let settlement = world.found("Ashford", "minecraft:overworld", [0, 64, 0], "player").unwrap();
+        world.settlements.get_mut(&settlement).unwrap().actors_spawned = true;
+        let resident = world.settlements[&settlement].residents[0].id;
+        (world, settlement, resident)
+    }
+
+    #[test]
+    fn uuid_persists_as_32_hex_characters_with_no_json_precision_loss() {
+        let (mut world, settlement, resident) = ready_world();
+        let uuid = 0xdeadbeef_01234567_89abcdef_01234567_u128;
+        assert!(world.bind_actor(settlement, resident, uuid).unwrap());
+        let encoded = serde_json::to_string(&world).unwrap();
+        assert!(encoded.contains("deadbeef0123456789abcdef01234567"));
+        let recovered: World = serde_json::from_str(&encoded).unwrap();
+        recovered.validate().unwrap();
+        assert_eq!(recovered.settlements[&settlement].residents[0].entity_uuid, Some(uuid));
+        assert!(!world.bind_actor(settlement, resident, uuid).unwrap());
+    }
+
+    #[test]
+    fn uuid_binding_rejects_reassignment_collisions_and_unreserved_spawning() {
+        let (mut world, settlement, resident) = ready_world();
+        assert!(world.bind_actor(settlement, resident, 0).is_err());
+        assert!(world.bind_actor(settlement, resident, 123).unwrap());
+        assert!(world.bind_actor(settlement, resident, 124).is_err());
+        let second = world.settlements[&settlement].residents[1].id;
+        assert!(world.bind_actor(settlement, second, 123).is_err());
+        world.settlements.get_mut(&settlement).unwrap().actors_spawned = false;
+        assert!(world.bind_actor(settlement, second, 987).is_err());
+        assert!(world.validate().is_err());
+    }
+
+    #[test]
+    fn legacy_world_without_entity_uuid_remains_loadable() {
+        let (world, settlement, _) = ready_world();
+        let serialized = serde_json::to_string(&world).unwrap();
+        assert!(!serialized.contains("entity_uuid"));
+        let old: World = serde_json::from_str(&serialized).unwrap();
+        old.validate().unwrap();
+        assert!(old.settlements[&settlement].residents.iter().all(|r| r.entity_uuid.is_none()));
+    }
+
+    #[test]
+    fn malformed_or_repeated_uuids_fail_closed_on_load() {
+        let (mut world, settlement, resident) = ready_world();
+        world.bind_actor(settlement, resident, 0x1111).unwrap();
+        let mut data: serde_json::Value = serde_json::to_value(&world).unwrap();
+        data["settlements"][settlement.to_string()]["residents"][0]["entity_uuid"] =
+            serde_json::Value::String("INVALID".into());
+        assert!(serde_json::from_value::<World>(data).is_err());
+        let second = world.settlements[&settlement].residents[1].id;
+        world.settlements.get_mut(&settlement).unwrap().residents[1].entity_uuid = Some(0x1111);
+        assert_eq!(second, world.settlements[&settlement].residents[1].id);
+        assert!(world.validate().is_err());
     }
 }

@@ -36,3 +36,10 @@ NPCs; save corruption; unauthorised commands; unbounded server tick stalls.
 23. **Write-before-cursor crash:** commit a physical block but not JSON cursor. The next tick must detect it and commit progress once, with no duplicate write.
 
 These now have pure Rust state-machine tests, not in-game proofs; keep valuable worlds out of this experiment.
+
+## UUID identity and disable-state tests
+
+24. Spawn ten villagers and check every resident has a unique nonzero saved entity UUID. Kill/reload and confirm UUID lookup does not silently bind a different villager with the same name.
+25. Use the v0.1.2 save schema with missing UUID fields. Before `/civ reconcile NAME`, `/civ roster` must show zero UUID-linked actors. Reconcile from the loaded village as OP and verify ten links saved; repeat is idempotent. Duplicate names / modified impostors must be skipped or manually reviewed.
+26. Force partial spawning, restart and verify actors never auto-spawn a second batch. An unbound physical actor can be recovered only with the explicit operator command.
+27. Disable `civilizations` using Horizon's native-mod switch: server and level ticks must not advance civilization state or issue block commands while disabled. Re-enable and verify state continuity.
