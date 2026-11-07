@@ -424,8 +424,10 @@ pub fn is_rooted_oak_harvest_origin(
     // reject taller/uncertain trees until supported by an explicit tree claim.
     for step in 1..=8_i32 {
         let Some(top_y) = y.checked_add(step) else { return false; };
-        if read([x, top_y, z]).as_deref() != Some("minecraft:oak_log") {
-            break;
+        match read([x, top_y, z]).as_deref() {
+            Some("minecraft:oak_log") => {}
+            Some(_) => break,
+            None => return false,
         }
         upper_logs += 1;
         if step < 2 { continue; }
