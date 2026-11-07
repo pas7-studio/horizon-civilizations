@@ -1,3 +1,37 @@
+# Unreleased: 3D native worker proximity and real work-stand enforcement
+
+Current branch: `feat/three-dimensional-native-worker-guards-v0115`, stacked
+on Draft PR #27. GitHub Actions stay OFF; `main` remains unchanged.
+**Not compiled or tested in a real Minecraft world.** Source manifest stays
+at 0.1.14 pending native build evidence.
+
+- [x] Pure finite-checked `native_worker_near` checks X, Y and Z; workers
+  above/below the hall can no longer trigger wood/stone/wheat deliveries,
+  bakery production or physical construction from the same X/Z point.
+- [x] `native_worker_reaches_block` compares 3D eye position with actual
+  block center, 4.5-block reach, before any mining command or Issued save.
+  The NPC must also be within 2.5 horizontal / 2 vertical blocks of the
+  **saved** natural source work stand.
+- [x] Native source work stand gets a fresh loaded observation immediately
+  before issuing: feet air, head air, real walkable floor. Any new wall,
+  unobserved chunk or missing ground blocks the operation with no credit.
+- [x] Live actor binding rejects residents >48 Y blocks away from their
+  village even if X/Z matches. Navigation wakes up for vertical mismatch.
+- [x] Applied 3D guard to the real native builders, farmer, baker,
+  warehouse steward, wheat and mined-material receipts.
+- [x] Three Rust numerical regression cases and 11 Python source contract
+  tests **written** (not executed); source consistency checks only.
+- [ ] Full Rust/Python tests, native Horizon mixin/client compile and
+  first Minecraft gameplay E2E STILL REQUIRED. No claim of playable build.
+- [ ] Height-aware 3D proximity is not line-of-sight/pathfinder proof.
+  Native replay safety from prior PRs remains essential.
+- [ ] True item-rendered couriers, saplings/replanting and real lumberyard/
+  quarry buildings remain future work.
+
+Refer to TEST_PLAN 212–222 for a disposable-world vertical exploit matrix.
+
+---
+
 # Unreleased source: short-oak stem harvesting with per-log receipts
 
 Branch `feat/verified-oak-stem-harvest-v0115`, stacked after Draft PR #26.
