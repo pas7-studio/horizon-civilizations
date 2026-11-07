@@ -2,8 +2,8 @@
 
 **Current assurance:** an older pinned Horizon native branch previously passed
 `cargo check` and embedded Rust tests. The latest v0.1.14 stacked source in
-`feat/first-play-diagnostics-v0115` has **not** passed native compile or
-Minecraft E2E. Do not reuse an old binary as evidence for this stack.
+`feat/guarded-partial-villager-recovery-v0115` (Draft PR #34) has **not**
+passed native compile or Minecraft E2E. Do not reuse an old binary as evidence for this stack.
 
 ## Build on your own development PC
 
@@ -58,7 +58,7 @@ When the Windows native compile workflow has uploaded `horizon-client.exe` (not 
 .\scripts\start-windows-playtest.ps1 -ClientExe 'C:\Games\HorizonTest\horizon-client.exe' -TrustUnsigned
 ```
 
-The script imports that exact executable, prepares resources using the official launcher and launches the disposable `Civilizations-Test` creative world. It does not distribute resources, bypass sign-in or alter another save. The `-TrustUnsigned` switch is required to make trust in your own CI artifact an explicit decision. If official resources are already prepared for this installed build, `-SkipPrepare` skips preparing them again.
+The script imports that exact executable, prepares resources using the official launcher and launches the disposable `Civilizations-Test` creative world. Each Horizon Launcher operation is awaited using a PowerShell pipeline, because the Windows GUI-subsystem executable otherwise may return before its exit status is available. A failed import/prepare must stop the sequence before play. It does not distribute resources, bypass sign-in or alter another save. The `-TrustUnsigned` switch is required to make trust in your own CI artifact an explicit decision. If official resources are already prepared for this installed build, `-SkipPrepare` skips preparing them again.
 
 This launcher flow is **not yet run in this workspace**. If Horizon Launcher reports that a compiled binary is incompatible with its selected version, use the pinned compatible upstream build and a new disposable world instead of patching an existing Minecraft save.
 
@@ -542,7 +542,7 @@ models/animations and full playability still not claimed.
 
 ```powershell
 git fetch origin
-git switch chore/first-play-native-validation-v0115
+git switch feat/guarded-partial-villager-recovery-v0115
 py -3 tools/first_play_gate.py --dry-run --build-client
 py -3 tools/first_play_gate.py --build-client
 ```
