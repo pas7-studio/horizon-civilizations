@@ -115,8 +115,8 @@ ownership are claimed; no Actions workflows are used.
 
 ## Offline-first local compile (stacked v0.1.13, no GitHub Actions)
 
-PR #20 is stacked on #19 → #18 → #17 → #16 → #15. Check out
-`feat/native-barrel-inventory-v0113` when testing **all six
+PR #21 is stacked on #20 → #19 → #18 → #17 → #16 → #15. Check out
+`feat/native-barrel-inventory-v0113` when testing **all seven
 features together**, not `main` or an older GitHub Windows artifact.
 
 From PowerShell in the local repository with Rust 1.95.0, Git, Python 3.11+
