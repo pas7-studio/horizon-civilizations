@@ -5619,8 +5619,10 @@ mod assigned_resource_courier_tests {
         let (mut world, id, _) = assigned_wood_job();
         world.mark_gather_issued(id).unwrap();
         let mut saved = serde_json::to_value(&world).unwrap();
-        saved["settlements"][id.to_string()]["gather_job"]
-            .as_object_mut().unwrap().remove("worker_id");
+        saved.get_mut("settlements").unwrap().as_object_mut().unwrap()
+            .get_mut(&id.to_string()).unwrap()
+            .get_mut("gather_job").unwrap().as_object_mut().unwrap()
+            .remove("worker_id");
         let mut old: World = serde_json::from_value(saved).unwrap();
         old.validate().unwrap();
         assert!(old.settlements[&id].gather_job.as_ref().unwrap().worker_id.is_none());
