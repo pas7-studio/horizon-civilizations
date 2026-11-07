@@ -14,7 +14,7 @@ class TestWindowsPlaytestLauncher(unittest.TestCase):
 
     def test_uses_official_launcher_with_checked_failures(self):
         self.assertIn("Get-Command -Name $LauncherExe -ErrorAction Stop", SCRIPT)
-        self.assertIn("if ($LASTEXITCODE -ne 0)", SCRIPT)
+        self.assertIn("if ($exitCode -ne 0)", SCRIPT)
         self.assertLess(SCRIPT.index("@('import-build', $client, '--trust-unsigned')"),
                         SCRIPT.index("@('prepare')"))
         self.assertLess(SCRIPT.index("@('prepare')"),
