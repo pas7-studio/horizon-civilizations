@@ -128,7 +128,7 @@ pub fn register(commands: &mut Vec<NativeCommand>) {
         "civ found <name:word>", "civ actors <name:word>",
         "civ reconcile <name:word>",
         "civ day [days:integer]", "civ construct <name:word>",
-        "civ farm <name:word>",
+        "civ farm <name:word>", "civ recoverfarm <name:word>",
         "civ war <from:word> <to:word>",
         "civ peace <from:word> <to:word>",
     ] {
@@ -480,7 +480,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
     let actor = format!("{:032x}", player.uuid);
     let action = args.next().unwrap_or("help");
     if action == "help" {
-        reply(game, "Civilizations: /civ list | info [name] | roster <name> | construction <name> | farming <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, day [days], construct <name>, farm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
+        reply(game, "Civilizations: /civ list | info [name] | roster <name> | construction <name> | farming <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, day [days], construct <name>, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
         return;
     }
     if action == "list" {
@@ -561,6 +561,31 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
     let previous = world.clone();
     let mut already_saved = false;
     let result: Result<String, String> = match action {
+        "recoverfarm" if player.permission >= 2 => (|| {
+            let name = args.next().ok_or("usage: /civ recoverfarm <name>")?;
+            let settlement = previous.by_name(name).ok_or("unknown settlement")?;
+            if settlement.dimension != player.dimension {
+                return Err("enter the settlement dimension".into());
+            }
+            let mut farm = settlement.farm.clone().ok_or("no farm to recover")?;
+            if !farm.blocked {
+                return Err("farm is not blocked".into());
+            }
+            // Preview the full previously placed prefix/current block with
+            // the blocked flag cleared, against already-loaded real blocks.
+            // Simply flipping the flag without this check would be unsafe.
+            farm.blocked = false;
+            match inspect_farm(&farm, |pos| world_farm_block(game, &settlement.dimension, pos)) {
+                FarmDecision::Unloaded => return Err("load the full field first".into()),
+                FarmDecision::InvalidCursor => return Err("invalid saved farm cursor".into()),
+                FarmDecision::Blocked { position, found } => {
+                    return Err(format!("repair foreign block at {position:?}: {found} before recovery"));
+                }
+                _ => {}
+            }
+            state.world.as_mut().unwrap().recover_farm(settlement.id)?;
+            Ok(format!("Verified loaded field and resumed {name}. Farmer will continue on the next authoritative level tick."))
+        })(),
         "farm" if player.permission >= 2 => (|| {
             let name = args.next().ok_or("usage: /civ farm <name>")?;
             let settlement = previous.by_name(name).ok_or("unknown settlement")?;
@@ -751,7 +776,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
                 Ok(format!("Spawned and UUID-linked {spawned} villagers. Reopen world and verify /civ roster {name}."))
             }
         })(),
-        "found" | "day" | "war" | "peace" | "actors" | "construct" | "farm" | "reconcile" => Err("requires server operator level 2".into()),
+        "found" | "day" | "war" | "peace" | "actors" | "construct" | "farm" | "recoverfarm" | "reconcile" => Err("requires server operator level 2".into()),
         _ => Err("unknown subcommand. Use /civ help".into()),
     };
     match result {

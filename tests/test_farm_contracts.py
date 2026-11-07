@@ -12,7 +12,8 @@ class FarmContracts(unittest.TestCase):
         glue = (MIXINS / "glue.rs").read_text()
         for feature in ["check_empty_farm_site", "farm_one_step", "world_farm_block",
                         "native_run_command", "native_entity_by_uuid", "inspect_farm",
-                        "game.native_on(MOD_ID)", '"civ farm <name:word>"']:
+                        "game.native_on(MOD_ID)", '"civ farm <name:word>"',
+                        '"civ recoverfarm <name:word>"', "recover_farm"]:
             self.assertIn(feature, glue)
         # Rustfmt may split this method chain across lines; assert behavior,
         # not a particular whitespace arrangement.

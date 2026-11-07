@@ -57,3 +57,5 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
 35. **Obstruction:** replace a farm soil/water/crop block with a foreign block. It must fail closed and never overwrite that block or continue other work on this plot.
 36. **Separate economy:** compare wheat stock and player inventory before/after a physical crop cycle with auto-day ticks paused in a controlled test. Crop cycles **must not** directly increase JSON wheat, and no farm harvest item must be dropped.
 37. **Multiple worlds/villages:** fields must not edit other dimensions or other plots; only already-loaded plots may advance.
+
+38. **Operator recovery:** obstruct a crop and confirm `blocked=true`, clear it back to the expected wheat/air state, then `/civ recoverfarm NAME`; recovery must refuse if the obstruction remains or any required chunk is unloaded, and must not credit warehouse stock.

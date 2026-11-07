@@ -829,6 +829,16 @@ impl World {
         Ok(())
     }
 
+    /// The adapter must first inspect the unblocked plot against the real
+    /// loaded blocks before issuing an operator-approved recovery.
+    pub fn recover_farm(&mut self, village_id: u64) -> Result<(), String> {
+        let farm = self.settlements.get_mut(&village_id)
+            .ok_or("unknown settlement")?.farm.as_mut().ok_or("no farm")?;
+        if !farm.blocked { return Err("farm is not blocked".into()); }
+        farm.blocked = false;
+        Ok(())
+    }
+
     pub fn advance_farm(&mut self, village_id: u64, decision: FarmDecision) -> Result<bool, String> {
         let village = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?;
         let farm = village.farm.as_mut().ok_or("no farm")?;
@@ -1518,5 +1528,30 @@ mod visual_farm_tests {
         assert!(world.start_farm(second, [25, 72, 0]).is_err());
         world.start_farm(second, [325, 72, 0]).unwrap();
         assert!(world.validate().is_ok());
+    }
+}
+
+#[cfg(test)]
+mod visual_farm_recovery_tests {
+    use super::*;
+
+    #[test]
+    fn recovery_requires_a_blocked_plot_and_preserves_stock() {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0, 70, 0], "operator").unwrap();
+        world.start_farm(id, [20, 70, 0]).unwrap();
+        assert!(world.recover_farm(id).is_err());
+        let initial_stock = world.settlements[&id].stock.clone();
+        world.advance_farm(id, FarmDecision::Blocked {
+            position: [20, 69, 0],
+            found: "minecraft:chest".into(),
+        }).unwrap();
+        assert!(world.settlements[&id].farm.as_ref().unwrap().blocked);
+        world.recover_farm(id).unwrap();
+        assert!(!world.settlements[&id].farm.as_ref().unwrap().blocked);
+        assert_eq!(world.settlements[&id].stock, initial_stock);
+        world.validate().unwrap();
+        let decoded: World = serde_json::from_str(&serde_json::to_string(&world).unwrap()).unwrap();
+        assert!(!decoded.settlements[&id].farm.as_ref().unwrap().blocked);
     }
 }

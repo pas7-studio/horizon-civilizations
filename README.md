@@ -179,3 +179,7 @@ A UUID-linked farmer approaches the plot. When the field's chunks are loaded, th
 The visual farm **does not produce warehouse wheat, item drops, or money**. Economic wheat production remains the separately simulated daily economy until there is a tested, durable block/JSON inventory transaction journal. The plot fails closed if player blocks replace its soil, water or crop; an operator must inspect the plot and save before any recovery. Currently one 3×3 farm per settlement, no automatic new farm or additional crops.
 
 This is experimental and has not passed a real Minecraft-world playtest. The normal native build gate checks compilation, not game-world chunk persistence.
+
+### Recovering an obstructed farm
+
+If `/civ farming Ashford` shows `blocked=true`, remove/restore the offending block **manually**, keep the field fully loaded, and as an OP run `/civ recoverfarm Ashford`. The mod re-inspects the physical plot and refuses recovery while any unexpected block or unloaded chunk remains. This does not roll back player edits or create stock.
