@@ -1,3 +1,51 @@
+## v0.1.15 source milestone — real daily resident meals
+
+- [x] Durable, old-save-compatible per-settlement native meal-day ledger:
+  host day, set of fed resident IDs and consecutive physical shortage days
+- [x] Real UUID-bound NPC routes to the hall; resident and steward must
+  both be loaded/near before planning a portion
+- [x] One real native bread item per living resident per day through the
+  EXISTING native barrel write-ahead and exact later-count verification
+- [x] No repeat consumption after restart, no virtual stock mint/credit,
+  and no reset of an unresolved Issued/Blocked meal across midnight
+- [x] Revalidate recipient immediately before native extraction; safely
+  cancel only an unissued Planned attempt if they left or died
+- [x] Physical meal shortage affects morale on real host-day transitions;
+  dead residents' earlier meals do not hide living residents' hunger
+- [x] Read-only `/civ meals NAME` and hall food sign; removed old native GUI not restored
+- [x] Authored nine native Rust domain regressions and fifteen Python
+  source contracts; native execution still pending
+- [ ] Real Horizon build/gameplay E2E: loaded barrels, ten walking NPCs,
+  native item count changes, restart and interference/crash testing
+- [ ] Rendered eating/carrying animations, family food allowances, food
+  variety, medicine, illness, starvation/death balance and production tuning
+
+## v0.1.15 (Draft PR #35) — naturally founded independent NPC villages
+
+- [x] Pure domain separation between player-/NPC-founded towns: independent
+  NPC council without fake accounts, rank grants or initial player currency.
+- [x] No OP command required for a natural settlement: bounded, periodic
+  scan near **actual active Overworld explorers** using only loaded chunks,
+  5x5 natural clear plots and the existing ten-NPC safe spawn preflight.
+- [x] 192-block exclusion near existing towns, cap at eight NPC-founded
+  villages per world, no new dimensions or forced chunk generation.
+- [x] Reuse normal autonomous builder, farmer, baker, warehouse and village
+  startup rather than a parallel special NPC society path.
+- [x] Public read-only `/civ nearby` locates nearest towns and shows
+  coords/direction/construction state, enabling exploration.
+- [x] Authored six Rust unit regressions and eleven Python source contracts.
+- [ ] **Not verified in Minecraft:** worldgen site selection on real biomes,
+  singleplayer and dedicated-server player observation, ten native NPCs,
+  construction from physical supplies, restart and the eight-town cap.
+- [ ] Richer terrain/biome-aware site selection, multiple cultures, roads,
+  settlement name lore, organic migration and regional diplomacy.
+- [ ] Real native E2E build remains P0; no automatic-ready or playable claim.
+
+# Civilization mod roadmap
+
+These are separate acceptance gates. A source archive is **not** a gameplay
+release until all preceding gates have evidence.
+
 # Civilization mod roadmap
 
 These are separate acceptance gates. A source archive is **not** a gameplay
