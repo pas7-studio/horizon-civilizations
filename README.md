@@ -22,8 +22,9 @@ Millenaire code or Minecraft assets. Original project code is MIT-licensed.
 - Save to `<world>/horizon-civilizations/world.json`, `.bak` backup, fail-closed corrupted or inconsistent save
 - Server hooks and independent Rust domain unit tests
 
-Not available yet: physical harvesting/mining/farming production, generalized building templates,
-full trade UI, courts/dynasties, physical war, crash-safe item ledger.
+Not available yet: warehouse credit from physical harvests, physical mining, generalized building templates,
+full trade UI, courts/dynasties, physical war, crash-safe item ledger. The real wheat plot
+and harvest receipts are observation-only, with no item drops or stock credit.
 Only **operator-approved** starter huts are physically constructed; normal housing and all warfare
 remain abstract. Do not use this build on an important world until native build and E2E pass.
 
@@ -44,7 +45,7 @@ python3 tools/package.py
 python3 tools/verify_static.py
 ```
 
-Packaging produces `target/civilizations-0.1.4.hnmod` (source-only; the
+Packaging produces `target/civilizations-0.1.6.hnmod` (source-only; the
 launcher compiles it). The template is based on the **native hook-point**
 pattern used by the official Horizon SMP mod. The compatibility pin is in
 `compatibility.json`; the source was inspected but not compiled in this workspace.
@@ -75,7 +76,7 @@ to compile/trust the native mod before the game can run.
 
 1. Install the official Horizon launcher from <https://playhorizon.dev/>.
 2. Create a separate test instance and back up the world.
-3. Put `civilizations-0.1.4.hnmod` in that instance's `horizon-native-mods/`
+3. Put `civilizations-0.1.6.hnmod` in that instance's `horizon-native-mods/`
    directory. The native build requires the launcher's explicit trust action.
 4. Let the launcher **build** the modded game and review build logs. If you see
    `target not found`, hook schema incompatibility, or Rust errors, stop: the
@@ -140,8 +141,10 @@ worlds as the normal upgrade path.
 ## Important current limitations
 
 NPC movement is **experimental**. Only the manually approved starter hut can place actual blocks;
-NPCs do not physically farm, mine or transfer stock. Normal economy and war remain abstract.
-Construction stops when a plot becomes obstructed, but there is no recovery UI for a blocked job yet. Villager identity uses a tagged visible name, not a stable UUID; duplicate names are ignored and unloaded actors are not forced into memory. Selling/buying inventory items and saving mod-world JSON are not one atomic engine operation; use only a disposable test world until transaction recovery is implemented and tested.
+NPC farmers can work an experimental physical wheat plot, but its harvest never
+credits stock; physical mining and item transport are not implemented. Normal economy and war remain abstract.
+Construction stops when a plot becomes obstructed, but there is no recovery UI for a blocked job yet. Villager identity is bound to persistent entity UUIDs in saved data, but actual
+reattachment across game reloads is still awaiting in-world verification. Selling/buying inventory items and saving mod-world JSON are not one atomic engine operation; use only a disposable test world until transaction recovery is implemented and tested.
 
 ## Legal
 
@@ -195,3 +198,9 @@ This is EVIDENCE ONLY. No player items, coins or settlement wheat are credited f
 Automatic settlement day progression now observes Horizon's persistent world day counter, rather than counting 24,000 mod uptime ticks that restart when the game closes. The optional `last_host_day` field in `world.json` is backwards-compatible. When the mod first opens an older save, it records the current host day without manufacturing historical production; on later authentic host-day increases it advances the abstract economy exactly once per observed day. Backward time changes do not replay days.
 
 To avoid runaway stock/house generation after a command jumps the world clock forward, a single synchronization processes at most 30 days; any larger time gap is intentionally skipped. `/civ day N` remains a separate operator simulation tool and does not change the underlying Horizon clock. This does not yet simulate autonomous work while no world is open. Verify save/quit/relaunch, `/time` commands and multiplayer in a disposable world.
+
+## Saved-world playtest evidence
+
+After the first Windows session, use the read-only script in [playtest evidence](docs/PLAYTEST_EVIDENCE.md)
+to inspect UUID bindings, physical build/farm cursors and harvest receipts. This is not
+a substitute for checking actual NPCs or blocks in the running game.
