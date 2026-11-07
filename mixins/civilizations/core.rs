@@ -1863,7 +1863,8 @@ impl World {
                 if before < count || slot.is_none() {
                     return Err("missing native barrel item/slot for extraction".into());
                 }
-                        BarrelDirection::ToBakeryBuilder => {
+            }
+            BarrelDirection::ToBakeryBuilder => {
                 let bakery = v.bakery.as_ref().ok_or("no planned bakery")?;
                 if bakery.building.is_none() || bakery.supplies_reserved || bakery.complete {
                     return Err("no unfunded physical bakery project".into());
