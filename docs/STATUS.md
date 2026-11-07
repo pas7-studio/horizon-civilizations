@@ -1,4 +1,46 @@
-# Latest stacked v0.1.13 source milestone (2026-11-07)
+# Current source branch — v0.1.14 physical bakery and protected public economy
+
+Branch `feat/physical-bakery-economy-v0114`, stacked on #21.
+**Current verification: source-only.** The primary `main` binary remains
+older; no successful local Rust or native game compile has been run here.
+GitHub Actions are disabled by the user and must stay OFF.
+
+- [x] Self-developing villages reserve one actual loaded, unclaimed 5×5
+  bakery plot when their completed town hall and UUID-bound Baker/Builder
+  are present. Bakery uses its own construction state and blueprint:
+  native crafting table, smoker, walls, doorway and cobblestone foundation.
+- [x] Bakery construction requires 24 real logs and 33 real cobblestone,
+  physically withdrawn from the public hall barrels into bakery-specific
+  escrow. The abstract daily stock cannot substitute for these.
+- [x] Baker walks to actual hall barrels, extracts **three real wheat**,
+  works only near the intact loaded bakery workbench, consumes three
+  wheat for **one bread receipt** and returns to hall. Mayor/steward
+  deposits real bread in native barrel slots, from which it is tradable.
+- [x] Fixed old endless gathering loop: source material shortages now
+  count actual native barrel inventory + inbound deliveries + relevant
+  physical building escrow. Unloaded barrels fail closed, not as zero.
+- [x] Native API 334 blocks hopper transfers into/out of public hall
+  barrels. Native API 14 protects player-block-breaking of recorded
+  public buildings and other people's private purchased plots; owners
+  retain parcel editing and OP bypass. 9 native injections total.
+- [x] /civ bakery shows real workshop progress, on-worker materials,
+  native integrity and completed recipe batches.
+- [ ] Native Horizon compile, full Rust/Python tests, gameplay E2E,
+  exact hopper/item-stack conservation under crash, real pathfinding
+  and server chunk-save reconciliation: **NOT EXECUTED**.
+- [ ] Vanilla fire/explosion, mod automation, player-placed trees on
+  unclaimed ground and cross-file crash-atomicity remain unsafe/unproven.
+  Full GUI and safe manual recovery workflow are not implemented.
+- [ ] More production structures, roads and NPC couriers with visible
+  hand-held items, spontaneous village worldgen, village-family economy
+  and multi-village trade remain future work.
+
+See TEST_PLAN cases 139–158, PLAYTEST and GitHub PR.
+Do not present this Draft as a compiled playable binary.
+
+---
+
+# Historical v0.1.13 source milestone (2026-11-07)
 
 Branch: `feat/native-barrel-inventory-v0113`, stacked after physical town hall
 and autonomous village commits. **Not compiled or tested in game.**
