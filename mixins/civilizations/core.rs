@@ -393,6 +393,54 @@ impl GatherJob {
     }
 }
 
+/// Verify a *rooted*, leaf-bearing oak trunk before issuing any native
+/// lumberjack destruction. A leaf next to an arbitrary isolated oak log is
+/// not evidence of a natural tree: a genuine candidate must begin on real
+/// soil, contain at least three vertically contiguous logs, and reach a
+/// leaf-bearing upper crown. Only the lowest rooted log qualifies as the
+/// first resource; upper floating/player-placed logs are never selected.
+/// The caller supplies loaded, observed vanilla block states and must also
+/// enforce native claim protection and a reachable worker stand.
+/// This is conservative physical evidence, NOT provenance against a player
+/// who deliberately plants a real tree outside registered claims.
+pub fn is_rooted_oak_harvest_origin(
+    origin: [i32; 3], mut read: impl FnMut([i32; 3]) -> Option<String>,
+) -> bool {
+    let [x, y, z] = origin;
+    if read(origin).as_deref() != Some("minecraft:oak_log") {
+        return false;
+    }
+    let Some(soil_y) = y.checked_sub(1) else { return false; };
+    if !matches!(
+        read([x, soil_y, z]).as_deref(),
+        Some("minecraft:grass_block" | "minecraft:dirt" | "minecraft:podzol" |
+             "minecraft:coarse_dirt" | "minecraft:rooted_dirt")
+    ) {
+        return false;
+    }
+    let mut upper_logs = 0_usize;
+    let mut crown = false;
+    // A bounded search avoids scanning remote/unloaded chunks. We deliberately
+    // reject taller/uncertain trees until supported by an explicit tree claim.
+    for step in 1..=8_i32 {
+        let Some(top_y) = y.checked_add(step) else { return false; };
+        if read([x, top_y, z]).as_deref() != Some("minecraft:oak_log") {
+            break;
+        }
+        upper_logs += 1;
+        if step < 2 { continue; }
+        for (dx, dz) in [(1_i32, 0_i32), (-1, 0), (0, 1), (0, -1)] {
+            let (Some(tx), Some(tz)) = (x.checked_add(dx), z.checked_add(dz))
+            else { return false; };
+            let Some(leaf) = read([tx, top_y, tz]) else {
+                return false; // unloaded evidence cannot approve extraction
+            };
+            if leaf == "minecraft:oak_leaves" { crown = true; }
+        }
+    }
+    upper_logs >= 2 && crown
+}
+
 /// Founding civic hall uses the existing 5x5 safe physical shell, with an
 /// identifiable mayor desk, two resource barrels and two bulletin signs.
 /// Barrel contents are not treated as a vanilla chest inventory: the guarded
@@ -4900,5 +4948,59 @@ mod physical_bakery_stock_control_tests {
         let target = physical_bread_target(village);
         assert!(!needs_real_bread(village, target - 2));
         assert!(needs_real_bread(village, target - 3));
+    }
+}
+
+#[cfg(test)]
+mod native_forest_origin_tests {
+    use super::*;
+
+    fn growing_tree() -> BTreeMap<[i32; 3], String> {
+        let mut blocks = BTreeMap::new();
+        blocks.insert([0, 69, 0], "minecraft:grass_block".into());
+        for y in 70..=73 {
+            blocks.insert([0, y, 0], "minecraft:oak_log".into());
+        }
+        blocks.insert([1, 73, 0], "minecraft:oak_leaves".into());
+        blocks
+    }
+
+    #[test]
+    fn real_rooted_oak_qualifies_at_base_not_upper_trunk() {
+        let b = growing_tree();
+        let read = |p| Some(b.get(&p).cloned().unwrap_or("minecraft:air".into()));
+        assert!(is_rooted_oak_harvest_origin([0, 70, 0], read));
+        assert!(!is_rooted_oak_harvest_origin([0, 71, 0], |p|
+            Some(b.get(&p).cloned().unwrap_or("minecraft:air".into()))));
+    }
+
+    #[test]
+    fn decorated_timber_and_disconnected_leaves_are_not_forestry_receipts() {
+        let mut b = growing_tree();
+        b.remove(&[0, 72, 0]);
+        assert!(!is_rooted_oak_harvest_origin([0, 70, 0], |p|
+            Some(b.get(&p).cloned().unwrap_or("minecraft:air".into()))));
+        b.insert([0, 72, 0], "minecraft:oak_log".into());
+        b.insert([0, 69, 0], "minecraft:cobblestone".into());
+        assert!(!is_rooted_oak_harvest_origin([0, 70, 0], |p|
+            Some(b.get(&p).cloned().unwrap_or("minecraft:air".into()))));
+    }
+
+    #[test]
+    fn unloaded_crown_is_not_proof_of_harvestable_wood() {
+        let b = growing_tree();
+        assert!(!is_rooted_oak_harvest_origin([0, 70, 0], |p|
+            if p == [1, 72, 0] { None }
+            else { Some(b.get(&p).cloned().unwrap_or("minecraft:air".into())) }));
+    }
+
+    #[test]
+    fn legacy_world_roundtrip_needs_no_new_forestry_save_fields() {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0, 70, 0], "owner").unwrap();
+        world.validate().unwrap();
+        let restored: World = serde_json::from_str(&serde_json::to_string(&world).unwrap()).unwrap();
+        assert!(restored.settlements[&id].gather_job.is_none());
+        restored.validate().unwrap();
     }
 }
