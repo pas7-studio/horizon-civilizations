@@ -944,3 +944,4 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
      unoccupied natural spot after explicit OP confirmation.
      Re-run NPC builder, farm, warehouse and restarts. No game
      readiness claim from source-contract checks alone.
+283. After reserving recovery, mark the resident dead before restart. The saved one-shot attempt must remain loadable and in the audit; the dead resident cannot be newly spawned or reserved again. The entire village must not fail validation.
