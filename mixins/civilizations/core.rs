@@ -854,10 +854,18 @@ impl World {
                 Ok(true)
             }
             FarmDecision::Advance => {
+                let limit = if farm.stage == FarmStage::Preparing { farm_plan(farm.origin).len() } else { 8 };
+                if farm.cursor >= limit {
+                    return Err("cannot advance farm beyond phase step count".into());
+                }
                 farm.cursor += 1;
                 Ok(true)
             }
             FarmDecision::StageComplete => {
+                let steps = if farm.stage == FarmStage::Preparing { farm_plan(farm.origin).len() } else { 8 };
+                if farm.stage != FarmStage::Growing && farm.cursor != steps {
+                    return Err("farm phase cannot complete before all blocks are verified".into());
+                }
                 farm.stage = match farm.stage {
                     FarmStage::Preparing => FarmStage::Growing,
                     FarmStage::Growing => FarmStage::Harvesting,
@@ -1553,5 +1561,26 @@ mod visual_farm_recovery_tests {
         world.validate().unwrap();
         let decoded: World = serde_json::from_str(&serde_json::to_string(&world).unwrap()).unwrap();
         assert!(!decoded.settlements[&id].farm.as_ref().unwrap().blocked);
+    }
+}
+
+#[cfg(test)]
+mod visual_farm_transition_tests {
+    use super::*;
+
+    #[test]
+    fn incomplete_phase_cannot_commit_or_overrun_cursor() {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0, 70, 0], "operator").unwrap();
+        world.start_farm(id, [20, 70, 0]).unwrap();
+        assert!(world.advance_farm(id, FarmDecision::StageComplete).is_err());
+        assert_eq!(world.settlements[&id].farm.as_ref().unwrap().stage, FarmStage::Preparing);
+        world.settlements.get_mut(&id).unwrap().farm.as_mut().unwrap().cursor = 17;
+        assert!(world.advance_farm(id, FarmDecision::Advance).is_err());
+        world.advance_farm(id, FarmDecision::StageComplete).unwrap();
+        let farm = world.settlements[&id].farm.as_ref().unwrap();
+        assert_eq!(farm.stage, FarmStage::Growing);
+        assert_eq!(farm.cursor, 0);
+        world.validate().unwrap();
     }
 }
