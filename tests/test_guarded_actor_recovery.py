@@ -76,7 +76,8 @@ class GuardedPartialVillagerRecoveryContracts(unittest.TestCase):
     def test_no_automatic_respawn_after_partial_batch(self):
         native = function(GLUE, "fn auto_spawn_villagers(", "\n}")
         self.assertIn("if village.actors_spawned || !village.autonomy_enabled", native)
-        self.assertIn("if positions.len() != 10", native)
+        self.assertIn("surveyed_initial_actor_positions(game, &village)", native)
+        self.assertNotIn("game.native_spawn_mob(", native.split("save_autonomous(state, prior)?;", 1)[0])
         self.assertIn("actors_spawned = true", native)
         self.assertNotIn("reserve_actor_recovery(", native)
 
@@ -95,6 +96,38 @@ class GuardedPartialVillagerRecoveryContracts(unittest.TestCase):
         self.assertIn("r.id", roster)
         self.assertIn("actor_recovery_issued.contains(&r.id)", roster)
         self.assertIn("RECOVERY PENDING", roster)
+
+    def test_initial_spawn_survey_rejects_dead_bound_and_short_batch(self):
+        survey = function(GLUE, "fn surveyed_initial_actor_positions(", "\n}")
+        self.assertIn("village.residents.len() < 10", survey)
+        self.assertIn("!r.alive || r.entity_uuid.is_some()", survey)
+        self.assertIn("positions.len() != 10", survey)
+
+    def test_initial_spawn_refuses_matching_loaded_legacy_or_tagged_actor(self):
+        survey = function(GLUE, "fn surveyed_initial_actor_positions(", "\n}")
+        self.assertIn("let tagged = village.actor_name(resident)", survey)
+        self.assertIn('let legacy = format!("{} [{}]", resident.name, village.name)', survey)
+        self.assertIn('mob.kind.id == "minecraft:villager"', survey)
+        self.assertIn("matching native villager already loaded", survey)
+
+    def test_spawn_survey_excludes_occupied_native_locations(self):
+        survey = function(GLUE, "fn safe_actor_spawn_points(", "\n}")
+        self.assertIn("game.mobs.iter().any(|mob|", survey)
+        self.assertIn("mob.alive() && dx * dx + dy * dy + dz * dz < 9.0", survey)
+        self.assertLess(survey.index("game.mobs.iter().any(|mob|"), survey.index("spots.push(point)"))
+
+    def test_op_and_auto_spawners_share_live_survey_before_reservation(self):
+        op = function(GLUE, '"actors" if player.permission >= 2 => (|| {', "\n        })(),")
+        auto = function(GLUE, "fn auto_spawn_villagers(", "\n}")
+        self.assertIn("surveyed_initial_actor_positions(game, s)?", op)
+        self.assertIn("surveyed_initial_actor_positions(game, &village)", auto)
+        for body in (op, auto):
+            self.assertLess(body.index("surveyed_initial_actor_positions"),
+                            body.index("actors_spawned = true"))
+            self.assertLess(body.index("actors_spawned = true"),
+                            body.index("game.native_spawn_mob("))
+        self.assertIn("for (resident, position) in s.residents.iter().take(10).zip(positions)", op)
+        self.assertNotIn("[x, f64::from(s.center[1]), z]", op)
 
     def test_core_regression_module_includes_seven_cases(self):
         chunk = CORE.split("mod guarded_partial_native_actor_recovery_tests", 1)[1]
