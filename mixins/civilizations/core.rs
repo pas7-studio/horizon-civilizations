@@ -402,6 +402,12 @@ pub const HALL_WOOD_LOGS: u32 = 24;
 pub const HALL_COBBLESTONE: u32 = 25;
 pub const HUT_WOOD_LOGS: u32 = 20;
 pub const HUT_COBBLESTONE: u32 = 25;
+/// Includes real wheat-processing workstations as well as the shell.
+pub const BAKERY_WOOD_LOGS: u32 = 24;
+pub const BAKERY_COBBLESTONE: u32 = 33;
+pub const BREAD_WHEAT_RECIPE: u32 = 3;
+pub const MAX_BAKERY_WHEAT_ESCROW: u32 = 12;
+
 
 pub fn town_hall_plan(origin: [i32; 3]) -> Vec<HutBlock> {
     let mut plan = hut_plan(origin);
@@ -411,6 +417,23 @@ pub fn town_hall_plan(origin: [i32; 3]) -> Vec<HutBlock> {
         (-1, -1, "minecraft:oak_sign"),
         (1, -1, "minecraft:oak_sign"),
         (0, 1, "minecraft:lectern"),
+    ] {
+        plan.push(HutBlock {
+            pos: [origin[0] + dx, origin[1], origin[2] + dz],
+            block, floor: false,
+        });
+    }
+    plan
+}
+
+/// Physical independent workshop: walls and floor like a village hut,
+/// with an actual crafting table and smoker. Bread is crafted from three
+/// real wheat items at the table; a smoker is a visible workplace detail.
+pub fn bakery_plan(origin: [i32; 3]) -> Vec<HutBlock> {
+    let mut plan = hut_plan(origin);
+    for (dx, dz, block) in [
+        (-1, 0, "minecraft:crafting_table"),
+        (1, 0, "minecraft:smoker"),
     ] {
         plan.push(HutBlock {
             pos: [origin[0] + dx, origin[1], origin[2] + dz],
@@ -435,6 +458,10 @@ pub enum BarrelDirection {
     ToBarrel,
     /// One physical barrel item becomes protected build escrow.
     ToBuilder,
+    /// A builder collects the physical bakery's full materials.
+    ToBakeryBuilder,
+    /// A baker picks up real wheat for one or more vanilla bread recipes.
+    ToBakerIngredients,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -487,6 +514,26 @@ pub struct MarketPurchase {
     pub slot: usize,
     pub before: u32,
     pub phase: MarketPhase,
+}
+
+/// The village has a single physical bakery, never a simulated abstract
+/// building that can create bread without extracting real wheat.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BakeryWorkshop {
+    pub origin: [i32; 3],
+    pub building: Option<VisualBuildJob>,
+    pub complete: bool,
+    pub supplies_reserved: bool,
+    #[serde(default)]
+    pub construction_escrow: BTreeMap<Good, u32>,
+    /// Plain native wheat physically taken from the hall's barrels.
+    #[serde(default)]
+    pub wheat_escrow: u32,
+    /// Newly crafted bread carried by a UUID-bound baker returning home.
+    #[serde(default)]
+    pub bread_in_transit: u32,
+    #[serde(default)]
+    pub batches: u64,
 }
 
 /// Bulletin signs are real blocks inside the civic hall; the native adapter
@@ -580,6 +627,30 @@ pub fn inspect_town_hall(
         }
         let replaceable = if step.floor { is_ground(&actual) } else { actual == "minecraft:air" };
         if !replaceable { return BuildInspection::Blocked { position: step.pos, found: actual }; }
+        if index < job.cursor { return BuildInspection::Rewind(index); }
+        return BuildInspection::Place {
+            position: step.pos, old_block: actual, new_block: step.block,
+        };
+    }
+    BuildInspection::Complete
+}
+
+/// Check actual vanilla workshop blocks before advancing each saved step.
+pub fn inspect_bakery(
+    job: &VisualBuildJob, mut read: impl FnMut([i32; 3]) -> Option<String>
+) -> BuildInspection {
+    if job.blocked { return BuildInspection::Paused; }
+    let plan = bakery_plan(job.origin);
+    if job.cursor > plan.len() { return BuildInspection::InvalidCursor; }
+    for (index, step) in plan.iter().enumerate() {
+        if index > job.cursor { break; }
+        let Some(actual) = read(step.pos) else { return BuildInspection::Unloaded; };
+        if actual == step.block {
+            if index == job.cursor { return BuildInspection::Advance; }
+            continue;
+        }
+        let replaceable = if step.floor { is_ground(&actual) } else { actual == "minecraft:air" };
+        if !replaceable { return BuildInspection::Blocked {position: step.pos, found: actual}; }
         if index < job.cursor { return BuildInspection::Rewind(index); }
         return BuildInspection::Place {
             position: step.pos, old_block: actual, new_block: step.block,
@@ -841,6 +912,9 @@ pub struct Settlement {
     /// UUID-linked farmers toward the central village receiving area.
     #[serde(default)]
     pub wheat_in_transit: u32,
+    /// One physical bakery, built and operated by actual NPC workers.
+    #[serde(default)]
+    pub bakery: Option<BakeryWorkshop>,
     /// Active physical civic hall construction; never inferred from a JSON
     /// house counter, and can resume after restarting with observed blocks.
     #[serde(default)]
@@ -1464,6 +1538,7 @@ impl World {
             barrel_transfer: None,
             market_purchase: None,
             wheat_in_transit: 0,
+            bakery: None,
             hall_job: None,
             hall_complete: false,
             gather_job: None,
