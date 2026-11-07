@@ -973,6 +973,7 @@ impl Settlement {
     pub fn warehouse_credit(&mut self, good: Good, count: u32) -> Result<(), String> {
         let next = self.warehouse_quantity(good).checked_add(count)
             .ok_or("physical warehouse capacity overflow")?;
+        if next > 10_000_000 { return Err("physical warehouse capacity exceeded".into()); }
         self.warehouse.insert(good, next);
         Ok(())
     }
@@ -1396,6 +1397,11 @@ impl World {
         if v.hall_materials_missing() != (0, 0) {
             return Ok(false);
         }
+        if i64::from(v.center[0]).abs() > 29_999_988
+            || i64::from(v.center[2]).abs() > 29_999_988
+            || !(-2046..=2046).contains(&v.center[1]) {
+            return Err("civic center outside safe build bounds".into());
+        }
         // Domain claims are only a first pass; native preflight checks all
         // world blocks, loaded chunks and a safe location BEFORE this call.
         if self.settlements.values().filter(|s| s.dimension == v.dimension).any(|s| {
@@ -1674,6 +1680,16 @@ impl World {
     pub fn advance_farm(&mut self, village_id: u64, decision: FarmDecision) -> Result<bool, String> {
         let world_day = self.day;
         let village = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?;
+        // Harvest credit must be validated BEFORE mutating its receipt/cursor.
+        // Each receipt and warehouse credit commit in the same world JSON save.
+        let credit_harvest = matches!(decision, FarmDecision::StageComplete)
+            && village.farm.as_ref().is_some_and(|farm| farm.stage == FarmStage::Harvesting);
+        let new_wheat = if credit_harvest {
+            let n = village.warehouse_quantity(Good::Wheat)
+                .checked_add(8).ok_or("wheat warehouse overflow")?;
+            if n > 10_000_000 { return Err("wheat warehouse full".into()); }
+            Some(n)
+        } else { None };
         let farm = village.farm.as_mut().ok_or("no farm")?;
         match decision {
             FarmDecision::Unloaded | FarmDecision::Paused | FarmDecision::Place { .. } => Ok(false),
@@ -1722,6 +1738,12 @@ impl World {
                     }
                 };
                 farm.cursor = 0;
+                // This physical wheat is a *receipt-backed* ledger entry,
+                // never the abstract stock produced by daily simulation.
+                // No item is placed in a vanilla barrel (separate API needed).
+                if let Some(count) = new_wheat {
+                    village.warehouse.insert(Good::Wheat, count);
+                }
                 Ok(true)
             }
         }
