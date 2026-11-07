@@ -3,7 +3,7 @@
 use crate::game::{
     civilizations_core::{farm_plan, hut_plan, town_hall_plan, bakery_plan, hall_storage_positions,
         BarrelDirection, BarrelPhase, inspect_farm, inspect_hut, inspect_town_hall, inspect_bakery, is_ground,
-        is_rooted_oak_harvest_origin,
+        is_rooted_oak_harvest_origin, short_oak_stem_height, inspect_oak_stem,
         BuildInspection, DailyPhase, FarmBlock, FarmDecision, FarmStage, Good, HomeSlot, Job, VisualBuildJob,
         World, inspect_home, hall_board_positions, HOUSING_PLOT_OFFSETS, MAX_HOUSING_SURVEY_RESULTS,
         MAX_SIM_DAYS},
@@ -2604,8 +2604,20 @@ fn autonomous_village_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Resu
                         let position = [x, y, z];
                         if !seems_natural_resource(game, &dimension, position, good) { continue; }
                         let Some(stand) = gather_stand(game, &dimension, position) else { continue; };
-                        let planned = state.world.as_mut().unwrap()
-                            .plan_gather(id, good, position, stand).is_ok();
+                        let planned = if good == Good::Wood {
+                            // Each naturally rooted short oak is ONE durable
+                            // job with a bounded sequence of separate actual
+                            // log receipts. Taller trees remain untouched
+                            // until scaffolding/real forestry is implemented.
+                            let height = short_oak_stem_height(position, |pos|
+                                world_block(game, &dimension, pos));
+                            height.is_some_and(|height|
+                                state.world.as_mut().unwrap()
+                                    .plan_short_oak_stem(id, position, stand, height).is_ok())
+                        } else {
+                            state.world.as_mut().unwrap()
+                                .plan_gather(id, good, position, stand).is_ok()
+                        };
                         if planned {
                             // Previous value has no gather job. Save the
                             // intent before authorizing a future world edit.
@@ -2833,8 +2845,17 @@ fn gather_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
         }
         return save_autonomous(state, before);
     }
+    let saved_stem = state.world.as_ref().unwrap().settlements[&id].oak_stem.as_ref();
+    let valid_resource = if let Some(stem) = saved_stem {
+        // All previous trunk blocks must actually be air and the remaining
+        // segments remain vanilla oak, with an intact upper leaf crown.
+        // No arbitrary floating logs become a fresh source of free wood.
+        inspect_oak_stem(stem, |pos| world_block(game, &dimension, pos))
+    } else {
+        seems_natural_resource(game, &dimension, job.position, job.good)
+    };
     if name != job.source_block()
-        || !seems_natural_resource(game, &dimension, job.position, job.good)
+        || !valid_resource
         || !state.world.as_ref().unwrap().gather_site_unclaimed(id, job.position, job.stand) {
         // Physical resource or land ownership may change after a saved plan.
         // Recheck tree/stone provenance and every registered parcel/worksite
