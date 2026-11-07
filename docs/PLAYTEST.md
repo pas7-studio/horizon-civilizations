@@ -593,3 +593,34 @@ the script never silently changes Rust source. Open
 `target/first-play-gate/<UTC>/report.md` for the first blocker.
 The runner's 12/12 mock harness tests passed on Linux; native
 compilation/Minecraft gameplay remain unverified.
+
+## Recover only an actually missing resident after partial NPC creation
+
+Latest source: `feat/guarded-partial-villager-recovery-v0115`.
+This branch is **not compiled or gameplay-verified**.
+
+On a networked Windows build machine:
+
+```powershell
+git fetch origin
+git switch feat/guarded-partial-villager-recovery-v0115
+py -3 tools/first_play_gate.py --expected-branch feat/guarded-partial-villager-recovery-v0115 --build-client
+```
+
+On a disposable Minecraft world: `/civ roster Ashford` now includes
+each citizen's resident ID and their saved UUID state. If a crash
+interrupted native creation, first **load the original village chunks**
+and run OP `/civ reconcile Ashford` to bind existing villagers. Only
+after verifying a particular villager is truly missing, standing
+within 32 blocks and with all surrounding native chunks loaded,
+an OP can issue (example ID; use the real roster value):
+
+```
+/civ recoveractor Ashford 1007 attempt
+```
+
+This is **one irreversible native spawn attempt per resident**,
+journalled before native effects, never retried automatically.
+If interrupted, inspect live entities and `/civ reconcile`;
+do not blindly create a duplicate. See TEST_PLAN 272–282.
+Never use a valuable game world to test this Draft feature.
