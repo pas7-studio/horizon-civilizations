@@ -124,3 +124,34 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
 75. Verify multiple villages and dimensions: plot conflicts must not be
     created in one dimension; coordinates from a different dimension are
     not automatically owned by the first. No forced chunk loading.
+
+## Read-only civic council and forecast (v0.1.10, local E2E pending)
+
+76. In a new Ashford save run `/civ council Ashford`. It should detect
+    unspawned physical actors and unavailable physical homes without
+    spawning villagers or editing blocks.
+77. Before running `/civ day 1`, capture `/civ info Ashford`,
+    `/civ history`, `/civ council Ashford` and `/civ forecast Ashford`.
+    Re-running council/forecast 20 times must not change the world.json SHA,
+    coins, stock, actor UUIDs, physical builds or crop receipts.
+78. `/civ forecast Ashford` lists exactly three hypothetical days and
+    identifies itself as **ABSTRACT**. Compare its economic outputs to a
+    disposable clone advanced with `/civ day 3`; differences caused by
+    actual wars or player actions must not be described as a forecast bug.
+79. In a disposable fixture with no bread production, forecast starvation
+    must be ranked above routine housing suggestions. Then restore adequate
+    stock and ensure the hunger alert can disappear without a restart.
+80. Start an abstract war between two villages. Council security urgency
+    rises, but it must not declare peace, launch a raid or send guards into
+    physical combat. The forecast explicitly excludes war attrition.
+81. Lower morale in a disposable fixture: the council must show a separate
+    stability need. Do not manually edit a valuable player's saved world.
+82. Start a one-shot villager spawn with a deliberately interrupted UUID
+    binding in a disposable fixture. Council recommends roster/reconciliation,
+    **not** blind spawning; check no duplicate NPC is created.
+83. With real huts or a pending abstract housing build, the housing recommendation
+    must point to `/civ survey` only when approval is meaningful. It cannot
+    reserve land, place blocks or manufacture a pending house by itself.
+84. Visit the other dimension, relaunch, move the Horizon clock, and check
+    that advisory commands remain read-only, stable on the same snapshot and
+    do not trigger server actions or extra daily economy ticks.
