@@ -261,8 +261,9 @@ fn guide_actors(game: &mut Game<'_>, world: &World) {
             } else if phase.on_shift(resident.job)
                 && matches!(resident.job, Job::Lumberjack | Job::Miner)
                 && village.gather_job.as_ref().is_some_and(|job|
-                    (job.good == Good::Wood && resident.job == Job::Lumberjack)
-                    || (job.good == Good::Stone && resident.job == Job::Miner))
+                    job.worker_id.is_none_or(|assigned| assigned == resident_id)
+                        && ((job.good == Good::Wood && resident.job == Job::Lumberjack)
+                            || (job.good == Good::Stone && resident.job == Job::Miner)))
             {
                 let target = village.gather_job.as_ref().expect("gather exists");
                 if target.issued {
@@ -1148,13 +1149,13 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
         let gather_state = if let Some(stem) = &v.oak_stem {
             format!("oak log {}/{} at {:?}, issued={}, blocked={}",
                 stem.cursor + 1, stem.height,
-                v.gather_job.as_ref().map(|job| job.position),
+                v.gather_job.as_ref().map(|job| (job.position, job.worker_id)),
                 v.gather_job.as_ref().is_some_and(|job| job.issued),
                 v.gather_job.as_ref().is_some_and(|job| job.blocked))
         } else {
             v.gather_job.as_ref().map(|job| format!(
-                "{:?} at {:?}, issued={}, blocked={}",
-                job.good, job.position, job.issued, job.blocked
+                "{:?} at {:?}, worker={:?}, issued={}, blocked={}",
+                job.good, job.position, job.worker_id, job.issued, job.blocked
             )).unwrap_or_else(|| "idle".to_owned())
         };
         reply(game, format!(
@@ -1192,8 +1193,8 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             stem.cursor + 1, stem.height, stem.root
         )).unwrap_or_default();
         reply(game, format!(
-            "{} gather audit: {:?} at {:?}, worker stand {:?}, planned native block {}, issued={}, blocked={}, live native block {:?}.{} Blocked ISSUED receipts are quarantined. Inspect world save and original block before OP /civ discardgather {} intact|empty; abandonment provides ZERO materials.",
-            v.name, job.good, job.position, job.stand, job.source_block(),
+            "{} gather audit: {:?} at {:?}, worker stand {:?}, assigned resident {:?}, planned native block {}, issued={}, blocked={}, live native block {:?}.{} Blocked ISSUED receipts are quarantined. Inspect world save and original block before OP /civ discardgather {} intact|empty; abandonment provides ZERO materials.",
+            v.name, job.good, job.position, job.stand, job.worker_id, job.source_block(),
             job.issued, job.blocked, observed, stem_progress, v.name
         ));
         return;
@@ -2836,17 +2837,24 @@ fn gather_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
     let Some(name) = observed else { return Ok(()); };
     let before = state.world.as_ref().unwrap().clone();
     if job.issued {
+        // Legacy journals lack a stable worker ID. Since any same-role NPC
+        // might stand near the hall, such a receipt is NOT sufficient proof
+        // of a physically returned courier. Quarantine, never mint goods.
+        let Some(assigned) = job.worker_id else {
+            state.world.as_mut().unwrap().block_gather(id)?;
+            return save_autonomous(state, before);
+        };
         if name == "minecraft:air" {
             let world = state.world.as_ref().unwrap();
             let v = &world.settlements[&id];
             let role = if job.good == Good::Wood { Job::Lumberjack } else { Job::Miner };
             let linked = loaded_actors(game, world, id);
-            let delivered = v.residents.iter().filter(|r| r.alive && r.job == role).any(|r| {
-                linked.iter().any(|(known, mob)| *known == r.id
+            let delivered = v.residents.iter()
+                .filter(|r| r.alive && r.job == role && r.id == assigned)
+                .any(|r| linked.iter().any(|(known, mob)| *known == r.id
                     && game.native_mob(&dimension, *mob).is_some_and(|actor| {
                         native_worker_near(actor.pos, v.center, 8.0, 4.0)
-                    }))
-            });
+                    })));
             if !delivered {
                 // No resource is credited simply because a log disappeared:
                 // the named worker must return to the loaded receiving area.
@@ -2883,14 +2891,24 @@ fn gather_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
     let v = &world.settlements[&id];
     let profession = if job.good == Good::Wood { Job::Lumberjack } else { Job::Miner };
     let actors = loaded_actors(game, world, id);
-    let near = v.residents.iter().filter(|r| r.alive && r.job == profession)
-        .any(|r| actors.iter().any(|(rid, mob)| {
-            *rid == r.id && game.native_mob(&dimension, *mob).is_some_and(|actor| {
-                native_worker_near(actor.pos, job.stand, 2.5, 2.0)
-                    && native_worker_reaches_block(actor.pos, job.position, 4.5)
+    let selected = v.residents.iter()
+        .filter(|r| r.alive && r.job == profession
+            && job.worker_id.is_none_or(|assigned| assigned == r.id))
+        .find_map(|r| actors.iter().find_map(|(rid, mob)| {
+            if *rid != r.id { return None; }
+            game.native_mob(&dimension, *mob).and_then(|actor| {
+                (native_worker_near(actor.pos, job.stand, 2.5, 2.0)
+                    && native_worker_reaches_block(actor.pos, job.position, 4.5))
+                .then_some(r.id)
             })
         }));
-    if !near { return Ok(()); }
+    let Some(selected_worker) = selected else { return Ok(()); };
+    if job.worker_id.is_none() {
+        // Save this exact resident ID BEFORE we persist Issued or send the
+        // native edit. A different miner at the hall cannot claim delivery.
+        state.world.as_mut().unwrap().assign_gather_worker(id, selected_worker)?;
+        return save_autonomous(state, before);
+    }
     let [x, y, z] = job.position;
     let cmd = format!(
         "execute in {dimension} if block {x} {y} {z} {} run setblock {x} {y} {z} minecraft:air replace",

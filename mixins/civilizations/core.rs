@@ -413,6 +413,11 @@ pub struct GatherJob {
     /// Verified empty two-high destination a worker can navigate toward.
     pub stand: [i32; 3],
     pub good: Good, // only Wood (oak log) or Stone (natural stone)
+    /// Stable citizen ID assigned durably before any native resource edit.
+    /// Old saves lack this field: an issued unbound receipt is quarantined,
+    /// never credited by whichever worker happens to stand at the hall.
+    #[serde(default)]
+    pub worker_id: Option<u64>,
     pub issued: bool,
     #[serde(default)]
     pub blocked: bool,
@@ -1540,6 +1545,14 @@ impl World {
                 }
             }
             if let Some(gather) = &village.gather_job {
+                if let Some(worker_id) = gather.worker_id {
+                    let role = if gather.good == Good::Wood { Job::Lumberjack }
+                        else { Job::Miner };
+                    if !village.residents.iter().any(|r|
+                        r.id == worker_id && r.job == role) {
+                        return Err("physical gather worker ID is invalid".into());
+                    }
+                }
                 let [x, y, z] = gather.position;
                 let [sx, sy, sz] = gather.stand;
                 let walk_dx = i128::from(sx) - i128::from(x);
@@ -2369,7 +2382,7 @@ impl World {
             return Err("natural resource overlaps a building, town hall or player claim".into());
         }
         self.settlements.get_mut(&village_id).unwrap().gather_job = Some(GatherJob {
-            position, stand, good, issued: false, blocked: false,
+            position, stand, good, worker_id: None, issued: false, blocked: false,
         });
         Ok(())
     }
@@ -2398,10 +2411,41 @@ impl World {
         Ok(())
     }
 
+    /// Bind the selected UUID-linked citizen's stable resident ID to the
+    /// native job and save before any external block mutation. The adapter
+    /// MUST independently verify that this resident's UUID-bound entity is
+    /// loaded, at the recorded work stand and within genuine 3D block reach.
+    /// An already assigned job can never be silently stolen by another NPC.
+    pub fn assign_gather_worker(
+        &mut self, village_id: u64, resident_id: u64,
+    ) -> Result<(), String> {
+        let village = self.settlements.get_mut(&village_id)
+            .ok_or("unknown settlement")?;
+        let job = village.gather_job.as_ref().ok_or("no gather job")?;
+        if job.issued || job.blocked {
+            return Err("cannot assign an already issued or blocked gather".into());
+        }
+        let required = if job.good == Good::Wood { Job::Lumberjack }
+            else if job.good == Good::Stone { Job::Miner }
+            else { return Err("unsupported native gather good".into()); };
+        if !village.residents.iter().any(|resident|
+            resident.alive && resident.id == resident_id && resident.job == required) {
+            return Err("worker is not a living qualified settlement resident".into());
+        }
+        if job.worker_id.is_some_and(|assigned| assigned != resident_id) {
+            return Err("gather already assigned to a different worker".into());
+        }
+        village.gather_job.as_mut().unwrap().worker_id = Some(resident_id);
+        Ok(())
+    }
+
     pub fn mark_gather_issued(&mut self, village_id: u64) -> Result<(), String> {
         let job = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?
             .gather_job.as_mut().ok_or("no planned gather")?;
         if job.blocked || job.issued { return Err("gather may not be re-issued".into()); }
+        if job.worker_id.is_none() {
+            return Err("native gather must have a durably assigned citizen before issue".into());
+        }
         job.issued = true;
         Ok(())
     }
@@ -2449,6 +2493,7 @@ impl World {
         if !job.issued || job.blocked { return Err("unproven gather cannot be credited".into()); }
         let good = job.good;
         let pos = job.position;
+        let worker_id = job.worker_id.ok_or("unassigned gather cannot be credited")?;
         // Compute the exact next source before committing inventory, so a
         // corrupted height cannot partially credit or advance this stem.
         let continuation = if let Some(stem) = &v.oak_stem {
@@ -2459,7 +2504,7 @@ impl World {
                 Some((next, GatherJob {
                     position: [stem.root[0], y, stem.root[2]],
                     stand: stem.stand, good: Good::Wood,
-                    issued: false, blocked: false,
+                    worker_id: Some(worker_id), issued: false, blocked: false,
                 }))
             } else {
                 None
@@ -4516,6 +4561,10 @@ mod civic_hall_warehouse_tests {
         world.plan_gather(id, Good::Wood, [24,70,0],[25,70,0]).unwrap();
         assert_eq!(world.settlements[&id].warehouse_quantity(Good::Wood), 0);
         assert!(world.confirm_gather(id).is_err());
+        let worker = world.settlements[&id].residents.iter()
+            .find(|r| r.alive && r.job == Job::Lumberjack).unwrap().id;
+        assert!(world.mark_gather_issued(id).is_err()); // unassigned
+        world.assign_gather_worker(id, worker).unwrap();
         world.mark_gather_issued(id).unwrap();
         assert!(world.mark_gather_issued(id).is_err());
         world.confirm_gather(id).unwrap();
@@ -5259,7 +5308,7 @@ mod native_gather_quarantine_tests {
         // This record is a durable receipt of an issued natural stone edit.
         world.settlements.get_mut(&id).unwrap().gather_job = Some(GatherJob {
             position: [16,70,0], stand: [17,70,0],
-            good: Good::Stone, issued: true, blocked: true,
+            good: Good::Stone, worker_id: None, issued: true, blocked: true,
         });
         world.validate().unwrap();
         let before = world.settlements[&id].warehouse_quantity(Good::Stone);
@@ -5291,7 +5340,7 @@ mod native_gather_quarantine_tests {
         let id = world.found("Ashford", "minecraft:overworld", [0,70,0], "owner").unwrap();
         world.settlements.get_mut(&id).unwrap().gather_job = Some(GatherJob {
             position: [16,70,0], stand: [17,70,0],
-            good: Good::Wood, issued: false, blocked: true,
+            good: Good::Wood, worker_id: None, issued: false, blocked: true,
         });
         assert!(world.abandon_blocked_issued_gather(id).is_err());
         world.settlements.get_mut(&id).unwrap().gather_job.as_mut().unwrap().issued = true;
@@ -5308,6 +5357,9 @@ mod verified_short_oak_stem_tests {
         let mut world = World::default();
         let id = world.found("Ashford", "minecraft:overworld", [0, 70, 0], "owner").unwrap();
         world.plan_short_oak_stem(id, [16, 70, 0], [17, 70, 0], 4).unwrap();
+        let worker = world.settlements[&id].residents.iter()
+            .find(|r| r.alive && r.job == Job::Lumberjack).unwrap().id;
+        world.assign_gather_worker(id, worker).unwrap();
         world.validate().unwrap();
         (world, id)
     }
@@ -5486,5 +5538,119 @@ mod native_worker_distance_contract_tests {
         assert!(!native_worker_reaches_block(
             [0.5, f64::INFINITY, 0.5], [0, 70, 0], 4.5
         ));
+    }
+}
+
+#[cfg(test)]
+mod assigned_resource_courier_tests {
+    use super::*;
+
+    fn assigned_wood_job() -> (World, u64, u64) {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0, 70, 0], "owner").unwrap();
+        let worker = world.settlements[&id].residents.iter()
+            .find(|r| r.alive && r.job == Job::Lumberjack).unwrap().id;
+        world.plan_gather(id, Good::Wood, [16, 70, 0], [17, 70, 0]).unwrap();
+        world.assign_gather_worker(id, worker).unwrap();
+        world.validate().unwrap();
+        (world, id, worker)
+    }
+
+    #[test]
+    fn source_issue_requires_explicit_same_resident_binding() {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0, 70, 0], "owner").unwrap();
+        world.plan_gather(id, Good::Stone, [16, 70, 0], [17, 70, 0]).unwrap();
+        assert!(world.mark_gather_issued(id).is_err());
+        assert!(world.confirm_gather(id).is_err());
+        let miner = world.settlements[&id].residents.iter()
+            .find(|r| r.alive && r.job == Job::Miner).unwrap().id;
+        world.assign_gather_worker(id, miner).unwrap();
+        world.mark_gather_issued(id).unwrap();
+        assert!(world.assign_gather_worker(id, miner).is_err());
+        world.confirm_gather(id).unwrap();
+        assert_eq!(world.settlements[&id].warehouse_quantity(Good::Stone), 1);
+        assert!(world.confirm_gather(id).is_err());
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn unqualified_or_second_worker_cannot_steal_courier_assignment() {
+        let (mut world, id, first) = assigned_wood_job();
+        let baker = world.settlements[&id].residents.iter()
+            .find(|r| r.alive && r.job == Job::Baker).unwrap().id;
+        assert!(world.assign_gather_worker(id, baker).is_err());
+        let mut another = world.settlements[&id].residents.iter()
+            .find(|r| r.id == first).unwrap().clone();
+        another.id += 500;
+        another.name = "Substitute".into();
+        let second = another.id;
+        world.settlements.get_mut(&id).unwrap().residents.push(another);
+        assert!(world.assign_gather_worker(id, second).is_err());
+        assert_eq!(world.settlements[&id].gather_job.as_ref().unwrap().worker_id, Some(first));
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn same_courier_persists_through_restart_and_next_real_oak_log() {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0, 70, 0], "owner").unwrap();
+        let worker = world.settlements[&id].residents.iter()
+            .find(|r| r.alive && r.job == Job::Lumberjack).unwrap().id;
+        world.plan_short_oak_stem(id, [16, 70, 0], [17, 70, 0], 3).unwrap();
+        world.assign_gather_worker(id, worker).unwrap();
+        world.mark_gather_issued(id).unwrap();
+        world.confirm_gather(id).unwrap();
+        let mut restored: World =
+            serde_json::from_str(&serde_json::to_string(&world).unwrap()).unwrap();
+        restored.validate().unwrap();
+        let next = restored.settlements[&id].gather_job.as_ref().unwrap();
+        assert_eq!(next.worker_id, Some(worker));
+        assert_eq!(next.position, [16, 71, 0]);
+        assert!(!next.issued);
+        assert!(restored.confirm_gather(id).is_err());
+        restored.mark_gather_issued(id).unwrap();
+        restored.confirm_gather(id).unwrap();
+        assert_eq!(restored.settlements[&id].warehouse_quantity(Good::Wood), 2);
+    }
+
+    #[test]
+    fn preexisting_unbound_issued_receipt_cannot_mint_stock() {
+        let (mut world, id, _) = assigned_wood_job();
+        world.mark_gather_issued(id).unwrap();
+        let mut saved = serde_json::to_value(&world).unwrap();
+        saved.get_mut("settlements").unwrap().as_object_mut().unwrap()
+            .get_mut(&id.to_string()).unwrap()
+            .get_mut("gather_job").unwrap().as_object_mut().unwrap()
+            .remove("worker_id");
+        let mut old: World = serde_json::from_value(saved).unwrap();
+        old.validate().unwrap();
+        assert!(old.settlements[&id].gather_job.as_ref().unwrap().worker_id.is_none());
+        assert!(old.confirm_gather(id).is_err());
+        assert_eq!(old.settlements[&id].warehouse_quantity(Good::Wood), 0);
+        old.block_gather(id).unwrap();
+        old.abandon_blocked_issued_gather(id).unwrap();
+        old.validate().unwrap();
+    }
+
+    #[test]
+    fn malformed_assigned_courier_id_is_rejected_by_save_validation() {
+        let (mut world, id, _) = assigned_wood_job();
+        world.settlements.get_mut(&id).unwrap().gather_job.as_mut().unwrap()
+            .worker_id = Some(u64::MAX);
+        assert!(world.validate().is_err());
+    }
+
+    #[test]
+    fn dead_resident_cannot_be_newly_assigned_to_native_material_receipt() {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0, 70, 0], "owner").unwrap();
+        let miner = world.settlements[&id].residents.iter()
+            .find(|r| r.job == Job::Miner).unwrap().id;
+        world.plan_gather(id, Good::Stone, [16, 70, 0], [17, 70, 0]).unwrap();
+        world.settlements.get_mut(&id).unwrap().residents.iter_mut()
+            .find(|r| r.id == miner).unwrap().alive = false;
+        assert!(world.assign_gather_worker(id, miner).is_err());
+        world.validate().unwrap();
     }
 }

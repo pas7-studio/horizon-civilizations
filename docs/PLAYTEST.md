@@ -466,3 +466,27 @@ a worker in a cave beneath the hall must not count as physically returned.
 A worker at a tree's X/Z without the saved clear work stand and eye-level
 reach may NOT mine it. These checks are implemented only in source until
 a real native gameplay E2E is recorded.
+
+## Same-worker wood/stone receipt trial — newest source, not yet game-verified
+
+Checkout `feat/assigned-resource-courier-v0115`, not `main`:
+
+```powershell
+git fetch origin
+git switch feat/assigned-resource-courier-v0115
+.\scripts\validate-local.ps1 -Format
+.\scripts\validate-local.ps1 -BuildClient
+```
+
+Rust 1.95, Git, Python 3.11+, native OS build dependencies, official
+Horizon launcher and legally owned Minecraft Java resources required.
+GitHub Actions remain intentionally disabled. Use the EXACT newly built
+client binary and a NEW disposable world only.
+
+A gather has an assigned `worker_id` in the saved journal before any
+block edit. The same UUID-linked resident must physically reach the
+source and return to the hall, not simply any same-job villager already
+standing near it. OP `/civ gathercheck NAME` shows the assigned resident.
+Legacy unknown-issued journals must remain quarantined, not granted.
+TEST_PLAN 223-233 documents exact crash/identity tests. This does NOT
+implement a visible item model in the NPC's hands.

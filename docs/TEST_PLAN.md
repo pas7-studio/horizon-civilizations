@@ -695,3 +695,47 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
 222. Test non-finite actor positions, negative/nonfinite radii in Rust,
      dimension mismatch, two villages and short-tree upper logs. No
      cross-dimensional, off-shift or fake remote worker confirmation.
+
+## Assigned UUID-bound gather courier, identity & crash continuity
+
+223. Compile the exact latest stacked source locally with rustfmt, cargo,
+     Clippy, complete Python unittest and native Horizon client. Record
+     commit SHA, exact binary and any first failing test; old build
+     artifacts are not evidence for this code.
+224. In a fresh disposable world, select a natural loaded oak or exposed
+     stone. Confirm initial `GatherJob.worker_id` is absent; the worker
+     must be physically at the recorded work stand with 3D reach before
+     assigning. The saved resident ID must be persisted **before**
+     `Issued` and the first native conditional block command.
+225. Make another qualified worker appear at the source/hall while the
+     first saved worker is assigned. The identity must NOT change;
+     only that resident may mine or claim the returned item receipt.
+226. Have another same-role, UUID-linked NPC stand at the hall while
+     the assigned worker is still at the tree/mine. Confirm zero wood
+     or stone gets credited until the actual assigned worker returns.
+227. On the assigned worker's correct 3D return to hall, confirm exactly
+     one resource receipt; duplicate ticks/relog must not credit twice.
+228. For a short 3-4-log oak, check each saved next segment carries the
+     SAME worker_id, begins unissued and cannot reassign to a substitute.
+     After the last confirmed segment, both job and tree cursor clear.
+229. Crash after assignment is saved but before Issued. Reload and
+     verify the same resident ID is still bound and the block untouched.
+     Next valid source action must issue at most once.
+230. Crash immediately after Issued, before the original block disappears,
+     and then after native deletion but before return. Neither crash
+     may cause blind replay or allow another worker to finish the receipt.
+231. Deserialize a legacy Issued gather journal without `worker_id`:
+     no worker, even at the hall, can credit it. Job must be marked
+     blocked/quarantined; OP audit and evidence-matched discard supply
+     ZERO material. An old unissued journal may receive a new valid
+     durable assignment and continue safely.
+232. Kill, unload or unbind the assigned UUID-linked NPC mid-delivery.
+     Different NPCs may NOT release its saved receipt. Use OP
+     `/civ gathercheck` and careful recovery on disposable backed-up
+     saves. Observe that a dead resident is not newly assignable.
+233. Run simultaneous village jobs across two settlements/dimensions,
+     using at least two workers of the same profession where feasible.
+     Worker IDs are scoped to the settlement and wrong-role/foreign
+     IDs fail domain validation. Record blocks, native actor UUIDs,
+     receiving area and JSON before/after. This is an identity-backed
+     delivery gate, NOT proof of a rendered item in the NPC's hands.

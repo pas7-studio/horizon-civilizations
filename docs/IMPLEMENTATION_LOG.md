@@ -421,3 +421,26 @@
   source contracts. 17/17 initial static assertions passed before the
   stand recheck; refreshed final checks pending. No runtime tests or native
   game build were run. GitHub Actions intentionally remain off.
+
+## 2026-11-08 — assigned, durable resource courier identity (unreleased)
+
+- Audited native gather: one UUID-linked lumberjack could issue a physical
+  block edit, but ANY other same-role worker already at the hall could
+  complete `confirm_gather`. This incorrectly treated worker profession
+  and proximity as evidence of an actual return.
+- Introduced serde-default `GatherJob.worker_id: Option<u64>`. A new job
+  starts unassigned. After live 3D source-worker observation, a single
+  qualified, living village resident is assigned and saved as a separate
+  durable step before `Issued` and any native edit.
+- `mark_gather_issued` and `confirm_gather` reject unbound jobs.
+  `gather_one_step` accepts delivery ONLY by the previously assigned
+  UUID-linked resident at the real 3D hall. A legacy Issued journal
+  without worker_id is blocked/quarantined and never credited.
+- Bound worker ID persists into every subsequent short oak stem segment,
+  across reloads. Guide routing honors assignments so same-role
+  unassigned NPCs cannot take over someone else's saved task.
+- Added six Rust tests and ten Python source contracts covering
+  valid binding, theft prevention, old receipt handling, unknown
+  foreign resident ID, dead workers and crash/restart continuation.
+- Static inspection only. Rust/Python suites/native Horizon compilation
+  and actual Minecraft gameplay have NOT been executed.
