@@ -1071,6 +1071,141 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
     }
 }
 
+/// World-JSON operations commit before any external physical side effect.
+fn save_autonomous(state: &mut ActiveWorld, prior: World) -> Result<(), String> {
+    if let Err(error) = save(state) {
+        state.world = Some(prior);
+        return Err(format!("persistence: {error}"));
+    }
+    Ok(())
+}
+
+/// Try a bounded list of already-loaded, open, natural-ground positions.
+/// Never summons a villager if even one of the ten positions is unsafe.
+fn safe_actor_spawn_points(
+    game: &Game<'_>, village: &crate::game::civilizations_core::Settlement
+) -> Vec<[f64; 3]> {
+    let mut spots = Vec::new();
+    for dz in [-6_i32, -4, -2, 0, 2, 4, 6] {
+        for dx in [-6_i32, -4, -2, 0, 2, 4, 6] {
+            let Some(x) = village.center[0].checked_add(dx) else { continue; };
+            let Some(z) = village.center[2].checked_add(dz) else { continue; };
+            for dy in [0_i32, 1, -1, 2, -2] {
+                let Some(y) = village.center[1].checked_add(dy) else { continue; };
+                let Some(ground_y) = y.checked_sub(1) else { continue; };
+                let Some(head_y) = y.checked_add(1) else { continue; };
+                if world_block(game, &village.dimension, [x, ground_y, z])
+                        .is_some_and(|block| is_ground(&block))
+                    && world_block(game, &village.dimension, [x, y, z]).as_deref() == Some("minecraft:air")
+                    && world_block(game, &village.dimension, [x, head_y, z]).as_deref() == Some("minecraft:air") {
+                    spots.push([f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5]);
+                    break;
+                }
+            }
+            if spots.len() == 10 { return spots; }
+        }
+    }
+    Vec::new()
+}
+
+/// Vanilla villagers are UUID-bound, once, after a persistent one-shot
+/// reservation. A partial spawn NEVER triggers an automatic second batch.
+fn auto_spawn_villagers(
+    game: &mut Game<'_>, state: &mut ActiveWorld, village_id: u64
+) -> Result<(), String> {
+    let village = state.world.as_ref().unwrap().settlements
+        .get(&village_id).ok_or("unknown settlement")?.clone();
+    if village.actors_spawned || !village.autonomy_enabled { return Ok(()); }
+    let positions = safe_actor_spawn_points(game, &village);
+    if positions.len() != 10 { return Ok(()); } // unloaded / obstructed: retry later
+    let prior = state.world.as_ref().unwrap().clone();
+    state.world.as_mut().unwrap().settlements
+        .get_mut(&village_id).unwrap().actors_spawned = true;
+    save_autonomous(state, prior)?; // mandatory before first entity is created
+    for (resident, position) in village.residents.iter().take(10).zip(positions) {
+        let options = NativeSpawn {
+            name: Some(village.actor_name(resident)),
+            ..NativeSpawn::default()
+        };
+        let entity = game.native_spawn_mob(
+            &village.dimension, "minecraft:villager", position, &options
+        ).ok_or_else(|| "automatic villager spawn refused; reserved, no blind respawn".to_owned())?;
+        let uuid = game.native_entity(entity)
+            .and_then(|handle| game.native_entity_uuid(handle))
+            .ok_or("automatic spawn UUID unavailable; inspect/reconcile manually")?;
+        state.world.as_mut().unwrap().bind_actor(village.id, resident.id, uuid)?;
+        // If persistence fails, halt all future mutations rather than
+        // creating another NPC with a new UUID after restart.
+        save(state).map_err(|e| format!("persistence: {e}"))?;
+    }
+    log::info!("[civilizations] auto-spawned 10 persistent villagers for {}", village.name);
+    Ok(())
+}
+
+/// One bounded planning step per 100 loaded level ticks. NPCs choose free
+/// natural plots *inside their settlement radius* and start actual physical
+/// jobs. Paid player parcels are hard exclusions in BOTH domain paths.
+fn autonomous_village_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), String> {
+    let dimension = game.dim.id().to_owned();
+    let enabled: Vec<u64> = state.world.as_ref().unwrap().settlements.values()
+        .filter(|v| v.dimension == dimension && v.autonomy_enabled)
+        .map(|v| v.id).collect();
+    if enabled.is_empty() { return Ok(()); }
+    let index = (state.physical_ticks / 100) as usize % enabled.len();
+    let id = enabled[index];
+    if !state.world.as_ref().unwrap().settlements[&id].actors_spawned {
+        return auto_spawn_villagers(game, state, id);
+    }
+    let prior = state.world.as_ref().unwrap().clone();
+    if state.world.as_mut().unwrap().prepare_village_housing(id)? {
+        save_autonomous(state, prior)?;
+    }
+    let village = state.world.as_ref().unwrap().settlements[&id].clone();
+    let actors = loaded_actors(game, state.world.as_ref().unwrap(), id);
+    let has_farmer = village.residents.iter().any(|r| r.alive && r.job == Job::Farmer
+        && actors.iter().any(|(known, _)| *known == r.id));
+    let has_builder = village.residents.iter().any(|r| r.alive && r.job == Job::Builder
+        && actors.iter().any(|(known, _)| *known == r.id));
+    let need_field = has_farmer && village.farm.is_none();
+    let need_hut = has_builder && village.visual_job.is_none()
+        && village.pending_visual_buildings > 0 && village.physical_housing().2 > 0;
+    if !need_field && !need_hut { return Ok(()); }
+
+    for [dx, dz] in crate::game::civilizations_core::HOUSING_PLOT_OFFSETS {
+        let Some(x) = village.center[0].checked_add(dx) else { continue; };
+        let Some(z) = village.center[2].checked_add(dz) else { continue; };
+        for dy in [0_i32, 1, -1, 2, -2] {
+            let Some(y) = village.center[1].checked_add(dy) else { continue; };
+            let site = [x, y, z];
+            // First establish a functional field. Farms must be harvested
+            // by a loaded nearby farmer; their cycles do NOT mint stock.
+            if need_field && check_empty_farm_site(game, &dimension, site).is_ok() {
+                let mut trial = state.world.as_ref().unwrap().clone();
+                if trial.start_farm(id, site).is_ok() {
+                    let prior = state.world.as_ref().unwrap().clone();
+                    state.world.as_mut().unwrap().start_farm(id, site)?;
+                    save_autonomous(state, prior)?;
+                    log::info!("[civilizations] {} autonomously reserved crop field at {:?}", village.name, site);
+                    return Ok(());
+                }
+            }
+            if need_hut && check_empty_hut_site(game, &dimension, site).is_ok() {
+                let can_build = state.world.as_ref().unwrap()
+                    .check_visual_house_site(id, site).is_ok();
+                if can_build {
+                    let prior = state.world.as_ref().unwrap().clone();
+                    state.world.as_mut().unwrap().start_visual_house(id, site)?;
+                    save_autonomous(state, prior)?;
+                    log::info!("[civilizations] {} autonomously reserved real hut at {:?}", village.name, site);
+                    return Ok(());
+                }
+            }
+        }
+    }
+    // No clear loaded plot; never clear players' trees, fences or walls.
+    Ok(())
+}
+
 /// Runs after an authoritative level tick: the selected dimension and its
 /// loaded chunks are guaranteed to be the ones inspected/modified here.
 pub fn level_tick(game: &mut Game<'_>, dimension: &str) {
@@ -1083,6 +1218,21 @@ pub fn level_tick(game: &mut Game<'_>, dimension: &str) {
     let state = guard.as_mut().expect("active initialized");
     if state.problem.is_some() || state.world.is_none() { return; }
     state.physical_ticks = state.physical_ticks.saturating_add(1);
+    // Villages start their own visible work by default, without needing
+    // OP construction/field/spawn commands. The planner is bounded and
+    // *never* edits a block without the existing worker-aware tick.
+    if state.physical_ticks % 100 == 0 {
+        if let Err(error) = autonomous_village_step(game, state) {
+            log::warn!("[civilizations] autonomous planning stopped: {error}");
+            // A failed identity or persistence step must never cause
+            // repeated spawning or untracked world mutations.
+            if error.starts_with("persistence:") || error.contains("UUID")
+                || error.contains("spawn") {
+                state.problem = Some(format!("automatic village action halted: {error}"));
+                return;
+            }
+        }
+    }
     // Navigation is bounded and only touches loaded actors in the current
     // dimension; it is not an offscreen tick or a physical gathering action.
     if state.physical_ticks % 20 == 0 {
