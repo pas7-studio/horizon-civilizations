@@ -211,3 +211,14 @@ Run numbered cases 85–98 from [TEST_PLAN](TEST_PLAN.md) before
 calling this a working autonomous town. Existing guild, bakery, roads,
 tree-cutting, auto-founding settlements and real item-economy logistics
 are still independent work.
+
+### Buying an actual finished village hut
+
+After linked builders complete an ordinary public starter hut, give
+the buyer sufficient *existing civic coins* (35, earned by trading).
+Stand within 12 blocks and run `/civ buyhouse Ashford`, then
+`/civ plots Ashford` and `/civ homes Ashford`. Check the real hut,
+player title, village treasury and removed public housing capacity.
+Changing one owned plot's blocks in a **disposable** world must not
+cause the village to reclaim or overwrite it. Run [TEST_PLAN](TEST_PLAN.md)
+cases 99–102.
