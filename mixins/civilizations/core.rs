@@ -936,18 +936,20 @@ impl World {
             || !(-2048..=2048).contains(&origin[1]) {
             return Err("site too close to world border".into());
         }
+        // i32 coordinates may differ by 2^32-1. Squaring two such deltas
+        // overflows i64; use i128 even for corrupted or untrusted save data.
         let distance = |a: [i32; 3], b: [i32; 3]| {
-            let dx = i64::from(a[0]) - i64::from(b[0]);
-            let dz = i64::from(a[2]) - i64::from(b[2]);
+            let dx = i128::from(a[0]) - i128::from(b[0]);
+            let dz = i128::from(a[2]) - i128::from(b[2]);
             dx * dx + dz * dz
         };
-        if !(12_i64 * 12..=80_i64 * 80).contains(&distance(village.center, origin)) {
+        if !(12_i128 * 12..=80_i128 * 80).contains(&distance(village.center, origin)) {
             return Err("build 12..80 blocks from village center".into());
         }
         for other in self.settlements.values().filter(|s| s.dimension == village.dimension) {
-            if other.visual_sites.iter().any(|&site| distance(site, origin) < 9_i64 * 9)
-                || other.visual_job.as_ref().is_some_and(|job| distance(job.origin, origin) < 9_i64 * 9)
-                || other.farm.as_ref().is_some_and(|farm| distance(farm.origin, origin) < 9_i64 * 9) {
+            if other.visual_sites.iter().any(|&site| distance(site, origin) < 9_i128 * 9)
+                || other.visual_job.as_ref().is_some_and(|job| distance(job.origin, origin) < 9_i128 * 9)
+                || other.farm.as_ref().is_some_and(|farm| distance(farm.origin, origin) < 9_i128 * 9) {
                 return Err("plot overlaps an existing civilization structure or farm".into());
             }
         }
@@ -2331,5 +2333,14 @@ mod safe_housing_proposal_tests {
         assert!(world.proposed_hut(id, 2, 70).is_ok());
         assert!(world.proposed_hut(id, 2, i32::MAX).is_err());
         assert!(world.proposed_hut(id, 2, i32::MIN).is_err());
+
+        // The farthest possible signed i32 coordinates exceed i64's
+        // *combined* squared-distance range. This must fail, not panic.
+        let mut distant = World::default();
+        let other = distant.found("Distant", "minecraft:overworld",
+                                  [i32::MIN, 70, i32::MIN], "op").unwrap();
+        distant.settlements.get_mut(&other).unwrap().pending_visual_buildings = 1;
+        assert!(distant.check_visual_house_site(other,
+            [29_999_990, 70, 29_999_990]).is_err());
     }
 }
