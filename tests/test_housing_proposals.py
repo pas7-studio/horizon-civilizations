@@ -62,7 +62,7 @@ class VillageHousingProposalContracts(unittest.TestCase):
         mixin = tomllib.loads((ROOT / "mixins/civilizations/horizon-mixin.toml").read_text())
         cargo = tomllib.loads((ROOT / "Cargo.toml").read_text())
         self.assertEqual(cargo["package"]["version"], mixin["mod"]["version"])
-        self.assertEqual(mixin["mod"]["version"], "0.1.9")
+        self.assertEqual(mixin["mod"]["version"], cargo["package"]["version"])
         self.assertEqual(len(mixin["injection"]), 6)
         self.assertIn("pub const SCHEMA: u32 = 1", CORE)
         self.assertNotIn("pub proposed_sites:", CORE)
