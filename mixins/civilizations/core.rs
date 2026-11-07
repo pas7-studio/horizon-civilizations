@@ -1221,6 +1221,15 @@ impl World {
                     return Err("invalid physical gather record".into());
                 }
             }
+            if let Some(purchase) = &village.market_purchase {
+                if !village.hall_complete
+                    || !hall_storage_positions(village.center).contains(&purchase.position)
+                    || !(1..=64).contains(&purchase.count) || purchase.count > purchase.before
+                    || purchase.price != u64::from(purchase.good.price()) * u64::from(purchase.count)
+                    || !self.players.contains_key(&purchase.buyer) {
+                    return Err("invalid pending native market purchase".into());
+                }
+            }
             if village.build_escrow.values().any(|&amount| amount > 10_000_000) {
                 return Err("physical builder escrow entry too large".into());
             }
@@ -1661,6 +1670,63 @@ impl World {
         let v = self.settlements.get_mut(&id).ok_or("unknown settlement")?;
         let t = v.barrel_transfer.as_mut().ok_or("no barrel transfer")?;
         t.phase = BarrelPhase::Blocked;
+        Ok(())
+    }
+
+    /// Called only after the adapter has checked a live barrel slot, the
+    /// authenticated player identity, and available inventory space.
+    /// Coins are durably debited BEFORE the native item extraction.
+    pub fn begin_market_purchase(
+        &mut self, buyer: &str, id: u64, good: Good, count: u32,
+        position: [i32; 3], slot: usize, before: u32,
+    ) -> Result<u64, String> {
+        if !(1..=64).contains(&count) || count > before {
+            return Err("purchase exceeds one visible native stack".into());
+        }
+        let v = self.settlements.get(&id).ok_or("unknown settlement")?;
+        if !v.hall_complete { return Err("real warehouse is not constructed".into()); }
+        if !hall_storage_positions(v.center).contains(&position) {
+            return Err("purchase source is not an official town hall barrel".into());
+        }
+        if v.barrel_transfer.is_some() || v.market_purchase.is_some() {
+            return Err("warehouse has an outstanding transfer or purchase".into());
+        }
+        let person = self.players.get(buyer).ok_or("join village before buying")?;
+        if person.settlement != Some(id) { return Err("join this village before buying".into()); }
+        let price = u64::from(good.price()) * u64::from(count);
+        if person.coins < price { return Err("insufficient civic coins".into()); }
+        let treasury = v.treasury_coins.checked_add(price).ok_or("treasury coin overflow")?;
+        self.players.get_mut(buyer).unwrap().coins -= price;
+        let v = self.settlements.get_mut(&id).unwrap();
+        v.treasury_coins = treasury;
+        v.market_purchase = Some(MarketPurchase {
+            buyer: buyer.to_owned(), good, count, price, position,
+            slot, before, phase: MarketPhase::Issued,
+        });
+        Ok(price)
+    }
+
+    /// Only clear a pending purchase after the external native barrel item
+    /// was removed and the exact item was handed to the authenticated buyer.
+    pub fn complete_market_purchase(&mut self, id: u64, buyer: &str) -> Result<(), String> {
+        let v = self.settlements.get_mut(&id).ok_or("unknown settlement")?;
+        let order = v.market_purchase.as_ref().ok_or("no physical market purchase")?;
+        if order.buyer != buyer || order.phase != MarketPhase::Issued {
+            return Err("buyer identity or market state mismatch".into());
+        }
+        let good = order.good;
+        let count = order.count;
+        v.market_purchase = None;
+        let name = v.name.clone();
+        self.event(format!("{name}: player acquired {count} real {} from a hall barrel",
+            good.as_str()));
+        Ok(())
+    }
+
+    pub fn block_market_purchase(&mut self, id: u64) -> Result<(), String> {
+        let order = self.settlements.get_mut(&id).ok_or("unknown settlement")?
+            .market_purchase.as_mut().ok_or("no market order")?;
+        order.phase = MarketPhase::Blocked;
         Ok(())
     }
 
