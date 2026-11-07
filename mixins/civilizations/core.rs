@@ -1804,7 +1804,7 @@ impl World {
         let village = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?;
         // Harvest credit must be validated BEFORE mutating its receipt/cursor.
         // Each receipt and warehouse credit commit in the same world JSON save.
-        let credit_harvest = matches!(decision, FarmDecision::StageComplete)
+        let credit_harvest = matches!(&decision, FarmDecision::StageComplete)
             && village.farm.as_ref().is_some_and(|farm| farm.stage == FarmStage::Harvesting);
         let new_wheat = if credit_harvest {
             let n = village.warehouse_quantity(Good::Wheat)
@@ -1850,8 +1850,9 @@ impl World {
                         if farm.harvest_receipts.len() > MAX_HARVEST_RECEIPTS {
                             farm.harvest_receipts.remove(0);
                         }
-                        // Receipt + phase are committed in one JSON save.
-                        // No inventory/warehouse/coin credit is applied.
+                        // Receipt + phase + physical warehouse wheat credit
+                        // are committed in ONE JSON save. No abstract stock,
+                        // native item drops or player coins are credited.
                         FarmStage::Replanting
                     },
                     FarmStage::Replanting => {
