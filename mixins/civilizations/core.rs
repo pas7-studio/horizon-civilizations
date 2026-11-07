@@ -370,6 +370,27 @@ pub fn hut_plan(origin: [i32; 3]) -> Vec<HutBlock> {
     plan
 }
 
+/// One pending real-resource extraction. Persist the plan before the block
+/// command; issue state before granting any Minecraft-derived warehouse item.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GatherJob {
+    pub position: [i32; 3],
+    pub good: Good, // only Wood (oak log) or Stone (natural stone)
+    pub issued: bool,
+    #[serde(default)]
+    pub blocked: bool,
+}
+
+impl GatherJob {
+    pub fn source_block(&self) -> &'static str {
+        match self.good {
+            Good::Wood => "minecraft:oak_log",
+            Good::Stone => "minecraft:stone",
+            _ => "",
+        }
+    }
+}
+
 /// Founding civic hall uses the existing 5x5 safe physical shell, with an
 /// identifiable mayor desk, two resource barrels and two bulletin signs.
 /// Barrel contents are not treated as a vanilla chest inventory: the guarded
@@ -740,6 +761,9 @@ pub struct Settlement {
     /// The civic center is proven complete only after all plan blocks read.
     #[serde(default)]
     pub hall_complete: bool,
+    /// Pending actual tree/stone harvest; reconciled against native blocks.
+    #[serde(default)]
+    pub gather_job: Option<GatherJob>,
     /// Player civic coin payments are transferred here, not silently burned.
     #[serde(default)]
     pub treasury_coins: u64,
@@ -1105,6 +1129,15 @@ impl World {
             if village.id != id { return Err("settlement id/key mismatch".into()); }
             let normalized = village.name.to_ascii_lowercase();
             if !seen.insert(normalized) { return Err("duplicate settlement names".into()); }
+            if let Some(gather) = &village.gather_job {
+                let [x, y, z] = gather.position;
+                if !matches!(gather.good, Good::Wood | Good::Stone)
+                    || i64::from(x).abs() > 29_999_988
+                    || i64::from(z).abs() > 29_999_988
+                    || !(-2046..=2046).contains(&y) {
+                    return Err("invalid physical gather record".into());
+                }
+            }
             if village.hall_complete && village.hall_job.is_some() {
                 return Err("civic hall cannot be simultaneously complete and under construction".into());
             }
@@ -1293,6 +1326,7 @@ impl World {
             warehouse: BTreeMap::new(),
             hall_job: None,
             hall_complete: false,
+            gather_job: None,
             treasury_coins: 0,
             houses: 2,
             building_progress: 0,
@@ -1433,6 +1467,75 @@ impl World {
         v.hall_job = None;
         v.hall_complete = true;
         self.event(format!("{name}: physical civic hall completed"));
+        Ok(())
+    }
+
+    /// Planning creates no items. Both native and domain checks forbid
+    /// extraction inside the town hall, another structure or player lot.
+    pub fn plan_gather(
+        &mut self, village_id: u64, good: Good, position: [i32; 3]
+    ) -> Result<(), String> {
+        if !matches!(good, Good::Wood | Good::Stone) {
+            return Err("only physical oak logs or exposed stone may be gathered".into());
+        }
+        let v = self.settlements.get(&village_id).ok_or("unknown settlement")?;
+        if v.gather_job.is_some() { return Err("another physical gather is pending".into()); }
+        if !v.autonomy_enabled { return Err("village autonomy paused".into()); }
+        let worker_job = if good == Good::Wood { Job::Lumberjack } else { Job::Miner };
+        if v.count(worker_job) == 0 { return Err("no qualified living worker".into()); }
+        if i64::from(position[0]).abs() > 29_999_988
+            || i64::from(position[2]).abs() > 29_999_988
+            || !(-2046..=2046).contains(&position[1]) {
+            return Err("gather point outside safe world bounds".into());
+        }
+        let dx = i128::from(position[0]) - i128::from(v.center[0]);
+        let dz = i128::from(position[2]) - i128::from(v.center[2]);
+        if !(12_i128 * 12..=80_i128 * 80).contains(&(dx * dx + dz * dz)) {
+            return Err("gather only in the village outer work area".into());
+        }
+        for other in self.settlements.values().filter(|s| s.dimension == v.dimension) {
+            if near_plot(other.center, position)
+                || other.player_parcels.iter().any(|lot| near_plot(lot.origin, position))
+                || other.visual_sites.iter().any(|site| near_plot(*site, position))
+                || other.visual_job.as_ref().is_some_and(|job| near_plot(job.origin, position))
+                || other.farm.as_ref().is_some_and(|farm| near_plot(farm.origin, position)) {
+                return Err("natural resource overlaps a building, town hall or player claim".into());
+            }
+        }
+        self.settlements.get_mut(&village_id).unwrap().gather_job = Some(GatherJob {
+            position, good, issued: false, blocked: false,
+        });
+        Ok(())
+    }
+
+    pub fn mark_gather_issued(&mut self, village_id: u64) -> Result<(), String> {
+        let job = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?
+            .gather_job.as_mut().ok_or("no planned gather")?;
+        if job.blocked || job.issued { return Err("gather may not be re-issued".into()); }
+        job.issued = true;
+        Ok(())
+    }
+
+    /// A planned job whose block was removed externally is NOT a harvest:
+    /// either player intervention or a crash before issued-state persistence
+    /// must fail closed, never credit phantom inventory.
+    pub fn block_gather(&mut self, village_id: u64) -> Result<(), String> {
+        let job = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?
+            .gather_job.as_mut().ok_or("no gather job")?;
+        job.blocked = true;
+        Ok(())
+    }
+
+    pub fn confirm_gather(&mut self, village_id: u64) -> Result<(), String> {
+        let v = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?;
+        let job = v.gather_job.as_ref().ok_or("no gather job")?;
+        if !job.issued || job.blocked { return Err("unproven gather cannot be credited".into()); }
+        let good = job.good;
+        let pos = job.position;
+        v.warehouse_credit(good, 1)?;
+        v.gather_job = None;
+        let name = v.name.clone();
+        self.event(format!("{name}: physically gathered one {} at {pos:?}", good.as_str()));
         Ok(())
     }
 
