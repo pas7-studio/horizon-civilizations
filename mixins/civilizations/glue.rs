@@ -1009,23 +1009,16 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             .map(|(good, count)| format!("{}:{}", good.as_str(), count))
             .collect::<Vec<_>>().join(" / "))
             .unwrap_or_else(|| "unloaded / not constructed".to_owned());
-        let from_barrel = |good: Good| stored.as_ref()
-            .and_then(|items| items.iter().find(|(item, _)| *item == good))
-            .map(|(_, count)| *count).unwrap_or(0);
         let escrow = goods.iter().map(|good| format!(
             "{}:{}", good.as_str(), village.build_escrow.get(good).copied().unwrap_or(0)
         )).collect::<Vec<_>>().join(" / ");
         let (hall_wood, hall_stone) = village.hall_materials_missing();
-        let (hut_wood, hut_stone) = (
-            crate::game::civilizations_core::HUT_WOOD_LOGS.saturating_sub(
-                from_barrel(Good::Wood).saturating_add(
-                    village.build_escrow.get(&Good::Wood).copied().unwrap_or(0))
-            ),
-            crate::game::civilizations_core::HUT_COBBLESTONE.saturating_sub(
-                from_barrel(Good::Stone).saturating_add(
-                    village.build_escrow.get(&Good::Stone).copied().unwrap_or(0))
-            ),
+        let demand = stored.as_ref().map(|items|
+            crate::game::civilizations_core::physical_construction_shortfall(village, items)
         );
+        let outstanding = demand.map(|(wood, stone)|
+            format!("{wood} logs / {stone} cobble")
+        ).unwrap_or_else(|| "unknown (native barrels unloaded/unavailable)".to_owned());
         let transfer = village.barrel_transfer.as_ref().map(|t| format!(
             "{:?} {:?} {} x{} at {:?}, before {}, phase {:?}",
             t.direction, t.good, t.good.item(), t.count, t.position,
@@ -1038,9 +1031,9 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
         )).unwrap_or_else(|| "none".to_owned());
         if action == "warehouse" {
             reply(game, format!(
-                "{} ACTUAL BARRELS [{}]. Awaiting steward delivery [{}]. Farmer carrying {} wheat. Physically extracted building escrow [{}]. Next hut needs {} logs / {} cobble. Durable transfer: {}. Market order: {}. Physical items in the two native containers are authoritative after hall completion; abstract daily stock is separate.",
+                "{} ACTUAL BARRELS [{}]. Awaiting steward delivery [{}]. Farmer carrying {} wheat. Physically extracted hut escrow [{}]. Combined pending construction deficit: {}. Durable transfer: {}. Market order: {}. Native barrels are authoritative after hall completion; abstract stock is separate. Unresolved journal operations suspend new gathering.",
                 village.name, physical, incoming, village.wheat_delivery_pending(), escrow,
-                hut_wood, hut_stone, transfer, purchase
+                outstanding, transfer, purchase
             ));
         } else {
             let building = village.hall_job.as_ref().map(|job| format!(
@@ -2030,7 +2023,7 @@ fn barrel_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
         // oak logs and cobblestone. A real builder must stand at the hall,
         // and every extracted item becomes bakery-specific saved escrow.
         let bakery_builder = village.bakery.as_ref().is_some_and(|b|
-            b.building.is_some() && !b.supplies_reserved)
+            b.building.as_ref().is_some_and(|job| !job.blocked) && !b.supplies_reserved)
             && DailyPhase::at(game.world.day_time).on_shift(Job::Builder)
             && storage_worker_near(game, state.world.as_ref().unwrap(), id, Job::Builder);
         if bakery_builder {
@@ -2297,31 +2290,17 @@ fn autonomous_village_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Resu
     let (wood_needed, stone_needed) = if !village.hall_complete {
         village.hall_materials_missing()
     } else {
+        // A journalled mutation may already have changed the native barrel
+        // without updating saved escrows/receipts. Do not count goods twice
+        // or send miners to replace them until the receipt is reconciled.
+        if village.barrel_transfer.is_some() || village.market_purchase.is_some() {
+            return Ok(());
+        }
         let Some(native_stock) = physical_barrel_stock(game, &dimension, village.center)
         else { return Ok(()); };
-        let on_shelf = |good: Good| native_stock.iter()
-            .find(|(item, _)| *item == good)
-            .map(|(_, amount)| *amount).unwrap_or(0);
-        let bakery_job = village.bakery.as_ref().filter(|b|
-            b.building.is_some() && !b.supplies_reserved);
-        let hut_job = village.visual_job.is_some() && !village.hut_supplies_reserved
-            || village.pending_visual_buildings > 0 && village.physical_housing().2 > 0;
-        let (wood_goal, stone_goal, escrow_wood, escrow_stone) =
-            if let Some(b) = bakery_job {
-                (crate::game::civilizations_core::BAKERY_WOOD_LOGS,
-                 crate::game::civilizations_core::BAKERY_COBBLESTONE,
-                 b.construction_escrow.get(&Good::Wood).copied().unwrap_or(0),
-                 b.construction_escrow.get(&Good::Stone).copied().unwrap_or(0))
-            } else if hut_job {
-                (crate::game::civilizations_core::HUT_WOOD_LOGS,
-                 crate::game::civilizations_core::HUT_COBBLESTONE,
-                 village.build_escrow.get(&Good::Wood).copied().unwrap_or(0),
-                 village.build_escrow.get(&Good::Stone).copied().unwrap_or(0))
-            } else { (0, 0, 0, 0) };
-        let available = |good: Good, escrow: u32| on_shelf(good)
-            .saturating_add(village.warehouse_quantity(good)).saturating_add(escrow);
-        (wood_goal.saturating_sub(available(Good::Wood, escrow_wood)),
-         stone_goal.saturating_sub(available(Good::Stone, escrow_stone)))
+        crate::game::civilizations_core::physical_construction_shortfall(
+            &village, &native_stock,
+        )
     };
 
     if village.gather_job.is_none() {
