@@ -419,6 +419,12 @@ pub struct GatherJob {
     #[serde(default)]
     pub worker_id: Option<u64>,
     pub issued: bool,
+    /// An actual loaded UUID-linked worker has observed the source block
+    /// as air at the original saved work stand AFTER issue. Only then may
+    /// their native route turn toward the village receiving area.
+    /// Old saves default to false and cannot auto-deliver based on mere air.
+    #[serde(default)]
+    pub pickup_witnessed: bool,
     #[serde(default)]
     pub blocked: bool,
 }
@@ -1553,6 +1559,10 @@ impl World {
                         return Err("physical gather worker ID is invalid".into());
                     }
                 }
+                if gather.pickup_witnessed &&
+                    (!gather.issued || gather.worker_id.is_none()) {
+                    return Err("pickup witness without issued identity".into());
+                }
                 let [x, y, z] = gather.position;
                 let [sx, sy, sz] = gather.stand;
                 let walk_dx = i128::from(sx) - i128::from(x);
@@ -2382,7 +2392,8 @@ impl World {
             return Err("natural resource overlaps a building, town hall or player claim".into());
         }
         self.settlements.get_mut(&village_id).unwrap().gather_job = Some(GatherJob {
-            position, stand, good, worker_id: None, issued: false, blocked: false,
+            position, stand, good, worker_id: None, issued: false,
+            pickup_witnessed: false, blocked: false,
         });
         Ok(())
     }
@@ -2450,6 +2461,25 @@ impl World {
         Ok(())
     }
 
+    /// The bridge has just observed the issued source as air AND the same
+    /// UUID-linked worker at the saved loaded source work stand, inside
+    /// actual 3D reach. Do not mark pickup before the native block edit.
+    /// This journal step is saved before the worker gets a return route.
+    pub fn witness_gather_pickup(
+        &mut self, village_id: u64, resident_id: u64,
+    ) -> Result<(), String> {
+        let v = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?;
+        let job = v.gather_job.as_mut().ok_or("no gather job")?;
+        if !job.issued || job.blocked || job.pickup_witnessed {
+            return Err("gather not awaiting a first source pickup witness".into());
+        }
+        if job.worker_id != Some(resident_id) {
+            return Err("source pickup identity does not match assigned worker".into());
+        }
+        job.pickup_witnessed = true;
+        Ok(())
+    }
+
     /// A planned job whose block was removed externally is NOT a harvest:
     /// either player intervention or a crash before issued-state persistence
     /// must fail closed, never credit phantom inventory.
@@ -2490,7 +2520,9 @@ impl World {
     pub fn confirm_gather(&mut self, village_id: u64) -> Result<(), String> {
         let v = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?;
         let job = v.gather_job.as_ref().ok_or("no gather job")?;
-        if !job.issued || job.blocked { return Err("unproven gather cannot be credited".into()); }
+        if !job.issued || !job.pickup_witnessed || job.blocked {
+            return Err("unproven pickup or gather cannot be credited".into());
+        }
         let good = job.good;
         let pos = job.position;
         let worker_id = job.worker_id.ok_or("unassigned gather cannot be credited")?;
@@ -2504,7 +2536,8 @@ impl World {
                 Some((next, GatherJob {
                     position: [stem.root[0], y, stem.root[2]],
                     stand: stem.stand, good: Good::Wood,
-                    worker_id: Some(worker_id), issued: false, blocked: false,
+                    worker_id: Some(worker_id), issued: false,
+                    pickup_witnessed: false, blocked: false,
                 }))
             } else {
                 None
@@ -5308,7 +5341,8 @@ mod native_gather_quarantine_tests {
         // This record is a durable receipt of an issued natural stone edit.
         world.settlements.get_mut(&id).unwrap().gather_job = Some(GatherJob {
             position: [16,70,0], stand: [17,70,0],
-            good: Good::Stone, worker_id: None, issued: true, blocked: true,
+            good: Good::Stone, worker_id: None, issued: true,
+            pickup_witnessed: false, blocked: true,
         });
         world.validate().unwrap();
         let before = world.settlements[&id].warehouse_quantity(Good::Stone);
@@ -5340,7 +5374,8 @@ mod native_gather_quarantine_tests {
         let id = world.found("Ashford", "minecraft:overworld", [0,70,0], "owner").unwrap();
         world.settlements.get_mut(&id).unwrap().gather_job = Some(GatherJob {
             position: [16,70,0], stand: [17,70,0],
-            good: Good::Wood, worker_id: None, issued: false, blocked: true,
+            good: Good::Wood, worker_id: None, issued: false,
+            pickup_witnessed: false, blocked: true,
         });
         assert!(world.abandon_blocked_issued_gather(id).is_err());
         world.settlements.get_mut(&id).unwrap().gather_job.as_mut().unwrap().issued = true;
