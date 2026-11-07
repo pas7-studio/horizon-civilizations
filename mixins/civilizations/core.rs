@@ -25,6 +25,28 @@ pub const MAX_HOUSING_SURVEY_RESULTS: usize = 5;
 /// The board forecasts a few abstract days, not simulated physical work.
 pub const COUNCIL_FORECAST_DAYS: u8 = 3;
 pub const MAX_COUNCIL_FORECAST_DAYS: u8 = 7;
+pub const LAND_PRICE_COINS: u64 = 10;
+pub const COMMISSION_PRICE_COINS: u64 = 15;
+pub const MAX_PLAYER_PARCELS: usize = 32;
+
+fn autonomous_by_default() -> bool { true }
+
+/// Mod-level ownership of a 5x5 plot; not a vanilla/other-mod block-protection
+/// system. Minecraft block preflight still checks for player structures.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlayerParcel {
+    pub origin: [i32; 3],
+    pub owner: String, // authenticated acting player's UUID in hex
+    #[serde(default)]
+    pub commissioned: bool,
+}
+
+fn near_plot(a: [i32; 3], b: [i32; 3]) -> bool {
+    let dx = i128::from(a[0]) - i128::from(b[0]);
+    let dz = i128::from(a[2]) - i128::from(b[2]);
+    dx * dx + dz * dz < 9_i128 * 9
+}
+
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -653,6 +675,13 @@ pub struct Settlement {
     pub active_wars: BTreeSet<u64>,
     pub pending_visual_buildings: u32,
     pub actors_spawned: bool,
+    /// Villages develop by default. OP can pause selected settlements.
+    #[serde(default = "autonomous_by_default")]
+    pub autonomy_enabled: bool,
+    /// Land purchased by players; no village physical job may use these
+    /// parcels unless its owner explicitly commissions a building.
+    #[serde(default)]
+    pub player_parcels: Vec<PlayerParcel>,
     /// Empty for existing v0.1.1 saves; these are *physical* build sites only.
     #[serde(default)]
     pub visual_sites: Vec<[i32; 3]>,
@@ -1108,6 +1137,8 @@ impl World {
             active_wars: BTreeSet::new(),
             pending_visual_buildings: 0,
             actors_spawned: false,
+            autonomy_enabled: true,
+            player_parcels: Vec::new(),
             visual_sites: Vec::new(),
             visual_job: None,
             farm: None,
@@ -1152,6 +1183,9 @@ impl World {
             return Err("build 12..80 blocks from village center".into());
         }
         for other in self.settlements.values().filter(|s| s.dimension == village.dimension) {
+            if other.player_parcels.iter().any(|plot| near_plot(plot.origin, origin)) {
+                return Err("plot is owned by a player; construction requires a commission".into());
+            }
             if other.visual_sites.iter().any(|&site| distance(site, origin) < 9_i128 * 9)
                 || other.visual_job.as_ref().is_some_and(|job| distance(job.origin, origin) < 9_i128 * 9)
                 || other.farm.as_ref().is_some_and(|farm| distance(farm.origin, origin) < 9_i128 * 9) {
@@ -1237,6 +1271,9 @@ impl World {
             return Err("farm must be 12..80 blocks from the village center".into());
         }
         for s in self.settlements.values().filter(|s| s.dimension == village.dimension) {
+            if s.player_parcels.iter().any(|plot| near_plot(plot.origin, origin)) {
+                return Err("farm site is owned by a player".into());
+            }
             if s.farm.as_ref().is_some_and(|p| distance(p.origin, origin) < 9 * 9)
                 || s.visual_job.as_ref().is_some_and(|p| distance(p.origin, origin) < 9 * 9)
                 || s.visual_sites.iter().any(|&site| distance(site, origin) < 9 * 9) {
