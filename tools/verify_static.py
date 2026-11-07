@@ -21,7 +21,7 @@ for entry in manifest["injection"]:
     assert entry["kind"] == "HEAD"
     assert "native_" in entry["target"]
     assert (BUNDLE / entry["helper"]).is_file()
-assert len(manifest["injection"]) == 6
+assert len(manifest["injection"]) == 7
 cargo = tomllib.loads((ROOT / "Cargo.toml").read_text())
 version = cargo["package"]["version"]
 assert manifest["mod"]["version"] == version
