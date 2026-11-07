@@ -578,6 +578,17 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
         };
         let linked = loaded_actors(game, world, village.id);
         let (_, _, homeless) = village.physical_housing();
+        let note = if !village.actors_spawned {
+            "waiting for ten safe loaded natural-ground villager spawn sites"
+        } else if linked.is_empty() {
+            "no UUID-linked villagers loaded; return to village or inspect /civ roster, never blindly respawn"
+        } else if village.farm.is_none() {
+            "field not yet reserved; the loaded farmer and a clear natural 3x3 plot are required"
+        } else if village.visual_job.is_none() && village.pending_visual_buildings == 0 && homeless > 0 {
+            "waiting for paid abstract housing inventory; future economic days may prepare houses"
+        } else {
+            "workers act during daylight on loaded clear plots; follow construction/farming progress"
+        };
         let job = village.visual_job.as_ref().map(|j| format!(
             "building at {:?}: {}/{} blocks, blocked={}", j.origin,
             j.cursor, hut_plan(j.origin).len(), j.blocked
@@ -587,12 +598,12 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             farm.stage, farm.blocked, farm.completed_cycles
         )).unwrap_or_else(|| "no physical crop field".to_owned());
         reply(game, format!(
-            "{} development: autonomy={} | actors loaded {}/{} | {} finished PUBLIC huts, {} still without housing, {} abstract huts ready | {} | {} | {} player-owned parcels | treasury {} civic coins. On loaded natural land, workers should propose their own work; see logs if stuck.",
+            "{} development: autonomy={} | spawn reserved={} | UUID-linked actors loaded {}/{} | {} finished PUBLIC huts, {} still without housing, {} abstract huts ready | {} | {} | {} player-owned parcels | treasury {} civic coins. Diagnostic: {}.",
             village.name,
             if village.autonomy_enabled { "ON" } else { "OFF" },
-            linked.len(), village.population(), village.public_huts(), homeless,
+            village.actors_spawned, linked.len(), village.population(), village.public_huts(), homeless,
             village.pending_visual_buildings, job, field, village.player_parcels.len(),
-            village.treasury_coins
+            village.treasury_coins, note
         ));
         return;
     }
