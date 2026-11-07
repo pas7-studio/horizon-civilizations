@@ -271,7 +271,13 @@ fn guide_actors(game: &mut Game<'_>, world: &World) {
                      f64::from(target.stand[2]) + 0.5]
                 }
             } else if phase.on_shift(resident.job) && resident.job == Job::Farmer {
-                if let Some(farm) = &village.farm {
+                if village.wheat_delivery_pending() > 0 {
+                    // Confirmed mature wheat travels home with the actual
+                    // loaded farmer before it becomes village inventory.
+                    [f64::from(village.center[0]) + 0.5,
+                     f64::from(village.center[1]),
+                     f64::from(village.center[2] - 3) + 0.5]
+                } else if let Some(farm) = &village.farm {
                     [f64::from(farm.origin[0]) + 0.5,
                      f64::from(farm.origin[1]),
                      f64::from(farm.origin[2] - 3) + 0.5]
@@ -1857,6 +1863,35 @@ fn barrel_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
     Ok(())
 }
 
+/// One physical farmer delivery per village, after an actual UUID-linked
+/// villager has returned from a fully confirmed crop harvest to the hall.
+fn farmer_delivery_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), String> {
+    if !DailyPhase::at(game.world.day_time).on_shift(Job::Farmer) { return Ok(()); }
+    let dim = game.dim.id().to_owned();
+    let ids: Vec<u64> = state.world.as_ref().unwrap().settlements.values()
+        .filter(|v| v.dimension == dim && v.wheat_delivery_pending() > 0)
+        .map(|v| v.id).collect();
+    for id in ids {
+        let world = state.world.as_ref().unwrap();
+        let v = &world.settlements[&id];
+        let loaded = loaded_actors(game, world, id);
+        let returned = v.residents.iter().filter(|r| r.alive && r.job == Job::Farmer)
+            .any(|r| loaded.iter().any(|(known, mob)| *known == r.id
+                && game.native_mob(&dim, *mob).is_some_and(|actor| {
+                    let dx = actor.pos[0] - f64::from(v.center[0]);
+                    let dz = actor.pos[2] - f64::from(v.center[2]);
+                    dx * dx + dz * dz <= 8.0 * 8.0
+                })));
+        if !returned { continue; }
+        let before = state.world.as_ref().unwrap().clone();
+        if state.world.as_mut().unwrap().deliver_farm_wheat(id)? {
+            save_autonomous(state, before)?;
+        }
+        return Ok(());
+    }
+    Ok(())
+}
+
 /// One bounded planning step per 100 loaded level ticks. NPCs choose free
 /// natural plots *inside their settlement radius* and start actual physical
 /// jobs. Paid player parcels are hard exclusions in BOTH domain paths.
@@ -2253,6 +2288,13 @@ pub fn level_tick(game: &mut Game<'_>, dimension: &str) {
         }
     }
     if state.physical_ticks % 8 == 0 {
+        if let Err(error) = farmer_delivery_one_step(game, state) {
+            log::warn!("[civilizations] returning wheat to hall failed: {error}");
+            if error.starts_with("persistence:") {
+                state.problem = Some(error);
+                return;
+            }
+        }
         if let Err(error) = barrel_one_step(game, state) {
             log::warn!("[civilizations] native barrel transfer paused: {error}");
             if error.starts_with("persistence:") {
