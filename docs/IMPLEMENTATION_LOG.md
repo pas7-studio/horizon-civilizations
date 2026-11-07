@@ -732,7 +732,7 @@
 - Added player-facing, read-only `/civ nearby` command: sorted by horizontal
   distance in current dimension, bounded top four, coordinates/directions,
   hall status and joining hint. Existing commands still available.
-- Added five Rust domain tests and eleven Python source contracts; checked
+- Added six Rust domain tests and eleven Python source contracts; checked
   26/26 targeted exact-source invariants, but there is NO Rust compiler or
   native Horizon client available in this execution environment.
 - New PLAYTEST and acceptance 307–318. No new physical resource mint,
