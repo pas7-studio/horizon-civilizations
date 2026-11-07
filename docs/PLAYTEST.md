@@ -113,10 +113,10 @@ Run [TEST_PLAN](TEST_PLAN.md) steps 60–66, preserving screenshots and
 logs for actual pathfinding evidence. No sleeps/beds or full house
 ownership are claimed; no Actions workflows are used.
 
-## Offline-first local compile (stacked v0.1.13, no GitHub Actions)
+## Offline-first local compile (stacked v0.1.14, no GitHub Actions)
 
-PR #21 is stacked on #20 → #19 → #18 → #17 → #16 → #15. Check out
-`feat/native-barrel-inventory-v0113` when testing **all seven
+PR #22 is stacked on #21 → #20 → #19 → #18 → #17 → #16 → #15. Check out
+`feat/physical-bakery-economy-v0114` when testing **all eight
 features together**, not `main` or an older GitHub Windows artifact.
 
 From PowerShell in the local repository with Rust 1.95.0, Git, Python 3.11+
@@ -167,7 +167,7 @@ as an exact future simulation or a financial ledger.
 
 Instead of manually repeating the Rust and Python commands above, use
 `./scripts/validate-local.ps1 -Format` on a fresh checkout of
-`feat/native-barrel-inventory-v0113`, followed by
+`feat/physical-bakery-economy-v0114`, followed by
 `./scripts/validate-local.ps1 -BuildClient` for the pinned native
 integration and executable. Omit `-Format` to refuse unformatted sources
 without modifying them. `-Format` explicitly changes local source files;
@@ -227,7 +227,7 @@ cases 99–102.
 
 ## First real town hall and resource acquisition test — v0.1.12
 
-Use `feat/native-barrel-inventory-v0113`, not `main`. The previous
+Use `feat/physical-bakery-economy-v0114`, not `main`. The previous
 autonomous-source release can appear idle because it only had virtual
 materials and no central functional building. In a **disposable** grassy
 world, issue `/civ found Ashford`; wait for loaded NPCs and run:
@@ -263,7 +263,7 @@ GitHub Actions are intentionally disabled; run only local validation.
 ## Real native barrel / NPC courier acceptance — v0.1.13
 
 The newest full stacked implementation lives on
-`feat/native-barrel-inventory-v0113`. In a **disposable** world with a
+`feat/physical-bakery-economy-v0114`. In a **disposable** world with a
 completed physical civic hall, keep the central chunks loaded. Use:
 
 ```text
@@ -293,3 +293,51 @@ Do not use a valuable world for initial tests. Check [TEST_PLAN](TEST_PLAN.md)
 cases 120–138 and preserve logs if a transaction is blocked; there is
 intentionally NO blind recovery path. Native console/physical E2E is
 not done. GitHub Actions remain disabled.
+
+## Play the first real NPC production workshop — v0.1.14
+
+Use the FULL stacked source branch:
+`feat/physical-bakery-economy-v0114` (NOT the old main build).
+In a disposable world, complete the physical town hall with its genuine
+material supply; keep hall, field, and NPCs loaded. No special operator
+permission is needed to start the bakery: the native day planner reserves
+a clear separate plot when UUID-linked Bakers and Builders are present.
+
+```text
+/civ found Ashford
+/civ hall Ashford
+/civ bakery Ashford
+/civ warehouse Ashford
+/civ farming Ashford
+/civ roster Ashford
+```
+
+The first hall needs 24 oak logs +25 cobble. The bakery *later* requires
+24 additional oak logs +33 cobble from the native public barrels.
+Builders go back to hall to collect these items before actually placing
+the crafting table/smoker and the building's shell. Use
+`/civ bakery Ashford` to inspect missing materials, cursor and integrity.
+
+Once completed, bring real wheat to the hall:
+
+```text
+/civ sell wheat 12
+/civ warehouse Ashford
+/civ bakery Ashford
+```
+
+The steward must deposit the wheat in real vanilla barrels. Baker walks
+to hall, withdraws three real wheat items, travels to the bakery, uses
+its verified actual workstation to produce exactly one bread receipt,
+returns to hall, and steward inserts a **real `minecraft:bread` stack**
+in the town hall barrel. Test `/civ buy bread 1` nearby.
+
+Ordinary players should NOT be able to open the public barrels without
+trading, pull them using vanilla hoppers or break public structures. A
+player who purchases a village plot **may** edit their own property.
+Operator bypass remains for manual repairs, and other vanilla storage
+must still work.
+
+**This is source-only until tested.** GitHub Actions remain disabled.
+Stop at any blocked native transaction; never repeatedly retry a crashed
+order or force-merge into main. [TEST_PLAN](TEST_PLAN.md) cases 139–158.

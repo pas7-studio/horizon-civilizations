@@ -85,7 +85,7 @@ class CivicCouncilContracts(unittest.TestCase):
         mixin = tomllib.loads((ROOT / "mixins/civilizations/horizon-mixin.toml").read_text())
         self.assertEqual(cargo["package"]["version"], mixin["mod"]["version"])
         self.assertEqual(mixin["mod"]["version"], cargo["package"]["version"])
-        self.assertEqual(len(mixin["injection"]), 7)
+        self.assertEqual(len(mixin["injection"]), 9)
         self.assertIn("pub const SCHEMA: u32 = 1;", CORE)
         self.assertNotIn("pub council:", CORE)
         self.assertNotIn("pub forecast:", CORE)

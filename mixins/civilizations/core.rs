@@ -402,6 +402,11 @@ pub const HALL_WOOD_LOGS: u32 = 24;
 pub const HALL_COBBLESTONE: u32 = 25;
 pub const HUT_WOOD_LOGS: u32 = 20;
 pub const HUT_COBBLESTONE: u32 = 25;
+/// Includes real wheat-processing workstations as well as the shell.
+pub const BAKERY_WOOD_LOGS: u32 = 24;
+pub const BAKERY_COBBLESTONE: u32 = 33;
+pub const BREAD_WHEAT_RECIPE: u32 = 3;
+
 
 pub fn town_hall_plan(origin: [i32; 3]) -> Vec<HutBlock> {
     let mut plan = hut_plan(origin);
@@ -411,6 +416,23 @@ pub fn town_hall_plan(origin: [i32; 3]) -> Vec<HutBlock> {
         (-1, -1, "minecraft:oak_sign"),
         (1, -1, "minecraft:oak_sign"),
         (0, 1, "minecraft:lectern"),
+    ] {
+        plan.push(HutBlock {
+            pos: [origin[0] + dx, origin[1], origin[2] + dz],
+            block, floor: false,
+        });
+    }
+    plan
+}
+
+/// Physical independent workshop: walls and floor like a village hut,
+/// with an actual crafting table and smoker. Bread is crafted from three
+/// real wheat items at the table; a smoker is a visible workplace detail.
+pub fn bakery_plan(origin: [i32; 3]) -> Vec<HutBlock> {
+    let mut plan = hut_plan(origin);
+    for (dx, dz, block) in [
+        (-1, 0, "minecraft:crafting_table"),
+        (1, 0, "minecraft:smoker"),
     ] {
         plan.push(HutBlock {
             pos: [origin[0] + dx, origin[1], origin[2] + dz],
@@ -435,6 +457,10 @@ pub enum BarrelDirection {
     ToBarrel,
     /// One physical barrel item becomes protected build escrow.
     ToBuilder,
+    /// A builder collects the physical bakery's full materials.
+    ToBakeryBuilder,
+    /// A baker picks up real wheat for one or more vanilla bread recipes.
+    ToBakerIngredients,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -465,7 +491,9 @@ impl BarrelTransfer {
     pub fn expected_after(&self) -> Option<u32> {
         match self.direction {
             BarrelDirection::ToBarrel => self.before.checked_add(self.count),
-            BarrelDirection::ToBuilder => self.before.checked_sub(self.count),
+            BarrelDirection::ToBuilder
+            | BarrelDirection::ToBakeryBuilder
+            | BarrelDirection::ToBakerIngredients => self.before.checked_sub(self.count),
         }
     }
 }
@@ -487,6 +515,26 @@ pub struct MarketPurchase {
     pub slot: usize,
     pub before: u32,
     pub phase: MarketPhase,
+}
+
+/// The village has a single physical bakery, never a simulated abstract
+/// building that can create bread without extracting real wheat.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BakeryWorkshop {
+    pub origin: [i32; 3],
+    pub building: Option<VisualBuildJob>,
+    pub complete: bool,
+    pub supplies_reserved: bool,
+    #[serde(default)]
+    pub construction_escrow: BTreeMap<Good, u32>,
+    /// Plain native wheat physically taken from the hall's barrels.
+    #[serde(default)]
+    pub wheat_escrow: u32,
+    /// Newly crafted bread carried by a UUID-bound baker returning home.
+    #[serde(default)]
+    pub bread_in_transit: u32,
+    #[serde(default)]
+    pub batches: u64,
 }
 
 /// Bulletin signs are real blocks inside the civic hall; the native adapter
@@ -580,6 +628,30 @@ pub fn inspect_town_hall(
         }
         let replaceable = if step.floor { is_ground(&actual) } else { actual == "minecraft:air" };
         if !replaceable { return BuildInspection::Blocked { position: step.pos, found: actual }; }
+        if index < job.cursor { return BuildInspection::Rewind(index); }
+        return BuildInspection::Place {
+            position: step.pos, old_block: actual, new_block: step.block,
+        };
+    }
+    BuildInspection::Complete
+}
+
+/// Check actual vanilla workshop blocks before advancing each saved step.
+pub fn inspect_bakery(
+    job: &VisualBuildJob, mut read: impl FnMut([i32; 3]) -> Option<String>
+) -> BuildInspection {
+    if job.blocked { return BuildInspection::Paused; }
+    let plan = bakery_plan(job.origin);
+    if job.cursor > plan.len() { return BuildInspection::InvalidCursor; }
+    for (index, step) in plan.iter().enumerate() {
+        if index > job.cursor { break; }
+        let Some(actual) = read(step.pos) else { return BuildInspection::Unloaded; };
+        if actual == step.block {
+            if index == job.cursor { return BuildInspection::Advance; }
+            continue;
+        }
+        let replaceable = if step.floor { is_ground(&actual) } else { actual == "minecraft:air" };
+        if !replaceable { return BuildInspection::Blocked {position: step.pos, found: actual}; }
         if index < job.cursor { return BuildInspection::Rewind(index); }
         return BuildInspection::Place {
             position: step.pos, old_block: actual, new_block: step.block,
@@ -841,6 +913,9 @@ pub struct Settlement {
     /// UUID-linked farmers toward the central village receiving area.
     #[serde(default)]
     pub wheat_in_transit: u32,
+    /// One physical bakery, built and operated by actual NPC workers.
+    #[serde(default)]
+    pub bakery: Option<BakeryWorkshop>,
     /// Active physical civic hall construction; never inferred from a JSON
     /// house counter, and can resume after restarting with observed blocks.
     #[serde(default)]
@@ -1253,6 +1328,20 @@ impl World {
                     return Err("invalid pending native market purchase".into());
                 }
             }
+            if let Some(b) = &village.bakery {
+                if !village.hall_complete
+                    || i64::from(b.origin[0]).abs() > 29_999_988
+                    || i64::from(b.origin[2]).abs() > 29_999_988
+                    || !(-2046..=2046).contains(&b.origin[1])
+                    || b.wheat_escrow > BREAD_WHEAT_RECIPE || b.bread_in_transit > 8
+                    || b.construction_escrow.values().any(|&amount| amount > BAKERY_COBBLESTONE)
+                    || (b.complete && (b.building.is_some() || !b.supplies_reserved))
+                    || (!b.complete && b.building.is_none())
+                    || b.building.as_ref().is_some_and(|job|
+                        job.origin != b.origin || job.cursor > bakery_plan(b.origin).len()) {
+                    return Err("invalid saved physical bakery state".into());
+                }
+            }
             if village.wheat_in_transit > 10_000_000 {
                 return Err("wheat in physical transit exceeds cap".into());
             }
@@ -1274,6 +1363,16 @@ impl World {
                     _ => {}
                 }
             }
+                match t.direction {
+                    BarrelDirection::ToBakeryBuilder if t.slot.is_none()
+                        || !matches!(t.good, Good::Wood | Good::Stone)
+                        || village.bakery.is_none() =>
+                        return Err("invalid native bakery material extraction".into()),
+                    BarrelDirection::ToBakerIngredients if t.slot.is_none()
+                        || t.good != Good::Wheat || village.bakery.is_none() =>
+                        return Err("invalid native baker wheat extraction".into()),
+                    _ => {}
+                }
             if village.hall_complete && village.hall_job.is_some() {
                 return Err("civic hall cannot be simultaneously complete and under construction".into());
             }
@@ -1464,6 +1563,7 @@ impl World {
             barrel_transfer: None,
             market_purchase: None,
             wheat_in_transit: 0,
+            bakery: None,
             hall_job: None,
             hall_complete: false,
             gather_job: None,
@@ -1537,7 +1637,8 @@ impl World {
             }
             if other.visual_sites.iter().any(|&site| distance(site, origin) < 9_i128 * 9)
                 || other.visual_job.as_ref().is_some_and(|job| distance(job.origin, origin) < 9_i128 * 9)
-                || other.farm.as_ref().is_some_and(|farm| distance(farm.origin, origin) < 9_i128 * 9) {
+                || other.farm.as_ref().is_some_and(|farm| distance(farm.origin, origin) < 9_i128 * 9)
+                || other.bakery.as_ref().is_some_and(|b| distance(b.origin, origin) < 9_i128 * 9) {
                 return Err("plot overlaps an existing civilization structure or farm".into());
             }
         }
@@ -1563,6 +1664,118 @@ impl World {
         Ok(origin)
     }
 
+    /// The default-on village reserves a 5x5 public bakery plot after its
+    /// hall is constructed. The native server must independently preflight
+    /// loaded real ground and clear air before calling this domain method.
+    pub fn start_bakery(&mut self, id: u64, origin: [i32; 3]) -> Result<(), String> {
+        let village = self.settlements.get(&id).ok_or("unknown village")?;
+        if !village.autonomy_enabled || !village.hall_complete {
+            return Err("village needs a completed hall and active autonomy".into());
+        }
+        if village.bakery.is_some() { return Err("bakery already reserved or constructed".into()); }
+        if village.count(Job::Builder) == 0 || village.count(Job::Baker) == 0 {
+            return Err("bakery requires a living builder and baker".into());
+        }
+        if i64::from(origin[0]).abs() > 29_999_988
+            || i64::from(origin[2]).abs() > 29_999_988
+            || !(-2046..=2046).contains(&origin[1]) {
+            return Err("bakery plot outside safe construction bounds".into());
+        }
+        let dx = i128::from(origin[0]) - i128::from(village.center[0]);
+        let dz = i128::from(origin[2]) - i128::from(village.center[2]);
+        if !(12_i128 * 12..=80_i128 * 80).contains(&(dx * dx + dz * dz)) {
+            return Err("bakery must be 12..80 blocks from its hall".into());
+        }
+        for other in self.settlements.values().filter(|s| s.dimension == village.dimension) {
+            if near_plot(other.center, origin)
+                || other.player_parcels.iter().any(|p| near_plot(p.origin, origin))
+                || other.visual_sites.iter().any(|s| near_plot(*s, origin))
+                || other.visual_job.as_ref().is_some_and(|job| near_plot(job.origin, origin))
+                || other.farm.as_ref().is_some_and(|p| near_plot(p.origin, origin))
+                || other.bakery.as_ref().is_some_and(|b| near_plot(b.origin, origin)) {
+                return Err("bakery would overlap an owned plot or another physical structure".into());
+            }
+        }
+        let v = self.settlements.get_mut(&id).unwrap();
+        v.bakery = Some(BakeryWorkshop {
+            origin,
+            building: Some(VisualBuildJob { origin, cursor: 0, blocked: false }),
+            complete: false, supplies_reserved: false,
+            construction_escrow: BTreeMap::new(),
+            wheat_escrow: 0, bread_in_transit: 0, batches: 0,
+        });
+        let name = v.name.clone();
+        self.event(format!("{name}: planned real public bakery at {origin:?}"));
+        Ok(())
+    }
+
+    /// Materials are physically extracted from real hall barrels by the
+    /// native bridge BEFORE this call, into the bakery-specific escrow.
+    pub fn reserve_bakery_supplies(&mut self, id: u64) -> Result<bool, String> {
+        let bakery = self.settlements.get_mut(&id).ok_or("unknown village")?
+            .bakery.as_mut().ok_or("no bakery project")?;
+        if bakery.complete || bakery.supplies_reserved { return Ok(false); }
+        let job = bakery.building.as_ref().ok_or("no bakery construction job")?;
+        if job.blocked || job.cursor != 0 {
+            return Err("unfunded partial bakery job must be inspected".into());
+        }
+        if bakery.construction_escrow.get(&Good::Wood).copied().unwrap_or(0) < BAKERY_WOOD_LOGS
+            || bakery.construction_escrow.get(&Good::Stone).copied().unwrap_or(0) < BAKERY_COBBLESTONE {
+            return Ok(false);
+        }
+        *bakery.construction_escrow.get_mut(&Good::Wood).unwrap() -= BAKERY_WOOD_LOGS;
+        *bakery.construction_escrow.get_mut(&Good::Stone).unwrap() -= BAKERY_COBBLESTONE;
+        bakery.supplies_reserved = true;
+        Ok(true)
+    }
+
+    pub fn finish_bakery(&mut self, id: u64) -> Result<(), String> {
+        let v = self.settlements.get_mut(&id).ok_or("unknown village")?;
+        let bakery = v.bakery.as_mut().ok_or("no bakery")?;
+        let job = bakery.building.as_ref().ok_or("no bakery construction job")?;
+        if bakery.complete || !bakery.supplies_reserved
+            || job.cursor != bakery_plan(job.origin).len() {
+            return Err("unfunded or physically incomplete bakery cannot open".into());
+        }
+        bakery.building = None;
+        bakery.complete = true;
+        let name = v.name.clone();
+        self.event(format!("{name}: verified bakery opened at {:?}", bakery.origin));
+        Ok(())
+    }
+
+    /// At the physically present crafting table, turn three actually
+    /// extracted native wheat items into ONE bread. Output is a saved
+    /// delivery receipt, not an abstract daily-production bonus.
+    pub fn craft_bread(&mut self, id: u64) -> Result<bool, String> {
+        let village = self.settlements.get_mut(&id).ok_or("unknown village")?;
+        if village.count(Job::Baker) == 0 { return Ok(false); }
+        let b = village.bakery.as_mut().ok_or("no bakery")?;
+        if !b.complete || b.wheat_escrow < BREAD_WHEAT_RECIPE
+            || b.bread_in_transit >= 8 { return Ok(false); }
+        let next = b.batches.checked_add(1).ok_or("bread production counter overflow")?;
+        b.wheat_escrow -= BREAD_WHEAT_RECIPE;
+        b.bread_in_transit += 1;
+        b.batches = next;
+        let name = village.name.clone();
+        self.event(format!("{name}: real baker made one bread from three native wheat items"));
+        Ok(true)
+    }
+
+    /// A UUID-bound baker must first return to the hall; then their
+    /// completed bread enters the steward's bounded delivery queue.
+    pub fn deliver_bakery_bread(&mut self, id: u64) -> Result<bool, String> {
+        let v = self.settlements.get_mut(&id).ok_or("unknown village")?;
+        let pending = v.bakery.as_ref().ok_or("no bakery")?.bread_in_transit;
+        if pending == 0 { return Ok(false); }
+        v.warehouse_credit(Good::Bread, pending)?;
+        let b = v.bakery.as_mut().unwrap();
+        b.bread_in_transit = 0;
+        let name = v.name.clone();
+        self.event(format!("{name}: baker delivered {pending} crafted bread to the hall"));
+        Ok(true)
+    }
+
     /// Reserve the actual resource budget for the village's one central hall.
     /// No free town hall spawns in a new or migrated world.
     pub fn reserve_town_hall(&mut self, village_id: u64) -> Result<bool, String> {
@@ -1583,6 +1796,7 @@ impl World {
             || s.visual_sites.iter().any(|site| near_plot(*site, v.center))
             || s.visual_job.as_ref().is_some_and(|job| near_plot(job.origin, v.center))
             || s.farm.as_ref().is_some_and(|farm| near_plot(farm.origin, v.center))
+            || s.bakery.as_ref().is_some_and(|b| near_plot(b.origin, v.center))
         }) {
             return Err("civic hall site overlaps a registered building or player parcel".into());
         }
@@ -1653,6 +1867,34 @@ impl World {
                     return Err("missing native barrel item/slot for extraction".into());
                 }
             }
+            BarrelDirection::ToBakeryBuilder => {
+                let bakery = v.bakery.as_ref().ok_or("no planned bakery")?;
+                if bakery.building.is_none() || bakery.supplies_reserved || bakery.complete {
+                    return Err("no unfunded physical bakery project".into());
+                }
+                let required = match good {
+                    Good::Wood => BAKERY_WOOD_LOGS,
+                    Good::Stone => BAKERY_COBBLESTONE,
+                    _ => return Err("bakery construction requires wood or cobblestone".into()),
+                };
+                if bakery.construction_escrow.get(&good).copied().unwrap_or(0)
+                    .checked_add(count).is_none_or(|n| n > required) {
+                    return Err("bakery materials exceed the real construction bill".into());
+                }
+                if before < count || slot.is_none() {
+                    return Err("no verified native barrel slot for bakery supplies".into());
+                }
+            }
+            BarrelDirection::ToBakerIngredients => {
+                let bakery = v.bakery.as_ref().ok_or("no bakery")?;
+                if !bakery.complete || good != Good::Wheat || slot.is_none()
+                    || before < count || bakery.wheat_escrow
+                        .checked_add(count).is_none_or(|n| n > BREAD_WHEAT_RECIPE)
+                    || bakery.bread_in_transit != 0 {
+                    return Err("baker cannot take additional unverified wheat".into());
+                }
+            }
+
         }
         self.settlements.get_mut(&id).unwrap().barrel_transfer = Some(BarrelTransfer {
             position, good, direction, phase: BarrelPhase::Planned, before, count, slot,
@@ -1688,6 +1930,17 @@ impl World {
                 let previous = v.build_escrow.get(&good).copied().unwrap_or(0);
                 let next = previous.checked_add(count).ok_or("building escrow overflow")?;
                 v.build_escrow.insert(good, next);
+            }
+            BarrelDirection::ToBakeryBuilder => {
+                let b = v.bakery.as_mut().ok_or("no bakery")?;
+                let prev = b.construction_escrow.get(&good).copied().unwrap_or(0);
+                b.construction_escrow.insert(good, prev.checked_add(count)
+                    .ok_or("bakery materials overflow")?);
+            }
+            BarrelDirection::ToBakerIngredients => {
+                let b = v.bakery.as_mut().ok_or("no bakery")?;
+                b.wheat_escrow = b.wheat_escrow.checked_add(count)
+                    .ok_or("baker wheat carry overflow")?;
             }
         }
         v.barrel_transfer = None;
@@ -1795,7 +2048,10 @@ impl World {
                 || other.visual_sites.iter().any(|site|
                     near_plot(*site, position) || near_plot(*site, stand))
                 || other.visual_job.as_ref().is_some_and(|job| near_plot(job.origin, position))
-                || other.farm.as_ref().is_some_and(|farm| near_plot(farm.origin, position)) {
+                || other.farm.as_ref().is_some_and(|farm| near_plot(farm.origin, position))
+                || other.bakery.as_ref().is_some_and(|b| {
+                    near_plot(b.origin, position) || near_plot(b.origin, stand)
+                }) {
                 return Err("natural resource overlaps a building, town hall or player claim".into());
             }
         }
@@ -1899,8 +2155,9 @@ impl World {
             if other.player_parcels.iter().any(|plot| near_plot(plot.origin, origin))
                 || other.visual_sites.iter().any(|site| near_plot(*site, origin))
                 || other.visual_job.as_ref().is_some_and(|job| near_plot(job.origin, origin))
-                || other.farm.as_ref().is_some_and(|farm| near_plot(farm.origin, origin)) {
-                return Err("land overlaps a registered building, field or another player's parcel".into());
+                || other.farm.as_ref().is_some_and(|farm| near_plot(farm.origin, origin))
+                || other.bakery.as_ref().is_some_and(|b| near_plot(b.origin, origin)) {
+                return Err("land overlaps a registered building, field, bakery or another player's parcel".into());
             }
         }
         self.players.get_mut(player_id).unwrap().coins -= LAND_PRICE_COINS;
@@ -2082,7 +2339,8 @@ impl World {
             }
             if s.farm.as_ref().is_some_and(|p| distance(p.origin, origin) < 9 * 9)
                 || s.visual_job.as_ref().is_some_and(|p| distance(p.origin, origin) < 9 * 9)
-                || s.visual_sites.iter().any(|&site| distance(site, origin) < 9 * 9) {
+                || s.visual_sites.iter().any(|&site| distance(site, origin) < 9 * 9)
+                || s.bakery.as_ref().is_some_and(|b| distance(b.origin, origin) < 9 * 9) {
                 return Err("farm overlaps an existing civilization structure".into());
             }
         }
@@ -2300,6 +2558,41 @@ impl World {
         s.warehouse_debit(good, count)?;
         self.players.get_mut(player_id).ok_or("no player")?.coins -= cost;
         Ok(cost)
+    }
+
+    /// Pure authorisation for native player block-breaking hook: purchased
+    /// land belongs to its authenticated owner, while shared civic plots,
+    /// native farms and physical workshop footprints are protected.
+    /// OP bypass is handled separately by the native host's permission.
+    pub fn player_may_break(&self, player: &str, dimension: &str, pos: [i32; 3]) -> bool {
+        let in_hut = |origin: [i32;3]| {
+            (i64::from(pos[0]) - i64::from(origin[0])).abs() <= 2
+                && (i64::from(pos[2]) - i64::from(origin[2])).abs() <= 2
+                && (-1..=3).contains(&(i64::from(pos[1]) - i64::from(origin[1])))
+        };
+        let in_field = |origin: [i32;3]| {
+            (i64::from(pos[0]) - i64::from(origin[0])).abs() <= 1
+                && (i64::from(pos[2]) - i64::from(origin[2])).abs() <= 1
+                && (i64::from(pos[1]) - i64::from(origin[1])).abs() <= 2
+        };
+        for v in self.settlements.values().filter(|v| v.dimension == dimension) {
+            // Private property is protected from other players; the owner
+            // retains the right to edit bought plots and completed houses.
+            if let Some(lot) = v.player_parcels.iter().find(|lot| in_hut(lot.origin)) {
+                if lot.owner != player { return false; }
+                continue;
+            }
+            if (v.hall_complete || v.hall_job.is_some()) && in_hut(v.center) {
+                return false;
+            }
+            if v.bakery.as_ref().is_some_and(|b| in_hut(b.origin))
+                || v.farm.as_ref().is_some_and(|f| in_field(f.origin))
+                || v.visual_sites.iter().any(|site| in_hut(*site))
+                || v.visual_job.as_ref().is_some_and(|job| in_hut(job.origin)) {
+                return false;
+            }
+        }
+        true
     }
 
     pub fn relation(&self, a: u64, b: u64) -> i16 {
@@ -4077,5 +4370,212 @@ mod native_barrel_transactions_tests {
         world.confirm_barrel_transfer(id, 8).unwrap();
         assert_eq!(world.settlements[&id].warehouse_quantity(Good::Wheat), 8);
         world.validate().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod native_bakery_economy_tests {
+    use super::*;
+
+    fn village() -> (World,u64) {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0,70,0], "owner").unwrap();
+        (world,id)
+    }
+    fn hall() -> (World,u64) {
+        let (mut world,id) = village();
+        world.settlements.get_mut(&id).unwrap().hall_complete = true;
+        (world,id)
+    }
+    fn ready_bakery() -> (World,u64) {
+        let (mut world,id) = hall();
+        world.start_bakery(id,[24,70,0]).unwrap();
+        {
+            let b = world.settlements.get_mut(&id).unwrap().bakery.as_mut().unwrap();
+            b.construction_escrow.insert(Good::Wood, BAKERY_WOOD_LOGS);
+            b.construction_escrow.insert(Good::Stone, BAKERY_COBBLESTONE);
+        }
+        assert!(world.reserve_bakery_supplies(id).unwrap());
+        world.settlements.get_mut(&id).unwrap().bakery.as_mut().unwrap()
+            .building.as_mut().unwrap().cursor = bakery_plan([24,70,0]).len();
+        world.finish_bakery(id).unwrap();
+        world.validate().unwrap();
+        (world,id)
+    }
+
+    #[test]
+    fn native_bakery_has_one_crafting_table_and_real_workstation() {
+        let blueprint = bakery_plan([24,70,0]);
+        let positions: BTreeSet<_> = blueprint.iter().map(|b| b.pos).collect();
+        assert_eq!(positions.len(), blueprint.len());
+        assert_eq!(blueprint.iter().filter(|b| b.block == "minecraft:crafting_table").count(),1);
+        assert_eq!(blueprint.iter().filter(|b| b.block == "minecraft:smoker").count(),1);
+        assert_eq!(blueprint.iter().filter(|b| b.floor).count(),25);
+        assert_eq!(blueprint,bakery_plan([24,70,0]));
+    }
+
+    #[test]
+    fn legacy_saves_do_not_forge_a_free_existing_bakery() {
+        let (world,id)=village();
+        let json=serde_json::to_string(&world).unwrap();
+        let mut value: serde_json::Value=serde_json::from_str(&json).unwrap();
+        value["settlements"].as_object_mut().unwrap()
+            .get_mut(&id.to_string()).unwrap().as_object_mut().unwrap().remove("bakery");
+        let migrated: World=serde_json::from_value(value).unwrap();
+        migrated.validate().unwrap();
+        assert!(migrated.settlements[&id].bakery.is_none());
+    }
+
+    #[test]
+    fn bakery_requires_real_hall_and_an_unclaimed_safe_plot() {
+        let (mut world,id)=village();
+        assert!(world.start_bakery(id,[24,70,0]).is_err());
+        world.settlements.get_mut(&id).unwrap().hall_complete=true;
+        assert!(world.start_bakery(id,[2,70,0]).is_err());
+        world.buy_plot("owner",id,[24,70,0]).unwrap();
+        assert!(world.start_bakery(id,[24,70,0]).is_err());
+        world.start_bakery(id,[40,70,0]).unwrap();
+        assert!(world.start_bakery(id,[60,70,0]).is_err());
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn unbacked_bakery_never_constructs_and_funding_is_once_only() {
+        let (mut world,id)=hall();
+        world.start_bakery(id,[24,70,0]).unwrap();
+        let v=world.settlements.get_mut(&id).unwrap();
+        v.warehouse_credit(Good::Wood,100).unwrap();
+        v.warehouse_credit(Good::Stone,100).unwrap();
+        assert!(!world.reserve_bakery_supplies(id).unwrap()); // queue is not a real barrel
+        assert!(world.finish_bakery(id).is_err());
+        {
+            let b=world.settlements.get_mut(&id).unwrap().bakery.as_mut().unwrap();
+            b.construction_escrow.insert(Good::Wood,BAKERY_WOOD_LOGS);
+            b.construction_escrow.insert(Good::Stone,BAKERY_COBBLESTONE-1);
+        }
+        assert!(!world.reserve_bakery_supplies(id).unwrap());
+        world.settlements.get_mut(&id).unwrap().bakery.as_mut().unwrap()
+            .construction_escrow.insert(Good::Stone,BAKERY_COBBLESTONE);
+        assert!(world.reserve_bakery_supplies(id).unwrap());
+        assert!(!world.reserve_bakery_supplies(id).unwrap());
+        assert_eq!(world.settlements[&id].warehouse_quantity(Good::Wood),100);
+        assert_eq!(world.settlements[&id].bakery.as_ref().unwrap()
+            .construction_escrow[&Good::Wood],0);
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn bakery_only_finishes_after_all_workstations_physically_verified() {
+        let (mut world,id)=hall();
+        world.start_bakery(id,[24,70,0]).unwrap();
+        assert_eq!(world.settlements[&id].bakery.as_ref().unwrap().complete,false);
+        assert!(world.finish_bakery(id).is_err());
+        let job=world.settlements[&id].bakery.as_ref().unwrap().building.as_ref().unwrap().clone();
+        assert!(matches!(inspect_bakery(&job, |_|None),BuildInspection::Unloaded));
+        let station=bakery_plan(job.origin).last().unwrap().pos;
+        assert!(matches!(inspect_bakery(&job, |p| if p==station {
+            Some("minecraft:player_block".into())
+        } else { Some("minecraft:air".into()) }),BuildInspection::Blocked {..}
+            | BuildInspection::Place {..}));
+        // Simulate the native world's complete observation, not merely
+        // declaring a structure built with abstract house counters.
+        let b=world.settlements.get_mut(&id).unwrap().bakery.as_mut().unwrap();
+        b.construction_escrow.insert(Good::Wood,BAKERY_WOOD_LOGS);
+        b.construction_escrow.insert(Good::Stone,BAKERY_COBBLESTONE);
+        world.reserve_bakery_supplies(id).unwrap();
+        world.settlements.get_mut(&id).unwrap().bakery.as_mut().unwrap()
+            .building.as_mut().unwrap().cursor = bakery_plan([24,70,0]).len();
+        world.finish_bakery(id).unwrap();
+        assert!(world.settlements[&id].bakery.as_ref().unwrap().complete);
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn real_barrel_materials_move_to_bakery_escrow_not_virtual_stock() {
+        let (mut world,id)=hall();
+        world.start_bakery(id,[24,70,0]).unwrap();
+        let pos=hall_storage_positions([0,70,0])[0];
+        assert!(world.plan_barrel_transfer(id,pos,Good::Bread,
+            BarrelDirection::ToBakeryBuilder,8,8,Some(0)).is_err());
+        world.plan_barrel_transfer(id,pos,Good::Wood,
+            BarrelDirection::ToBakeryBuilder,8,8,Some(0)).unwrap();
+        world.issue_barrel_transfer(id).unwrap();
+        assert!(world.confirm_barrel_transfer(id,8).is_err());
+        world.confirm_barrel_transfer(id,0).unwrap();
+        assert_eq!(world.settlements[&id].bakery.as_ref().unwrap()
+            .construction_escrow[&Good::Wood],8);
+        assert_eq!(world.settlements[&id].warehouse_quantity(Good::Wood),0);
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn a_baker_never_uses_virtual_stock_and_crafts_exact_recipe() {
+        let (mut world,id)=ready_bakery();
+        assert!(world.settlements[&id].quantity(Good::Wheat)>0);
+        assert_eq!(world.craft_bread(id),Ok(false));
+        let pos=hall_storage_positions([0,70,0])[1];
+        world.plan_barrel_transfer(id,pos,Good::Wheat,
+            BarrelDirection::ToBakerIngredients,3,3,Some(0)).unwrap();
+        world.issue_barrel_transfer(id).unwrap();
+        world.confirm_barrel_transfer(id,0).unwrap();
+        assert_eq!(world.settlements[&id].bakery.as_ref().unwrap().wheat_escrow,3);
+        assert_eq!(world.craft_bread(id),Ok(true));
+        assert_eq!(world.craft_bread(id),Ok(false));
+        let bakery=world.settlements[&id].bakery.as_ref().unwrap();
+        assert_eq!(bakery.wheat_escrow,0);
+        assert_eq!(bakery.bread_in_transit,1);
+        assert_eq!(bakery.batches,1);
+        assert_eq!(world.settlements[&id].warehouse_quantity(Good::Bread),0);
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn baker_delivers_one_receipt_then_steward_inserts_actual_bread() {
+        let (mut world,id)=ready_bakery();
+        let pos=hall_storage_positions([0,70,0])[1];
+        world.plan_barrel_transfer(id,pos,Good::Wheat,
+            BarrelDirection::ToBakerIngredients,3,3,Some(0)).unwrap();
+        world.issue_barrel_transfer(id).unwrap();
+        world.confirm_barrel_transfer(id,0).unwrap();
+        world.craft_bread(id).unwrap();
+        assert_eq!(world.deliver_bakery_bread(id),Ok(true));
+        assert_eq!(world.deliver_bakery_bread(id),Ok(false));
+        assert_eq!(world.settlements[&id].warehouse_quantity(Good::Bread),1);
+        assert_eq!(world.settlements[&id].bakery.as_ref().unwrap().bread_in_transit,0);
+        world.plan_barrel_transfer(id,pos,Good::Bread,
+            BarrelDirection::ToBarrel,0,1,None).unwrap();
+        world.issue_barrel_transfer(id).unwrap();
+        world.confirm_barrel_transfer(id,1).unwrap();
+        assert_eq!(world.settlements[&id].warehouse_quantity(Good::Bread),0);
+        assert_eq!(world.settlements[&id].bakery.as_ref().unwrap().batches,1);
+        let restored: World=serde_json::from_str(&serde_json::to_string(&world).unwrap()).unwrap();
+        restored.validate().unwrap();
+    }
+
+    #[test]
+    fn native_block_ownership_protects_public_work_and_private_lots() {
+        let (mut world,id)=ready_bakery();
+        assert!(!world.player_may_break("stranger","minecraft:overworld",[0,70,0]));
+        assert!(!world.player_may_break("stranger","minecraft:overworld",[24,70,0]));
+        assert!(world.player_may_break("stranger","minecraft:the_nether",[24,70,0]));
+        assert!(world.player_may_break("stranger","minecraft:overworld",[100,70,0]));
+        world.buy_plot("owner",id,[40,70,0]).unwrap();
+        assert!(world.player_may_break("owner","minecraft:overworld",[40,70,0]));
+        assert!(!world.player_may_break("stranger","minecraft:overworld",[40,70,0]));
+        assert!(world.player_may_break("stranger","minecraft:overworld",[40,60,0]));
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn bakery_job_rejects_blocked_or_overflowed_saved_work() {
+        let (mut world,id)=hall();
+        world.start_bakery(id,[24,70,0]).unwrap();
+        world.settlements.get_mut(&id).unwrap().bakery.as_mut().unwrap()
+            .building.as_mut().unwrap().cursor=bakery_plan([24,70,0]).len()+1;
+        assert!(world.validate().is_err());
+        world.settlements.get_mut(&id).unwrap().bakery.as_mut().unwrap()
+            .building.as_mut().unwrap().cursor=0;
+        world.settlements.get_mut(&id).unwrap().bakery.as_mut().unwrap().wheat_escrow=13;
+        assert!(world.validate().is_err());
     }
 }

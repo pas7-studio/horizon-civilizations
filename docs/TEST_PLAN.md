@@ -366,3 +366,64 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
      world load, and collect logs and game screenshots of actual physical
      barrel contents, working NPC couriers, purchases and construction.
      Source inspection alone cannot close this acceptance gate.
+
+## Physical bakery, native wheat → bread and public warehouse protection (v0.1.14)
+
+139. Check out `feat/physical-bakery-economy-v0114`, rebuild a real
+     Windows native Horizon client, and open a disposable level test world
+     with the completed public hall. GitHub Actions are intentionally OFF.
+140. With UUID-linked Bakers and Builders loaded, let the autonomous planner
+     choose a separate 5×5 bakery plot (12–80 blocks from the town center).
+     Verify it is physically empty, loaded, level and not player-owned.
+141. Inspect `/civ bakery NAME`: new bakery is PLANNED, not complete,
+     and cannot place even one block from virtual settlement wood/stone.
+142. Deliver 24 real oak logs and 33 real cobblestone by selling actual
+     player inventory. First observe receipt queue, then actual barrel slots.
+143. Builder physically walks back to town hall, extracts precisely the
+     24 logs/33 stone into bakery construction escrow, persists full bill,
+     walks to bakery site and builds floor/walls/roof one block at a time.
+144. Stop/restart while materials are partly extracted and while the
+     workshop is half built. No repeated item extraction and no cursor
+     advance without observing real native blocks. Wrong/player blocks
+     must pause the work without overwrite.
+145. Observe actual `minecraft:crafting_table` and `minecraft:smoker`
+     blocks inside the finished bakery, no duplicate positions.
+146. Supply at least three REAL `minecraft:wheat` items through the
+     village native storage. Baker must approach the hall's actual barrel,
+     extract three via a recorded transfer and travel to the workshop.
+147. With baker absent, dead, unloaded, off shift or workshop invalid,
+     confirmed native wheat in their escrow must NOT produce bread.
+148. With UUID-bound Baker near the intact native crafting table, confirm
+     3 physical wheat escrow become precisely 1 new bread-in-transit
+     record, not an instant player item or virtual daily stock.
+149. Baker returns to the public hall before the bread receipt enters
+     the steward's inbound queue; merchant/steward puts exactly one
+     native `minecraft:bread` ItemStack into the real barrel.
+150. Run `/civ buy bread 1` near a completed hall with enough coins.
+     Confirm 1 real native barrel bread is extracted and 1 added to
+     player inventory, once; city treasury/coin debit persists.
+151. Reboot with an issued wheat extraction or bread insertion. Compare
+     recorded expected counts with real barrel slots. Mismatches must
+     quarantine and NEVER auto-replay. No conversion without 3 wheat.
+152. Build a vanilla hopper pointing into/out of a public hall barrel.
+     Native API 334 must prevent all such moves; other players' hoppers
+     and ordinary vanilla barrels must continue normally.
+153. Try mining a public hall block, a public physical hut, a growing
+     field and the bakery as an ordinary player. Native API 14 must
+     stop breaking them without dropping stolen resources.
+154. Purchase a 5x5 player parcel. Its authenticated owner can alter
+     their own floor/walls; another non-OP player cannot. Wilderness
+     and structures in other dimensions remain untouched.
+155. As OP, deliberately inspect a protected hall for recovery; no
+     hidden permission bypass in NPC commands, property entitlement or
+     native inventory ownership.
+156. Create two separate villages with Baker NPCs; ensure neither can
+     withdraw wheat from the other village's public barrels, build on
+     the other's plots or credit its bread receipts.
+157. Unload bakery chunks or remove the real crafting table in a test
+     world. Bread production must pause with no fabricated items;
+     restored blocks do not retroactively double-complete batches.
+158. Save game logs plus screenshot/video evidence of the actual hall,
+     physical bakery under construction, completed workbench/smoker,
+     wheat extraction, real bread stack and successful bought bread.
+     Source-based tests do NOT close this gameplay acceptance gate.

@@ -1,8 +1,8 @@
 // Horizon bridge. All world logic lives in civilizations_core; this module
 // translates server hooks, commands, inventory changes, and native NPC spawns.
 use crate::game::{
-    civilizations_core::{farm_plan, hut_plan, town_hall_plan, hall_storage_positions,
-        BarrelDirection, BarrelPhase, inspect_farm, inspect_hut, inspect_town_hall, is_ground,
+    civilizations_core::{farm_plan, hut_plan, town_hall_plan, bakery_plan, hall_storage_positions,
+        BarrelDirection, BarrelPhase, inspect_farm, inspect_hut, inspect_town_hall, inspect_bakery, is_ground,
         BuildInspection, DailyPhase, FarmBlock, FarmDecision, FarmStage, Good, HomeSlot, Job, VisualBuildJob,
         World, inspect_home, hall_board_positions, HOUSING_PLOT_OFFSETS, MAX_HOUSING_SURVEY_RESULTS,
         MAX_SIM_DAYS},
@@ -153,7 +153,7 @@ pub fn register(commands: &mut Vec<NativeCommand>) {
         "civ homes <name:word>", "civ survey <name:word>",
         "civ council <name:word>", "civ forecast <name:word>",
         "civ plots <name:word>", "civ development <name:word>",
-        "civ hall <name:word>", "civ warehouse <name:word>",
+        "civ hall <name:word>", "civ warehouse <name:word>", "civ bakery <name:word>",
         "civ construction <name:word>", "civ farming <name:word>",
         "civ harvests <name:word>",
         "civ join <name:word>", "civ title", "civ promote", "civ history",
@@ -286,11 +286,49 @@ fn guide_actors(game: &mut Game<'_>, world: &World) {
                      f64::from(village.center[1] + offset[1]),
                      f64::from(village.center[2] + offset[2]) + 0.5]
                 }
+            } else if phase.on_shift(resident.job) && resident.job == Job::Baker {
+                if let Some(bakery) = &village.bakery {
+                    if bakery.complete {
+                        if bakery.bread_in_transit > 0 || bakery.wheat_escrow < crate::game::civilizations_core::BREAD_WHEAT_RECIPE {
+                            // Baker returns to the hall to deliver bread or
+                            // receive exactly three physical wheat items.
+                            [f64::from(village.center[0]) + 0.5,
+                             f64::from(village.center[1]),
+                             f64::from(village.center[2] - 3) + 0.5]
+                        } else {
+                            // Actual crafting table inside the completed
+                            // public bakery, not an abstract job offset.
+                            [f64::from(bakery.origin[0]) + 0.5,
+                             f64::from(bakery.origin[1]),
+                             f64::from(bakery.origin[2] - 3) + 0.5]
+                        }
+                    } else {
+                        [f64::from(village.center[0]) + 0.5,
+                         f64::from(village.center[1]),
+                         f64::from(village.center[2] - 3) + 0.5]
+                    }
+                } else {
+                    [f64::from(village.center[0] + offset[0]) + 0.5,
+                     f64::from(village.center[1] + offset[1]),
+                     f64::from(village.center[2] + offset[2]) + 0.5]
+                }
             } else if phase.on_shift(resident.job) && resident.job == Job::Builder {
                 if let Some(job) = &village.hall_job {
                     [f64::from(job.origin[0]) + 0.5,
                      f64::from(job.origin[1]),
                      f64::from(job.origin[2] - 4) + 0.5]
+                } else if village.bakery.as_ref().is_some_and(|b| b.building.is_some()) {
+                    let bakery = village.bakery.as_ref().unwrap();
+                    let site = bakery.building.as_ref().unwrap();
+                    if !bakery.supplies_reserved {
+                        [f64::from(village.center[0]) + 0.5,
+                         f64::from(village.center[1]),
+                         f64::from(village.center[2] - 3) + 0.5]
+                    } else {
+                        [f64::from(site.origin[0]) + 0.5,
+                         f64::from(site.origin[1]),
+                         f64::from(site.origin[2] - 4) + 0.5]
+                    }
                 } else if let Some(job) = &village.visual_job {
                     if village.hall_complete && !village.hut_supplies_reserved {
                         // Builders visit the actual town hall barrels first
@@ -414,6 +452,78 @@ fn build_town_hall_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Res
             );
             if !game.native_run_command(&cmd) {
                 log::warn!("[civilizations] civic hall block command refused: {cmd}");
+            }
+            Ok(())
+        }
+    }
+}
+
+/// A separate physically observed public bakery is constructed by an
+/// actual UUID-bound builder. It neither advances a private hut cursor nor
+/// consumes virtual stock; its full material bill was already extracted
+/// from real hall barrels into bakery-specific escrow and durably saved.
+fn build_bakery_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), String> {
+    if !DailyPhase::at(game.world.day_time).on_shift(Job::Builder) { return Ok(()); }
+    let dimension = game.dim.id().to_owned();
+    let selected = state.world.as_ref().unwrap().settlements.values()
+        .filter(|v| v.dimension == dimension)
+        .filter_map(|v| v.bakery.as_ref().and_then(|b|
+            b.building.as_ref().map(|job| (v.id, job.clone(), b.supplies_reserved))))
+        .find(|(_, job, _)| !job.blocked && game.world.loaded(job.origin[0], job.origin[2]));
+    let Some((id, job, funded)) = selected else { return Ok(()); };
+    if job.cursor > 0 && !funded {
+        return Err("unfunded bakery partial construction; inspect before resuming".into());
+    }
+    let inspection = inspect_bakery(&job, |point| world_block(game, &dimension, point));
+    match inspection {
+        BuildInspection::Unloaded | BuildInspection::Paused => Ok(()),
+        BuildInspection::InvalidCursor => Err("invalid bakery construction cursor".into()),
+        BuildInspection::Blocked {position, found} => {
+            let old = state.world.as_ref().unwrap().clone();
+            state.world.as_mut().unwrap().settlements.get_mut(&id).unwrap()
+                .bakery.as_mut().unwrap().building.as_mut().unwrap().blocked = true;
+            save_autonomous(state, old)?;
+            Err(format!("public bakery site blocked at {position:?} by {found}"))
+        }
+        BuildInspection::Rewind(cursor) => {
+            let old = state.world.as_ref().unwrap().clone();
+            state.world.as_mut().unwrap().settlements.get_mut(&id).unwrap()
+                .bakery.as_mut().unwrap().building.as_mut().unwrap().cursor = cursor;
+            save_autonomous(state, old)
+        }
+        BuildInspection::Advance => {
+            if !funded { return Err("bakery block exists without physical funding".into()); }
+            let old = state.world.as_ref().unwrap().clone();
+            state.world.as_mut().unwrap().settlements.get_mut(&id).unwrap()
+                .bakery.as_mut().unwrap().building.as_mut().unwrap().cursor += 1;
+            save_autonomous(state, old)
+        }
+        BuildInspection::Complete => {
+            if !funded { return Err("cannot complete unfunded bakery".into()); }
+            let old = state.world.as_ref().unwrap().clone();
+            state.world.as_mut().unwrap().finish_bakery(id)?;
+            save_autonomous(state, old)
+        }
+        BuildInspection::Place {position, old_block, new_block} => {
+            if !funded { return Ok(()); }
+            let world = state.world.as_ref().unwrap();
+            let linked = loaded_actors(game, world, id);
+            let v = &world.settlements[&id];
+            let nearby_builder = v.residents.iter()
+                .filter(|r| r.alive && r.job == Job::Builder)
+                .any(|r| linked.iter().any(|(known, mob)| *known == r.id
+                    && game.native_mob(&dimension, *mob).is_some_and(|actor| {
+                        let dx = actor.pos[0] - f64::from(job.origin[0]);
+                        let dz = actor.pos[2] - f64::from(job.origin[2]);
+                        dx * dx + dz * dz <= 9.0 * 9.0
+                    })));
+            if !nearby_builder { return Ok(()); }
+            let [x,y,z] = position;
+            let command = format!(
+                "execute in {dimension} if block {x} {y} {z} {old_block} run setblock {x} {y} {z} {new_block} replace"
+            );
+            if !game.native_run_command(&command) {
+                log::warn!("[civilizations] bakery conditional construction refused: {command}");
             }
             Ok(())
         }
@@ -600,6 +710,50 @@ fn farm_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), Str
             }
             Ok(())
         }
+    }
+}
+
+/// Native API 334: stop hopper transfer *to or from* the two public
+/// hall barrel inventories. This is not a global hopper ban and does not
+/// intercept NPC's direct native container API (which is not a hopper move).
+pub fn protect_public_hopper(
+    game: &Game<'_>, source: [i32;3], destination: [i32;3],
+    _item: &str, cancel: &mut bool,
+) {
+    if *cancel || !game.native_on(MOD_ID) { return; }
+    let Some(dir) = game.native_world_dir() else { return; };
+    let dim = game.dim.id();
+    let locked = active(dir.join(DIR));
+    let public = locked.as_ref().and_then(|a| a.world.as_ref())
+        .is_some_and(|world| world.settlements.values()
+            .filter(|v| v.dimension == dim && v.hall_complete)
+            .any(|v| {
+                let positions = hall_storage_positions(v.center);
+                positions.contains(&source) || positions.contains(&destination)
+            }));
+    if public { *cancel = true; }
+}
+
+/// Native API 14: prevent ordinary players damaging registered public
+/// buildings and private parcels they do not own. The owner may break
+/// blocks inside their own bought 5x5 plot; OP may recover city structures.
+/// Does not claim the wilderness or override third-party region plugins.
+pub fn protect_civilization_block(
+    game: &mut Game<'_>, position: [i32;3], cancel: &mut bool,
+) {
+    if *cancel || !game.native_on(MOD_ID) { return; }
+    let Some(player) = game.native_acting_player() else { return; };
+    if player.permission >= 2 { return; }
+    let Some(dir) = game.native_world_dir() else { return; };
+    let lock = active(dir.join(DIR));
+    let actor = format!("{:032x}", player.uuid);
+    let protected = lock.as_ref().and_then(|active| active.world.as_ref())
+        .is_some_and(|world| !world.player_may_break(
+            &actor, game.dim.id(), position
+        ));
+    drop(lock);
+    if protected {
+        *cancel = true;
     }
 }
 
@@ -905,6 +1059,47 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
                 } else { "Warehouse transfer journal clear" }
             ));
         }
+        return;
+    }
+    if action == "bakery" {
+        let name = args.next().unwrap_or("");
+        let Some(village) = world.by_name(name) else {
+            error(game, "unknown settlement: /civ bakery <name>");
+            return;
+        };
+        let report = if let Some(b) = &village.bakery {
+            let construction = b.building.as_ref().map(|job| format!(
+                "BUILDING {}/{} blocks, blocked={}, funded={}",
+                job.cursor, bakery_plan(job.origin).len(), job.blocked,
+                b.supplies_reserved
+            )).unwrap_or_else(|| if b.complete {
+                "COMPLETED native crafting table and smoker".to_owned()
+            } else { "UNFUNDED construction".to_owned() });
+            let wood = b.construction_escrow.get(&Good::Wood).copied().unwrap_or(0);
+            let stone = b.construction_escrow.get(&Good::Stone).copied().unwrap_or(0);
+            let still_need_wood = crate::game::civilizations_core::BAKERY_WOOD_LOGS
+                .saturating_sub(wood);
+            let still_need_stone = crate::game::civilizations_core::BAKERY_COBBLESTONE
+                .saturating_sub(stone);
+            let native_ready = if b.complete {
+                bakery_plan(b.origin).iter().all(|step|
+                    world_block(game, &village.dimension, step.pos).as_deref() == Some(step.block))
+            } else { false };
+            format!(
+                "{} at {:?}. {}. Intact native blocks: {}. Materials carried for bakery: wood={}, stone={}; still needed: {} logs / {} cobblestone. Real wheat removed from hall: {}. Crafted bread on baker: {}. Completed 3-wheat-to-1-bread batches: {}.",
+                village.name, b.origin, construction, native_ready, wood, stone,
+                if b.supplies_reserved { 0 } else { still_need_wood },
+                if b.supplies_reserved { 0 } else { still_need_stone },
+                b.wheat_escrow, b.bread_in_transit, b.batches,
+            )
+        } else {
+            format!(
+                "{}: bakery not yet reserved. After the real hall and UUID-bound Baker/Builder are loaded, village autonomously chooses an unclaimed natural plot. Construction then needs {} genuine oak logs and {} genuine cobblestone.",
+                village.name, crate::game::civilizations_core::BAKERY_WOOD_LOGS,
+                crate::game::civilizations_core::BAKERY_COBBLESTONE
+            )
+        };
+        reply(game, report);
         return;
     }
     if action == "development" {
@@ -1700,6 +1895,43 @@ fn storage_worker_near(game: &mut Game<'_>, world: &World, id: u64, role: Job) -
     })
 }
 
+/// Select one exact plain native slot from either hall barrel. This
+/// helper only persists the planned intent. Native extraction happens on a
+/// *later* tick, after a fresh slot read and a durable Issued record.
+fn request_workshop_pickup(
+    game: &Game<'_>, state: &mut ActiveWorld, id: u64,
+    good: Good, amount: u32, direction: BarrelDirection,
+) -> Result<bool, String> {
+    if amount == 0 { return Ok(false); }
+    let village = &state.world.as_ref().unwrap().settlements[&id];
+    let dimension = village.dimension.clone();
+    let center = village.center;
+    for pos in hall_storage_positions(center) {
+        if world_block(game, &dimension, pos).as_deref() != Some("minecraft:barrel") {
+            continue;
+        }
+        let Some(slots) = game.native_container_slots(&dimension, pos, Direction::Up)
+        else { continue; };
+        let item = slots.iter().find_map(|entry| {
+            let stack = entry.stack.as_ref()?;
+            (entry.can_take && stack.item == good.item()
+                && stack.damage == 0 && stack.extra.is_none()
+                && stack.count > 0).then_some((entry.slot, stack.count))
+        });
+        let Some((slot, available)) = item else { continue; };
+        let Some(before) = plain_barrel_count(game, &dimension, pos, good)
+        else { continue; };
+        let count = amount.min(available).min(8);
+        let old = state.world.as_ref().unwrap().clone();
+        state.world.as_mut().unwrap().plan_barrel_transfer(
+            id, pos, good, direction, before, count, Some(slot),
+        )?;
+        save_autonomous(state, old)?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
 /// Never re-issue a native operation marked Issued in saved world.json.
 /// An uncertain barrel result becomes Blocked rather than being replayed.
 /// The first attempt saves Issued *before* mutating a native inventory.
@@ -1740,7 +1972,7 @@ fn barrel_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
             // An operator/hopper may replace the exact source stack between
             // planning and issuing. Never take a foreign item even when the
             // total number of logs/stone in the barrel is unchanged.
-            if transfer.direction == BarrelDirection::ToBuilder {
+            if transfer.direction != BarrelDirection::ToBarrel {
                 let valid_slot = transfer.slot.is_some_and(|selected| {
                     game.native_container_slots(
                         &dimension, transfer.position, Direction::Up
@@ -1770,7 +2002,9 @@ fn barrel_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
                     };
                     game.insert_stack_through(transfer.position, Direction::Up, item).is_none()
                 }
-                BarrelDirection::ToBuilder => {
+                BarrelDirection::ToBuilder
+                | BarrelDirection::ToBakeryBuilder
+                | BarrelDirection::ToBakerIngredients => {
                     let Some(slot) = transfer.slot else {
                         return Err("native barrel extraction has no recorded slot".into());
                     };
@@ -1790,6 +2024,58 @@ fn barrel_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
                 log::warn!("[civilizations] {} failed native barrel transfer; no blind retry", village.name);
             }
             return Ok(());
+        }
+
+        // First fund the public bakery from physically present native
+        // oak logs and cobblestone. A real builder must stand at the hall,
+        // and every extracted item becomes bakery-specific saved escrow.
+        let bakery_builder = village.bakery.as_ref().is_some_and(|b|
+            b.building.is_some() && !b.supplies_reserved)
+            && DailyPhase::at(game.world.day_time).on_shift(Job::Builder)
+            && storage_worker_near(game, state.world.as_ref().unwrap(), id, Job::Builder);
+        if bakery_builder {
+            let bakery = village.bakery.as_ref().unwrap();
+            let wood = bakery.construction_escrow.get(&Good::Wood).copied().unwrap_or(0);
+            let stone = bakery.construction_escrow.get(&Good::Stone).copied().unwrap_or(0);
+            if wood >= crate::game::civilizations_core::BAKERY_WOOD_LOGS
+                && stone >= crate::game::civilizations_core::BAKERY_COBBLESTONE {
+                let before = state.world.as_ref().unwrap().clone();
+                if state.world.as_mut().unwrap().reserve_bakery_supplies(id)? {
+                    save_autonomous(state, before)?;
+                    return Ok(());
+                }
+            }
+            for (good, required) in [
+                (Good::Wood, crate::game::civilizations_core::BAKERY_WOOD_LOGS),
+                (Good::Stone, crate::game::civilizations_core::BAKERY_COBBLESTONE),
+            ] {
+                let waiting = required.saturating_sub(
+                    bakery.construction_escrow.get(&good).copied().unwrap_or(0));
+                if request_workshop_pickup(
+                    game, state, id, good, waiting, BarrelDirection::ToBakeryBuilder,
+                )? {
+                    return Ok(());
+                }
+            }
+        }
+
+        // A completed real bakery needs THREE wheat actually removed from
+        // vanilla barrels per bread. Baker must be at the receiving area;
+        // no abstract simulated inventory or virtual daily production.
+        let bakery_needs_wheat = village.bakery.as_ref().is_some_and(|b|
+            b.complete
+                && b.wheat_escrow < crate::game::civilizations_core::BREAD_WHEAT_RECIPE
+                && b.bread_in_transit == 0)
+            && DailyPhase::at(game.world.day_time).on_shift(Job::Baker)
+            && storage_worker_near(game, state.world.as_ref().unwrap(), id, Job::Baker);
+        if bakery_needs_wheat {
+            let missing = crate::game::civilizations_core::BREAD_WHEAT_RECIPE
+                - village.bakery.as_ref().unwrap().wheat_escrow;
+            if request_workshop_pickup(
+                game, state, id, Good::Wheat, missing, BarrelDirection::ToBakerIngredients,
+            )? {
+                return Ok(());
+            }
         }
 
         let can_collect = village.visual_job.is_some()
@@ -1919,6 +2205,54 @@ fn farmer_delivery_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Res
     Ok(())
 }
 
+/// Bakers need real extracted native wheat and an intact public crafting
+/// table. Three wheat become one bread receipt only while a UUID-bound Baker
+/// is physically working at the native bakery; bread is made available only
+/// after this same baker returns to the hall and the steward stocks a barrel.
+fn baker_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), String> {
+    if !DailyPhase::at(game.world.day_time).on_shift(Job::Baker) { return Ok(()); }
+    let dimension = game.dim.id().to_owned();
+    let ids: Vec<u64> = state.world.as_ref().unwrap().settlements.values()
+        .filter(|v| v.dimension == dimension && v.bakery.as_ref().is_some_and(|b| b.complete))
+        .map(|v| v.id).collect();
+    for id in ids {
+        let world = state.world.as_ref().unwrap();
+        let village = &world.settlements[&id];
+        let b = village.bakery.as_ref().unwrap();
+        if b.bread_in_transit > 0 {
+            if !storage_worker_near(game, world, id, Job::Baker) { continue; }
+            let old = state.world.as_ref().unwrap().clone();
+            if state.world.as_mut().unwrap().deliver_bakery_bread(id)? {
+                save_autonomous(state, old)?;
+            }
+            return Ok(());
+        }
+        if b.wheat_escrow < crate::game::civilizations_core::BREAD_WHEAT_RECIPE {
+            continue;
+        }
+        // Check that the whole actual workshop still exists and is loaded,
+        // not merely that the old save claims it was complete yesterday.
+        let intact = bakery_plan(b.origin).iter().all(|step|
+            world_block(game, &dimension, step.pos).as_deref() == Some(step.block));
+        if !intact { continue; }
+        let actors = loaded_actors(game, world, id);
+        let working = village.residents.iter().filter(|r| r.alive && r.job == Job::Baker)
+            .any(|r| actors.iter().any(|(known,mob)| *known == r.id
+                && game.native_mob(&dimension, *mob).is_some_and(|actor| {
+                    let dx = actor.pos[0] - f64::from(b.origin[0]);
+                    let dz = actor.pos[2] - f64::from(b.origin[2]);
+                    dx * dx + dz * dz <= 6.0 * 6.0
+                })));
+        if !working { continue; }
+        let before = state.world.as_ref().unwrap().clone();
+        if state.world.as_mut().unwrap().craft_bread(id)? {
+            save_autonomous(state, before)?;
+        }
+        return Ok(());
+    }
+    Ok(())
+}
+
 /// One bounded planning step per 100 loaded level ticks. NPCs choose free
 /// natural plots *inside their settlement radius* and start actual physical
 /// jobs. Paid player parcels are hard exclusions in BOTH domain paths.
@@ -1943,6 +2277,8 @@ fn autonomous_village_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Resu
         && actors.iter().any(|(known, _)| *known == r.id));
     let has_builder = village.residents.iter().any(|r| r.alive && r.job == Job::Builder
         && actors.iter().any(|(known, _)| *known == r.id));
+    let has_baker = village.residents.iter().any(|r| r.alive && r.job == Job::Baker
+        && actors.iter().any(|(known, _)| *known == r.id));
     // Recover from a refused/modified extraction without paying any wood or
     // stone; the next planning cycle may choose another untouched source.
     if village.gather_job.as_ref().is_some_and(|job| job.blocked) {
@@ -1952,21 +2288,41 @@ fn autonomous_village_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Resu
         return Ok(());
     }
 
-    // Fetch REAL materials before allocating any physical structure. A
-    // lumberjack needs a leafy oak trunk and a miner needs exposed natural
-    // stone; both require verified empty standing space and UUID identity.
+    // Resource demand MUST include real native barrel contents, saved
+    // incoming deliveries and physically extracted, project-specific
+    // reserves. In v0.1.13 looking at only the incoming queue caused
+    // villagers to gather indefinitely even with filled real barrels.
+    // An unloaded/missing barrel cannot be interpreted as zero stock:
+    // pause surveying until both native block entities can be observed.
     let (wood_needed, stone_needed) = if !village.hall_complete {
         village.hall_materials_missing()
-    } else if village.visual_job.is_some()
-        && !village.hut_supplies_reserved
-        || village.pending_visual_buildings > 0 && village.physical_housing().2 > 0 {
-        (
-            crate::game::civilizations_core::HUT_WOOD_LOGS
-                .saturating_sub(village.warehouse_quantity(Good::Wood)),
-            crate::game::civilizations_core::HUT_COBBLESTONE
-                .saturating_sub(village.warehouse_quantity(Good::Stone)),
-        )
-    } else { (0, 0) };
+    } else {
+        let Some(native_stock) = physical_barrel_stock(game, &dimension, village.center)
+        else { return Ok(()); };
+        let on_shelf = |good: Good| native_stock.iter()
+            .find(|(item, _)| *item == good)
+            .map(|(_, amount)| *amount).unwrap_or(0);
+        let bakery_job = village.bakery.as_ref().filter(|b|
+            b.building.is_some() && !b.supplies_reserved);
+        let hut_job = village.visual_job.is_some() && !village.hut_supplies_reserved
+            || village.pending_visual_buildings > 0 && village.physical_housing().2 > 0;
+        let (wood_goal, stone_goal, escrow_wood, escrow_stone) =
+            if let Some(b) = bakery_job {
+                (crate::game::civilizations_core::BAKERY_WOOD_LOGS,
+                 crate::game::civilizations_core::BAKERY_COBBLESTONE,
+                 b.construction_escrow.get(&Good::Wood).copied().unwrap_or(0),
+                 b.construction_escrow.get(&Good::Stone).copied().unwrap_or(0))
+            } else if hut_job {
+                (crate::game::civilizations_core::HUT_WOOD_LOGS,
+                 crate::game::civilizations_core::HUT_COBBLESTONE,
+                 village.build_escrow.get(&Good::Wood).copied().unwrap_or(0),
+                 village.build_escrow.get(&Good::Stone).copied().unwrap_or(0))
+            } else { (0, 0, 0, 0) };
+        let available = |good: Good, escrow: u32| on_shelf(good)
+            .saturating_add(village.warehouse_quantity(good)).saturating_add(escrow);
+        (wood_goal.saturating_sub(available(Good::Wood, escrow_wood)),
+         stone_goal.saturating_sub(available(Good::Stone, escrow_stone)))
+    };
 
     if village.gather_job.is_none() {
         for (good, need, profession) in [
@@ -2031,9 +2387,11 @@ fn autonomous_village_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Resu
         }
     }
     let need_field = has_farmer && village.farm.is_none();
+    let need_bakery = has_builder && has_baker && village.hall_complete
+        && village.bakery.is_none();
     let need_hut = has_builder && village.hall_complete && village.visual_job.is_none()
         && village.pending_visual_buildings > 0 && village.physical_housing().2 > 0;
-    if !need_field && !need_hut { return Ok(()); }
+    if !need_field && !need_hut && !need_bakery { return Ok(()); }
 
     for [dx, dz] in crate::game::civilizations_core::HOUSING_PLOT_OFFSETS {
         let Some(x) = village.center[0].checked_add(dx) else { continue; };
@@ -2050,6 +2408,19 @@ fn autonomous_village_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Resu
                     state.world.as_mut().unwrap().start_farm(id, site)?;
                     save_autonomous(state, prior)?;
                     log::info!("[civilizations] {} autonomously reserved crop field at {:?}", village.name, site);
+                    return Ok(());
+                }
+            }
+            // After the field and civic hall exist, build the first
+            // functional workshop on the same loaded, physically empty,
+            // non-player-owned plot policy as ordinary housing.
+            if need_bakery && check_empty_hut_site(game, &dimension, site).is_ok() {
+                let mut trial = state.world.as_ref().unwrap().clone();
+                if trial.start_bakery(id, site).is_ok() {
+                    let old = state.world.as_ref().unwrap().clone();
+                    state.world.as_mut().unwrap().start_bakery(id, site)?;
+                    save_autonomous(state, old)?;
+                    log::info!("[civilizations] {} autonomously reserved real bakery at {:?}", village.name, site);
                     return Ok(());
                 }
             }
@@ -2300,6 +2671,13 @@ pub fn level_tick(game: &mut Game<'_>, dimension: &str) {
                 return;
             }
         }
+        if let Err(error) = build_bakery_one_step(game, state) {
+            log::warn!("[civilizations] physical bakery construction paused: {error}");
+            if error.starts_with("persistence:") {
+                state.problem = Some(error);
+                return;
+            }
+        }
         if let Err(error) = build_one_step(game, state) {
             // Unloaded chunks are normal; a player may leave and return.
             if error.contains("unloaded") || error.contains("not loaded") {
@@ -2309,6 +2687,15 @@ pub fn level_tick(game: &mut Game<'_>, dimension: &str) {
             if error.starts_with("persistence:") {
                 // A physical block may already exist. Stop mutating until
                 // manual recovery, without pretending the write succeeded.
+                state.problem = Some(error);
+                return;
+            }
+        }
+    }
+    if state.physical_ticks % 200 == 0 {
+        if let Err(error) = baker_one_step(game, state) {
+            log::warn!("[civilizations] real bakery work paused: {error}");
+            if error.starts_with("persistence:") {
                 state.problem = Some(error);
                 return;
             }

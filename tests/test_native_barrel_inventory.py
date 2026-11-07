@@ -116,7 +116,7 @@ class NativeBarrelInventorySourceContracts(unittest.TestCase):
         self.assertIn("*cancel = true;", GLUE)
         self.assertIn("hall_storage_positions(v.center).contains(&position)", GLUE)
         ids = [entry["id"] for entry in MIXIN["injection"]]
-        self.assertEqual(len(ids), 7)
+        self.assertEqual(len(ids), 9)
         self.assertIn("warehouse_inventory", ids)
         entry = next(item for item in MIXIN["injection"]
                      if item["id"] == "warehouse_inventory")
@@ -134,8 +134,8 @@ class NativeBarrelInventorySourceContracts(unittest.TestCase):
 
     def test_package_version_and_older_src_contracts(self):
         cargo = tomllib.loads((ROOT / "Cargo.toml").read_text())
-        self.assertEqual(cargo["package"]["version"], "0.1.13")
-        self.assertEqual(MIXIN["mod"]["version"], "0.1.13")
+        self.assertEqual(cargo["package"]["version"], "0.1.14")
+        self.assertEqual(MIXIN["mod"]["version"], "0.1.14")
         self.assertIn("pub const SCHEMA: u32 = 1;", CORE)
         self.assertIn('#[serde(default)]\n    pub barrel_transfer:', CORE)
         self.assertIn('#[serde(default)]\n    pub market_purchase:', CORE)

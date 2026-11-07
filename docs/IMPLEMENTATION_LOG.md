@@ -254,3 +254,30 @@
   hooks, atomicity across game chunks and world.json, manual quarantine
   recovery, actual courier held-item animations, quarry/lumberyard/workshop
   archetypes and town self-founding.
+
+## 2026-11-07 — v0.1.14 actual bakery recipe + public inventory safety
+
+- Branched from v0.1.13 real native barrel implementation, preserving
+  existing user-disabled GitHub Actions and keeping changes out of main.
+- Created unique bakery blueprint with crafting table and smoker, one
+  bakery per settlement, persisted cursor/funding state and actual native
+  conditional block-build execution by the existing UUID-bound builder.
+- Required exact 24 oak logs and 33 cobblestone extracted from real hall
+  barrels into separate bakery escrow before any physical bakery block work.
+- Extended native Planned→Issued→Observed barrel transfers for bakery
+  construction and wheat purchases; Bakers move to hall for actual wheat.
+- Implemented on-site Baker 3-native-wheat→1-bread recipe using fully
+  observed real workstation blocks and loaded UUID-bound actor proximity.
+  Finished bread is carried as a durable receipt to the town hall, then
+  steward deposits the corresponding actual vanilla ItemStack into barrel.
+- Default-on village planner now automatically reserves one protected
+  loaded plot for bakery and corrects prior v0.1.13 resource shortage
+  accounting to count actual native barrel slots and pending/held goods.
+- Added native API 334 to block vanilla hopper movement to/from public
+  barrels, and native API 14 to deny unauthorized breaking of public
+  structures or privately bought plots. Owners retain bought-plot editing.
+- Added read-only /civ bakery detailed status, Rust regression tests and
+  Python structural contracts; 9 native injections (previously 7).
+- This is still **source-only**; native compiler, full test suite,
+  in-world pathfinding, container/hopper/ownership hooks and persistence
+  crash E2E have not been verified locally. No GitHub Actions enabled.
