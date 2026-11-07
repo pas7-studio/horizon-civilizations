@@ -24,17 +24,18 @@ or Minecraft playtest has run for this feature.
 - [x] Targeted single-resident recovery accepts fewer than ten
   safe spots, while the original autonomous ten-worker batch still
   requires all ten spots before any native spawn reservation.
-- [x] Seven Rust domain regressions and twelve Python static
+- [x] Eight Rust domain regressions and twelve Python static
   source contracts authored; 22/22 source checks PASS.
 - [ ] Not executed: cargo test/rustfmt/Clippy, Python unittest
   discovery, native Horizon compilation or actual Minecraft
   recovery in a disposable world. This does not claim playability.
+- [x] A resident who dies after reservation retains a valid one-shot pending tombstone after restart; dead residents still cannot be recovered. This prevents a legitimate lifecycle change from invalidating the entire world save.
 - [ ] The recovery checks currently loaded native chunks; an
   external actor could have wandered outside the tracked 96-block
   area. Hence **OP confirmation** is required: no automatic
   respawn after uncertain crash. No unbounded reset command exists.
 
-Acceptance: TEST_PLAN **272–282**.
+Acceptance: TEST_PLAN **272–283**.
 
 ---
 
