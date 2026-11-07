@@ -61,7 +61,11 @@ The script imports that exact executable, prepares resources using the official 
 
 This launcher flow is **not yet run in this workspace**. If Horizon Launcher reports that a compiled binary is incompatible with its selected version, use the pinned compatible upstream build and a new disposable world instead of patching an existing Minecraft save.
 
-## Build current main on Windows from GitHub (v0.1.6+)
+## Previous GitHub Actions build instructions (archival; Actions currently disabled)
+
+**Do not enable or run Actions for the current source branches.** These historical steps document an earlier artifact only. Use the local-only workflow below for v0.1.9.
+
+### Historical steps for the older artifact
 
 1. Open [Windows native Horizon client workflow](https://github.com/pas7-studio/horizon-civilizations/actions/workflows/build-windows-client.yml).
 2. Click **Run workflow**, choose `main` as branch and confirm. This is needed when
@@ -108,3 +112,38 @@ replace a block in a disposable copy to test commons fallback.
 Run [TEST_PLAN](TEST_PLAN.md) steps 60–66, preserving screenshots and
 logs for actual pathfinding evidence. No sleeps/beds or full house
 ownership are claimed; no Actions workflows are used.
+
+## Offline-first local compile (v0.1.9, no GitHub Actions)
+
+PR #17 is stacked on #16 (which is stacked on #15). Check out
+`feat/safe-village-housing-proposals-v019` when testing **all three
+features together**, not `main` or the older GitHub Windows artifact.
+
+From PowerShell in the local repository with Rust 1.95.0, Git, Python 3.11+
+and sufficient disk/RAM, run:
+
+```powershell
+git fetch origin
+git switch feat/safe-village-housing-proposals-v019
+cargo fmt --all
+cargo fmt --all --check
+cargo clippy --all-targets -- -D warnings
+cargo test
+py -3 -m unittest discover -s tests -p 'test_*.py' -v
+py -3 tools/package.py
+py -3 tools/verify_static.py
+py -3 tools/native_build.py --test --build-client
+```
+
+The native source builder uses a disposable pinned Horizon worktree. The
+compiled Windows executable, if successful, should be at
+`target/native-check/modded/target/fast/horizon-client.exe`. Import that
+exact EXE with the **official** launcher and your legitimately owned
+Minecraft resources; never copy a preexisting player save as a disposable
+world. The source `.hnmod` alone is not a playable executable.
+
+In a disposable creative world, run `/civ survey Ashford`. When simulated
+house inventory is available, inspect the printed numbered slots and Y
+heights, then issue e.g. `/civ approvehouse Ashford 1 70` from within
+24 blocks of **that exact proposed plot**. Do not assume the sample Y=70
+matches your terrain. Execute cases 67–75 in [TEST_PLAN](TEST_PLAN.md).

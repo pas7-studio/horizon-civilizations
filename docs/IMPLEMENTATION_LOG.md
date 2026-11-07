@@ -120,3 +120,23 @@
 - Added read-only `/civ homes NAME` and resident home information, four
   Rust unit tests and six Python source-contract tests.
 - No CI, local Rust compile, Horizon native check or gameplay E2E has run.
+
+## 2026-11-07 — v0.1.9 safe housing site proposals (CI disabled)
+
+- Stacked a new feature branch on v0.1.8; no changes to pinned Horizon
+  hooks or world JSON schema.
+- Added bounded 20-slot deterministic candidate coordinates from each
+  settlement center, with strict domain and same-dimension cross-plot
+  collision checks (completed huts, farms and active projects).
+- Enhanced both suggested and manual construction to share that same
+  safety policy and 12..80 block distance restriction.
+- Read-only `/civ survey NAME` inspects at most five nearby Y levels per
+  candidate using the existing loaded-world 5x5 natural/air preflight,
+  returning up to five live candidates without saving a reservation.
+- OP-only `/civ approvehouse NAME SLOT Y` requires the exact slot/Y,
+  checks dimension and operator proximity and repeats live-world preflight,
+  then persists one job for the existing UUID-bound builder to implement.
+- Added five pure Rust regression tests and seven source-contract Python
+  tests, plus acceptance plan items 67–75.
+- No GitHub Actions, Rust compilation, Python test execution, native Horizon
+  integration or real gameplay E2E performed; all remain local gates.

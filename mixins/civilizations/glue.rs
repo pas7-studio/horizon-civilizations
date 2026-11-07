@@ -3,7 +3,8 @@
 use crate::game::{
     civilizations_core::{farm_plan, hut_plan, inspect_farm, inspect_hut, is_ground,
         BuildInspection, DailyPhase, FarmBlock, FarmDecision, FarmStage, Good, HomeSlot, Job,
-        World, inspect_home, MAX_SIM_DAYS},
+        World, inspect_home, HOUSING_PLOT_OFFSETS, MAX_HOUSING_SURVEY_RESULTS,
+        MAX_SIM_DAYS},
     native_mobs::NativeSpawn,
     native_server::{NativeCommand, NativeServerPlayer},
     Game,
@@ -146,7 +147,7 @@ pub fn register(commands: &mut Vec<NativeCommand>) {
     for usage in [
         "civ", "civ help", "civ list", "civ info", "civ info <name:word>",
         "civ roster <name:word>", "civ schedule <name:word>",
-        "civ homes <name:word>",
+        "civ homes <name:word>", "civ survey <name:word>",
         "civ construction <name:word>", "civ farming <name:word>",
         "civ harvests <name:word>",
         "civ join <name:word>", "civ title", "civ promote", "civ history",
@@ -158,6 +159,7 @@ pub fn register(commands: &mut Vec<NativeCommand>) {
         "civ found <name:word>", "civ actors <name:word>",
         "civ reconcile <name:word>",
         "civ day [days:integer]", "civ construct <name:word>",
+        "civ approvehouse <name:word> <slot:integer> <y:integer>",
         "civ farm <name:word>", "civ recoverfarm <name:word>",
         "civ war <from:word> <to:word>",
         "civ peace <from:word> <to:word>",
@@ -548,7 +550,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
     let actor = format!("{:032x}", player.uuid);
     let action = args.next().unwrap_or("help");
     if action == "help" {
-        reply(game, "Civilizations: /civ list | info [name] | roster <name> | schedule <name> | homes <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, day [days], construct <name>, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
+        reply(game, "Civilizations: /civ list | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, day [days], construct <name>, approvehouse <name> <slot> <y>, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
         return;
     }
     if action == "list" {
@@ -573,6 +575,66 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             village.name, phase.name(), game.world.day_time.rem_euclid(24_000),
             on_duty, village.population()
         ));
+        return;
+    }
+    if action == "survey" {
+        let name = args.next().unwrap_or("");
+        let Some(village) = world.by_name(name) else {
+            error(game, "unknown settlement: /civ survey <name>");
+            return;
+        };
+        if village.dimension != player.dimension {
+            error(game, "visit the settlement dimension to inspect live terrain");
+            return;
+        }
+        let (capacity, _, waiting) = village.physical_housing();
+        if waiting == 0 {
+            reply(game, format!("{} has enough completed physical hut capacity ({capacity}) for its living residents.", village.name));
+            return;
+        }
+        if village.pending_visual_buildings == 0 {
+            reply(game, format!(
+                "{} needs {} more physical spaces, but no simulated house is ready to build. Advance the economy first; no terrain is reserved.",
+                village.name, waiting
+            ));
+            return;
+        }
+        if village.visual_job.is_some() {
+            reply(game, format!(
+                "{} already has a physical construction project. Finish or recover it before planning another.",
+                village.name
+            ));
+            return;
+        }
+        let mut proposals = Vec::new();
+        for slot in 1..=HOUSING_PLOT_OFFSETS.len() {
+            // The X/Z slot index is immutable. Probe only a bounded +/-2 Y
+            // window, using the same live terrain check as manual approval.
+            for delta in [0_i32, 1, -1, 2, -2] {
+                let Some(y) = village.center[1].checked_add(delta) else { continue; };
+                let Ok(site) = world.proposed_hut(village.id, slot, y) else { continue; };
+                if check_empty_hut_site(game, &village.dimension, site).is_ok() {
+                    proposals.push(format!(
+                        "#{slot} at {},{},{}",
+                        site[0], site[1], site[2]
+                    ));
+                    break;
+                }
+            }
+            if proposals.len() >= MAX_HOUSING_SURVEY_RESULTS { break; }
+        }
+        if proposals.is_empty() {
+            reply(game, format!(
+                "{} needs {} physical spaces; {} simulated houses await visualization, but no safe flat loaded plot was found among {} fixed candidates. Move to the area or prepare natural ground. Nothing was reserved.",
+                village.name, waiting, village.pending_visual_buildings, HOUSING_PLOT_OFFSETS.len()
+            ));
+        } else {
+            reply(game, format!(
+                "{} proposes huts: {} physical spaces missing, {} abstract houses awaiting build. {}. OP must visit a plot and run /civ approvehouse {} <slot> <y>. Suggestions expire if terrain changes; all blocks are rechecked.",
+                village.name, waiting, village.pending_visual_buildings,
+                proposals.join(" | "), village.name
+            ));
+        }
         return;
     }
     if action == "homes" {
@@ -726,6 +788,39 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             state.world.as_mut().unwrap().start_farm(settlement.id, origin)?;
             Ok(format!(
                 "Approved 3x3 irrigated crop field at {origin:?}. UUID-bound farmers work when loaded and near the site. /civ farming {name}"
+            ))
+        })(),
+        "approvehouse" if player.permission >= 2 => (|| {
+            let name = args.next().ok_or("usage: /civ approvehouse <name> <slot> <y>")?;
+            let slot = args.next().ok_or("slot number required")?
+                .parse::<usize>().map_err(|_| "invalid slot number")?;
+            let y = args.next().ok_or("explicit Y level required")?
+                .parse::<i32>().map_err(|_| "invalid Y level")?;
+            let village = previous.by_name(name).ok_or("unknown settlement")?;
+            if village.dimension != player.dimension {
+                return Err("visit the settlement dimension first".into());
+            }
+            // Proposal is recomputed from the current saved settlement state;
+            // it never holds a durable or implicit plot claim.
+            let site = previous.proposed_hut(village.id, slot, y)?;
+            let px = player.position[0];
+            let py = player.position[1];
+            let pz = player.position[2];
+            if !px.is_finite() || !py.is_finite() || !pz.is_finite() {
+                return Err("invalid player location".into());
+            }
+            let dx = f64::from(site[0]) + 0.5 - px;
+            let dz = f64::from(site[2]) + 0.5 - pz;
+            if dx * dx + dz * dz > 24.0 * 24.0 || (f64::from(y) - py).abs() > 8.0 {
+                return Err("stand within 24 horizontal blocks and 8 vertical blocks of the chosen plot".into());
+            }
+            // Revalidate *all* live blocks immediately before the approval is
+            // persisted. Later placement rechecks each expected old block.
+            check_empty_hut_site(game, &village.dimension, site)?;
+            state.world.as_mut().unwrap().start_visual_house(village.id, site)?;
+            Ok(format!(
+                "Approved {} proposal #{slot} at {:?}. One durable project reserved; UUID-linked builders can work during daytime when loaded. /civ construction {}",
+                village.name, site, village.name
             ))
         })(),
         "construct" if player.permission >= 2 => (|| {
@@ -905,7 +1000,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
                 Ok(format!("Spawned and UUID-linked {spawned} villagers. Reopen world and verify /civ roster {name}."))
             }
         })(),
-        "found" | "day" | "war" | "peace" | "actors" | "construct" | "farm" | "recoverfarm" | "reconcile" => Err("requires server operator level 2".into()),
+        "found" | "day" | "war" | "peace" | "actors" | "construct" | "approvehouse" | "farm" | "recoverfarm" | "reconcile" => Err("requires server operator level 2".into()),
         _ => Err("unknown subcommand. Use /civ help".into()),
     };
     match result {
