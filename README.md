@@ -1,5 +1,9 @@
 ## Latest stacked Draft: partial NPC spawn recovery (source-only)
 
+The first-play gate now defaults to this branch, so on the current checkout
+`py -3 tools/first_play_gate.py --build-client` selects the correct branch.
+Use `--expected-sha` to pin an exact commit when collecting native evidence.
+
 **Startup safety update:** both autonomous first-village spawning and OP `/civ actors NAME`
 now share a live survey: ten living unbound residents, no already-loaded tagged
 villagers, and ten natural, loaded, two-air, unoccupied spawn spots. The older
