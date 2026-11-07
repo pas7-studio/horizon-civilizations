@@ -1368,7 +1368,7 @@ impl World {
         let name = village.name.clone();
         village.visual_job = Some(VisualBuildJob { origin, cursor: 0, blocked: false });
         self.event(format!(
-            "{name}: operator approved construction at {},{},{}",
+            "{name}: physical construction project reserved at {},{},{}",
             origin[0], origin[1], origin[2]
         ));
         Ok(())
