@@ -113,10 +113,10 @@ Run [TEST_PLAN](TEST_PLAN.md) steps 60–66, preserving screenshots and
 logs for actual pathfinding evidence. No sleeps/beds or full house
 ownership are claimed; no Actions workflows are used.
 
-## Offline-first local compile (v0.1.9, no GitHub Actions)
+## Offline-first local compile (stacked v0.1.10, no GitHub Actions)
 
-PR #17 is stacked on #16 (which is stacked on #15). Check out
-`feat/safe-village-housing-proposals-v019` when testing **all three
+PR #18 is stacked on #17 → #16 → #15. Check out
+`feat/civic-council-priorities-v0110` when testing **all four
 features together**, not `main` or the older GitHub Windows artifact.
 
 From PowerShell in the local repository with Rust 1.95.0, Git, Python 3.11+
@@ -147,3 +147,18 @@ house inventory is available, inspect the printed numbered slots and Y
 heights, then issue e.g. `/civ approvehouse Ashford 1 70` from within
 24 blocks of **that exact proposed plot**. Do not assume the sample Y=70
 matches your terrain. Execute cases 67–75 in [TEST_PLAN](TEST_PLAN.md).
+
+## Village council and economic outlook (v0.1.10; local-only)
+
+In a disposable Ashford world, run `/civ council Ashford` and
+`/civ forecast Ashford`. The council should rank food, security, morale,
+physical homes, building resources and UUID-binding concerns based on
+the **existing** saved data. The hypothetical three-day forecast must
+**not** advance the world. Confirm that 20 repeated calls leave the
+`world.json` file byte-identical and have no effect on blocks or inventory.
+
+Use [TEST_PLAN](TEST_PLAN.md) cases 76–84. For a native Windows build,
+follow the local compilation instructions above on this new branch;
+GitHub Actions are intentionally disabled. The forecast excludes war
+attrition, player trades and physical farming, and must not be described
+as an exact future simulation or a financial ledger.
