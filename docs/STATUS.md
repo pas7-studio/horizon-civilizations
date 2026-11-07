@@ -1,3 +1,36 @@
+# Latest Draft: executable local first-play gate / evidence capture
+
+Latest stacked branch `chore/first-play-native-validation-v0115` follows
+PR #31 and earlier stacked drafts. Main untouched, GitHub Actions OFF.
+The source is **NOT yet a playable proven release**.
+
+- [x] Added `tools/first_play_gate.py`: local read-only source gate with
+  explicit optional pinned native Horizon compilation/client build.
+  Checks Rust 1.95, Python 3.11+, exact branch, optional SHA, clean
+  source tree; executes cargo fmt/clippy/test, rustfmt for each mixin,
+  all Python unittest, package/static check, optional full native
+  Horizon build. Stops at first failing stage and records its log.
+- [x] Saves timestamped JSON + Markdown evidence under ignored
+  `target/first-play-gate/`. The result distinguishes BLOCKED,
+  SOURCE_CHECK_PASS, SOURCE_AND_NATIVE_CHECK_PASS and
+  READY_FOR_GAMEPLAY_E2E; **none** means actual Minecraft gameplay PASS.
+- [x] No Actions enabled, no server deployment, no external
+  credentials/Minecraft assets and no source formatting mutations.
+  Script sets PYTHONDONTWRITEBYTECODE and ignores generated caches,
+  protecting exact source-cleanliness checks.
+- [x] Seven unittest harness cases with fake Rust executables
+  **actually executed on local Python 3.13/Linux: 7/7 PASS**.
+  The mock tests verify evidence logic, clean/dirty SHA, fail-fast,
+  wrong Rust version, wrong branch/SHA and client-build status.
+- [ ] No real Rust, Clippy, full project Python suite, pinned native
+  Horizon compilation or Minecraft E2E executed in this environment:
+  no rustc/cargo and no direct network.
+- [ ] Latest PR needs `py -3 tools/first_play_gate.py --build-client`
+  on a networked Windows developer workstation with Rust 1.95,
+  followed by disposable world tests, before any merge/release.
+
+---
+
 # Latest unreleased source: native edit acknowledgement + fair gathering
 
 Branch: `fix/gather-crash-proof-fair-queue-v0115`, stacked on PR #30.
