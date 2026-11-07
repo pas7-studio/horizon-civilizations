@@ -2254,6 +2254,21 @@ impl World {
         Ok(())
     }
 
+    /// Explicit operator decision after checking native block evidence.
+    /// The adapter MUST require an OP in the correct dimension and a loaded,
+    /// observed source block (or air). This method only abandons a blocked,
+    /// previously issued receipt: it never credits wood/stone or issues edits.
+    pub fn abandon_blocked_issued_gather(&mut self, village_id: u64) -> Result<(), String> {
+        let v = self.settlements.get(&village_id).ok_or("unknown settlement")?;
+        if !v.gather_job.as_ref().is_some_and(|job| job.issued && job.blocked) {
+            return Err("only a blocked issued gather may be manually abandoned".into());
+        }
+        let name = v.name.clone();
+        self.discard_blocked_gather(village_id)?;
+        self.event(format!("{name}: operator abandoned an uncertain gather; zero resource credit"));
+        Ok(())
+    }
+
     pub fn confirm_gather(&mut self, village_id: u64) -> Result<(), String> {
         let v = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?;
         let job = v.gather_job.as_ref().ok_or("no gather job")?;
@@ -5004,5 +5019,45 @@ mod native_forest_origin_tests {
         let restored: World = serde_json::from_str(&serde_json::to_string(&world).unwrap()).unwrap();
         assert!(restored.settlements[&id].gather_job.is_none());
         restored.validate().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod native_gather_quarantine_tests {
+    use super::*;
+
+    #[test]
+    fn issued_blocked_mining_receipt_requires_explicit_abandonment() {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0,70,0], "owner").unwrap();
+        // This record is a durable receipt of an issued natural stone edit.
+        world.settlements.get_mut(&id).unwrap().gather_job = Some(GatherJob {
+            position: [16,70,0], stand: [17,70,0],
+            good: Good::Stone, issued: true, blocked: true,
+        });
+        world.validate().unwrap();
+        let before = world.settlements[&id].warehouse_quantity(Good::Stone);
+        let restored: World = serde_json::from_str(&serde_json::to_string(&world).unwrap()).unwrap();
+        assert!(restored.settlements[&id].gather_job.as_ref().unwrap().blocked);
+        assert!(world.mark_gather_issued(id).is_err());
+        world.abandon_blocked_issued_gather(id).unwrap();
+        assert!(world.settlements[&id].gather_job.is_none());
+        assert_eq!(world.settlements[&id].warehouse_quantity(Good::Stone), before);
+        assert!(world.abandon_blocked_issued_gather(id).is_err());
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn manually_abandoning_unissued_or_unblocked_gather_is_forbidden() {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0,70,0], "owner").unwrap();
+        world.settlements.get_mut(&id).unwrap().gather_job = Some(GatherJob {
+            position: [16,70,0], stand: [17,70,0],
+            good: Good::Wood, issued: false, blocked: true,
+        });
+        assert!(world.abandon_blocked_issued_gather(id).is_err());
+        world.settlements.get_mut(&id).unwrap().gather_job.as_mut().unwrap().issued = true;
+        world.settlements.get_mut(&id).unwrap().gather_job.as_mut().unwrap().blocked = false;
+        assert!(world.abandon_blocked_issued_gather(id).is_err());
     }
 }
