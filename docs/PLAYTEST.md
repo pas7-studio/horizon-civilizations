@@ -84,3 +84,14 @@ commit `c796d6b1f9e1898c9c1dc2175b91626907adf190` before the v0.1.6 host-clock
 merge. To test the current integration, choose the newest successful `main` run
 and check its exact commit. No modded EXE should be considered production-ready
 without in-world evidence of NPCs, hut, farm and restart behavior.
+
+## NPC day/night schedule trial (v0.1.7, local only)
+
+In a disposable creative world with ten UUID-linked Ashford NPCs, run
+`/civ schedule Ashford` at `/time set 0`, `/time set 2000`,
+`/time set 11000` and `/time set 13000`. Observe near-center
+gathering, daytime movement toward workplaces, evening return and
+nighttime regrouping; guards remain on watch. Farm/build world changes
+must stop outside work hours. This does **not** mean actual sleep,
+bed ownership or collision-safe navigation are implemented. Follow
+manual cases 54–59 of [TEST_PLAN](TEST_PLAN.md).
