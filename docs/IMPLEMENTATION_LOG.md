@@ -541,3 +541,18 @@
   exact GitHub Python text against the locally tested script.
 - Rust toolchain/native build/full Python source tests/Minecraft
   world E2E remain unavailable and NOT RUN; all stacked PRs Draft.
+
+## 2026-11-08 — prioritize compiler failure over cosmetic formatting
+
+- Reviewed current local build gate and found `cargo fmt --check`
+  originally ran before any compilation. The accumulated prototype's
+  Rust formatting could stop the first build before reporting an
+  actionable type/borrow/compile error.
+- Reordered stage plan to `cargo test` → `cargo clippy -D warnings`
+  → strict formatting checks → full Python unittest → packaging/static
+  checks → optional pinned Horizon native build/client.
+- Real local harness exercise: 12/12 mock-toolchain tests PASS, including
+  simulated compiler AND formatter failure where compiler must be first,
+  plus simulated format-only failure that still blocks full PASS.
+- Exact GitHub Python files matched the locally executed source by
+  length and weighted checksum. No Rust build or Minecraft E2E run.
