@@ -147,13 +147,27 @@ def verify_native_build_evidence(root: Path, log_path: Path,
         raise RuntimeError("native build returned wrong pinned Horizon revision")
     if record.get("cargo_check") != "PASS":
         raise RuntimeError("native build did not report a successful cargo check")
+    # A filtered Cargo test exits 0 even when the filter matches nothing.
+    # Require evidence for BOTH the domain logic and injected native glue.
+    suites = record.get("native_mod_tests")
+    expected_suites = ("civilizations_core::", "civilizations_glue::")
+    if not isinstance(suites, list) or len(suites) != len(expected_suites):
+        raise RuntimeError("native build must report both core and glue Rust test suites")
+    for selector in expected_suites:
+        matches = [entry for entry in suites if isinstance(entry, dict)
+                   and entry.get("filter") == selector]
+        if len(matches) != 1 or matches[0].get("status") != "PASS":
+            raise RuntimeError(f"native Rust test suite did not pass: {selector}")
+        count = matches[0].get("discovered")
+        if type(count) is not int or count < 1:
+            raise RuntimeError(f"native Rust test filter matched zero tests: {selector}")
     expected_stage = (root / "target/native-check/modded").resolve()
     if not isinstance(record.get("modded_horizon"), str) or not record["modded_horizon"]:
         raise RuntimeError("native build did not report the modded checkout path")
     if Path(record["modded_horizon"]).resolve() != expected_stage:
         raise RuntimeError("native build reported an unexpected modded checkout path")
     if not build_client:
-        return {"native_build_verified": True}
+        return {"native_build_verified": True, "native_mod_tests": suites}
     expected_binary = (expected_stage / "target/fast" /
                        ("horizon-client.exe" if os.name == "nt" else "horizon-client"))
     reported = record.get("native_client_binary")
@@ -168,7 +182,7 @@ def verify_native_build_evidence(root: Path, log_path: Path,
     with expected_binary.open("rb") as executable:
         for block in iter(lambda: executable.read(1024 * 1024), b""):
             hasher.update(block)
-    return {"native_build_verified": True,
+    return {"native_build_verified": True, "native_mod_tests": suites,
             "native_client_path": str(expected_binary),
             "native_client_bytes": expected_binary.stat().st_size,
             "native_client_sha256": hasher.hexdigest()}
@@ -183,6 +197,7 @@ def write_report(root: Path, output: Path, data: dict) -> None:
              f"- Working tree clean after checks: `{data['clean_end']}`",
              f"- Gate: **{data['gate']}**",
              f"- Native build evidence verified: `{data['native_build_verified']}`",
+             f"- Native Rust test suites: `{data['native_mod_tests']}`",
              f"- Native client: `{data['native_client_path']}`",
              f"- Native client SHA256: `{data['native_client_sha256']}`",
              "- Real Minecraft gameplay E2E: **NOT TESTED**", "",
@@ -229,7 +244,8 @@ def main(argv: list[str] | None = None) -> int:
                   "clean_start": False, "clean_end": False, "rustc": "UNKNOWN", "cargo": "UNKNOWN", "rustfmt": "UNKNOWN",
                   "python": sys.version.split()[0], "gate": "BLOCKED",
                   "gameplay_e2e": "NOT_TESTED", "blocking_reason": None,
-                  "native_build_verified": False, "native_client_path": None,
+                  "native_build_verified": False, "native_mod_tests": [],
+                  "native_client_path": None,
                   "native_client_bytes": None, "native_client_sha256": None, "steps": []}
     try:
         if sys.version_info < (3, 11):
