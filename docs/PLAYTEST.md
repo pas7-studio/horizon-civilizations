@@ -387,3 +387,33 @@ barrel bread plus confirmed incoming bread and bread already carried by
 the baker. Player bread purchases can reopen demand. If the actual native
 barrel state is unavailable, wheat extraction and crafting pause. This
 does not count abstract day-simulation food. Test cases: 182–188.
+
+## Latest physical forestry / resource journal acceptance (unreleased)
+
+Use branch `feat/natural-forestry-gather-journal-v0115` on an isolated local
+checkout. It includes prior physical hall, warehouse, bakery, safe barrel
+recovery and diagnostics changes. It is **not** a game-verified binary.
+
+```powershell
+git fetch origin
+git switch feat/natural-forestry-gather-journal-v0115
+.\scripts\validate-local.ps1 -Format
+.\scripts\validate-local.ps1 -BuildClient
+```
+
+If both native build commands pass, launch the resulting exact-commit
+`horizon-client.exe` with your owned Minecraft Java resources and
+official launcher in a NEW disposable world. Keep loaded trees and
+stone near `/civ found Ashford`; observe `/civ diagnose Ashford`,
+`/civ roster Ashford`, `/civ warehouse Ashford`.
+For a blocked issued natural gather, use OP `/civ gathercheck Ashford`
+and only if original block evidence is directly inspected, OP
+`/civ discardgather Ashford intact` or `... empty`. This explicitly
+abandons any disputed resource with **zero** credit; it is NOT a replay
+or a refund. Preserve full world backup and logs before intervention.
+
+The forest predicate verifies a natural-looking rooted tree, not player
+provenance. A player-grown oak outside registered parcel protections
+looks identical to a world-generated oak. Do not use in important worlds.
+See TEST_PLAN 189-199; true multi-log tree felling and replanting
+remain separate work.
