@@ -2120,6 +2120,54 @@ fn farmer_delivery_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Res
     Ok(())
 }
 
+/// Bakers need real extracted native wheat and an intact public crafting
+/// table. Three wheat become one bread receipt only while a UUID-bound Baker
+/// is physically working at the native bakery; bread is made available only
+/// after this same baker returns to the hall and the steward stocks a barrel.
+fn baker_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), String> {
+    if !DailyPhase::at(game.world.day_time).on_shift(Job::Baker) { return Ok(()); }
+    let dimension = game.dim.id().to_owned();
+    let ids: Vec<u64> = state.world.as_ref().unwrap().settlements.values()
+        .filter(|v| v.dimension == dimension && v.bakery.as_ref().is_some_and(|b| b.complete))
+        .map(|v| v.id).collect();
+    for id in ids {
+        let world = state.world.as_ref().unwrap();
+        let village = &world.settlements[&id];
+        let b = village.bakery.as_ref().unwrap();
+        if b.bread_in_transit > 0 {
+            if !storage_worker_near(game, world, id, Job::Baker) { continue; }
+            let old = state.world.as_ref().unwrap().clone();
+            if state.world.as_mut().unwrap().deliver_bakery_bread(id)? {
+                save_autonomous(state, old)?;
+            }
+            return Ok(());
+        }
+        if b.wheat_escrow < crate::game::civilizations_core::BREAD_WHEAT_RECIPE {
+            continue;
+        }
+        // Check that the whole actual workshop still exists and is loaded,
+        // not merely that the old save claims it was complete yesterday.
+        let intact = bakery_plan(b.origin).iter().all(|step|
+            world_block(game, &dimension, step.pos).as_deref() == Some(step.block));
+        if !intact { continue; }
+        let actors = loaded_actors(game, world, id);
+        let working = village.residents.iter().filter(|r| r.alive && r.job == Job::Baker)
+            .any(|r| actors.iter().any(|(known,mob)| *known == r.id
+                && game.native_mob(&dimension, *mob).is_some_and(|actor| {
+                    let dx = actor.pos[0] - f64::from(b.origin[0]);
+                    let dz = actor.pos[2] - f64::from(b.origin[2]);
+                    dx * dx + dz * dz <= 6.0 * 6.0
+                })));
+        if !working { continue; }
+        let before = state.world.as_ref().unwrap().clone();
+        if state.world.as_mut().unwrap().craft_bread(id)? {
+            save_autonomous(state, before)?;
+        }
+        return Ok(());
+    }
+    Ok(())
+}
+
 /// One bounded planning step per 100 loaded level ticks. NPCs choose free
 /// natural plots *inside their settlement radius* and start actual physical
 /// jobs. Paid player parcels are hard exclusions in BOTH domain paths.
@@ -2501,6 +2549,13 @@ pub fn level_tick(game: &mut Game<'_>, dimension: &str) {
                 return;
             }
         }
+        if let Err(error) = build_bakery_one_step(game, state) {
+            log::warn!("[civilizations] physical bakery construction paused: {error}");
+            if error.starts_with("persistence:") {
+                state.problem = Some(error);
+                return;
+            }
+        }
         if let Err(error) = build_one_step(game, state) {
             // Unloaded chunks are normal; a player may leave and return.
             if error.contains("unloaded") || error.contains("not loaded") {
@@ -2510,6 +2565,15 @@ pub fn level_tick(game: &mut Game<'_>, dimension: &str) {
             if error.starts_with("persistence:") {
                 // A physical block may already exist. Stop mutating until
                 // manual recovery, without pretending the write succeeded.
+                state.problem = Some(error);
+                return;
+            }
+        }
+    }
+    if state.physical_ticks % 200 == 0 {
+        if let Err(error) = baker_one_step(game, state) {
+            log::warn!("[civilizations] real bakery work paused: {error}");
+            if error.starts_with("persistence:") {
                 state.problem = Some(error);
                 return;
             }
