@@ -1736,6 +1736,29 @@ fn barrel_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
                 save_autonomous(state, before)?;
                 return Ok(());
             }
+            // Aggregate counts alone do not identify the reserved slot.
+            // An operator/hopper may replace the exact source stack between
+            // planning and issuing. Never take a foreign item even when the
+            // total number of logs/stone in the barrel is unchanged.
+            if transfer.direction == BarrelDirection::ToBuilder {
+                let valid_slot = transfer.slot.is_some_and(|selected| {
+                    game.native_container_slots(
+                        &dimension, transfer.position, Direction::Up
+                    ).is_some_and(|slots| slots.iter().any(|entry| {
+                        entry.slot == selected && entry.can_take
+                            && entry.stack.as_ref().is_some_and(|stack| {
+                                stack.item == transfer.good.item()
+                                    && stack.damage == 0 && stack.extra.is_none()
+                                    && stack.count >= transfer.count
+                            })
+                    }))
+                });
+                if !valid_slot {
+                    state.world.as_mut().unwrap().block_barrel_transfer(id)?;
+                    save_autonomous(state, before)?;
+                    return Ok(());
+                }
+            }
             // Mark issued and durably save BEFORE the external inventory edit.
             state.world.as_mut().unwrap().issue_barrel_transfer(id)?;
             save_autonomous(state, before)?;
