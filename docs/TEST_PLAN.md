@@ -298,3 +298,71 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
 119. Record screen captures of working hall, signs, visible builder work,
      crop tending and material transfer, plus native logs. **Only those
      observations close first-playable acceptance, not source assertions.**
+
+## Native public barrel inventory and courier acceptance (v0.1.13)
+
+120. Use a disposable flat natural world, checkout latest stacked
+     `feat/native-barrel-inventory-v0113`. Build a full real hall and verify
+     its two barrel block entities exist at center (-1,+1) and (+1,+1).
+121. With hall completed, /civ warehouse Ashford must show ACTUAL BARRELS
+     from native container slots; it must NOT simply echo the legacy JSON
+     abstract or inbound delivery queue.
+122. While standing within 12 blocks, run /civ sell wood 16 from real
+     player inventory. Check item count decreased once and wood appears first
+     in the steward's inbound queue, then in a real vanilla barrel **only
+     when the UUID-linked merchant is loaded near the hall**.
+123. Interrupt a deposit after Planned is saved, after Issued is saved,
+     and after native insertion but before confirmation. Recover from
+     backups/controlled crash injection. Issued must NEVER be reinserted
+     blindly. A mismatching observed count must become Blocked.
+124. Verify mixed native storage: wood/stone prefer first barrel,
+     wheat/bread/iron prefer second, with spillover when full. No damaged or
+     NBT-bearing stack is consumed as an ordinary plain material.
+125. Prepare a real public hut job, with 20 oak logs and 25 cobblestone
+     physically present in barrels but zero available in the old virtual
+     warehouse. Builder must walk to hall, extract exactly that supply,
+     reserve the escrow once, then walk to and build the hut.
+126. Reboot mid-builder extraction. Completed native withdrawals must
+     never be reissued on reload; observed stock must match durable 1–8
+     item batch transitions. Uncertain writes quarantine instead.
+127. Observe a UUID-linked miner and lumberjack remove real stone/oak
+     source blocks with the loaded native conditional command. They must
+     walk back to village hall before receiving delivery credit; the steward
+     then places receipts in barrels. Stay nearby, do not teleport workers.
+128. After a physically verified eight-crop harvest, the farmer must
+     carry a pending eight-wheat receipt back to hall; verify warehouse
+     delivery credit exactly once and later native barrel insertion
+     exactly once. No abstract or player-inventory credit.
+129. Attempt to open a community hall barrel as a non-OP citizen or visitor:
+     server should prevent vanilla container UI and show trade instructions.
+     Check a personal barrel elsewhere is still usable. Test operator access
+     for debugging, and record whether external hoppers bypass hook.
+130. Run /civ buy wood 4 with sufficient coins near a completed hall.
+     Confirm matching real native barrel slot decreases by four, player
+     native inventory receives exactly four, and civic coin balance falls
+     once with corresponding treasury increase.
+131. Attempt real buy from too far away, other dimension, insufficient
+     coins, no room, no full eligible plain slot, altered item NBT or while
+     another native transfer is outstanding. No free items or coins.
+132. Restart with a precharged native market journal in Issued/Blocked phase.
+     The game must not re-extract or grant items; /civ warehouse must
+     reveal the pending order for manual operator reconciliation.
+133. Modify barrel contents externally using an OP or hopper during a
+     pending native transfer. A count mismatch must block the operation;
+     no best-effort "repair" that duplicates items may occur.
+134. Break one public barrel (in a disposable world only) or unload the
+     hall chunk while an inventory transfer is pending. No further
+     external item movement until real slot reads become valid again.
+135. Have two separate village halls in the same dimension and in
+     different dimensions. Their incoming queues, actual barrel stock,
+     buyer orders and build escrow remain isolated.
+136. Verify sign shortage displays real barrel stock plus build escrow,
+     NOT virtual abstract logs. A missing block entity must not print
+     fabricated stock values.
+137. Confirm village-owned real barrels do NOT open freely to ordinary
+     players. This is not full vanilla block anti-grief; destructive
+     edits and external-mod inventory writes need separate hooks.
+138. Compile native Horizon, run all domain/structural tests, restart after
+     world load, and collect logs and game screenshots of actual physical
+     barrel contents, working NPC couriers, purchases and construction.
+     Source inspection alone cannot close this acceptance gate.
