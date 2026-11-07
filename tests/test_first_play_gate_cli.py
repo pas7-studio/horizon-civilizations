@@ -47,7 +47,21 @@ class LocalReleaseGateHarnessTests(unittest.TestCase):
         self.env = dict(os.environ, PATH=str(self.bin) + os.pathsep + os.environ.get("PATH", ""))
 
     def _exe(self, name: str, text: str) -> None:
-        f = self.bin / name
+        if os.name == "nt":
+            # Windows can't run POSIX shebang mocks. Exercise the same CLI
+            # through harmless .cmd stubs resolved by PATHEXT.
+            f = self.bin / (name + ".cmd")
+            if name == "cargo":
+                text = ('@echo off\n'
+                        'if "%1"=="test" if "%FAIL_TEST%"=="yes" exit /b 9\n'
+                        'echo cargo 1.95.0 (mock)\n')
+            elif name == "rustc":
+                version = "1.94.2" if "1.94.2" in text else "1.95.0"
+                text = f'@echo off\necho rustc {version} (mock)\n'
+            else:
+                text = '@echo off\necho rustfmt 1.95.0 (mock)\n'
+        else:
+            f = self.bin / name
         f.write_text(text)
         f.chmod(0o755)
 
