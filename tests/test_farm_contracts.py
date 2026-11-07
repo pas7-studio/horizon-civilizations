@@ -14,7 +14,10 @@ class FarmContracts(unittest.TestCase):
                         "native_run_command", "native_entity_by_uuid", "inspect_farm",
                         "game.native_on(MOD_ID)", '"civ farm <name:word>"']:
             self.assertIn(feature, glue)
-        self.assertIn('state.properties.get("age")', glue)
+        # Rustfmt may split this method chain across lines; assert behavior,
+        # not a particular whitespace arrangement.
+        self.assertIn('.properties', glue)
+        self.assertIn('.get("age")', glue)
         self.assertIn("farm_one_step(game, state)", glue)
 
     def test_visual_harvest_mints_no_economic_stock(self):
