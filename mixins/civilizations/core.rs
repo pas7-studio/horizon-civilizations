@@ -492,7 +492,9 @@ impl BarrelTransfer {
     pub fn expected_after(&self) -> Option<u32> {
         match self.direction {
             BarrelDirection::ToBarrel => self.before.checked_add(self.count),
-            BarrelDirection::ToBuilder => self.before.checked_sub(self.count),
+            BarrelDirection::ToBuilder
+            | BarrelDirection::ToBakeryBuilder
+            | BarrelDirection::ToBakerIngredients => self.before.checked_sub(self.count),
         }
     }
 }
