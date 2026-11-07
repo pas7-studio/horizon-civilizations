@@ -235,8 +235,8 @@ truth. Abstract simulation houses and unfinished building projects provide
 
 During the night, eligible non-guard villagers navigate toward their indoor
 position only if the actual already-loaded Minecraft floor, two-block doorway,
-and standing space match the hut template. Obstructed, destroyed or unloaded
-huts fall back to the commons near the village center; the mod never loads
+and standing space match the hut template. Huts with a damaged checked floor, doorway or indoor standing lane, or with
+unloaded required blocks, fall back to the commons; the mod never loads
 chunks or overwrites blocks for residential movement. Guards keep their
 existing on-duty patrol destination.
 
