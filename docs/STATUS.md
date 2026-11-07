@@ -1,3 +1,18 @@
+# Native Rust test inventory is now required
+
+- [x] The native build runs filtered `civilizations_core::` and
+  `civilizations_glue::` Rust tests, including newly authored filesystem
+  recovery tests in the glue module.
+- [x] Cargo test filters are listed first; zero matched tests block a
+  passing native build even when Cargo exits zero.
+- [x] Local first-play gate now requires both suite names, positive
+  discovered counts and PASS status from the pinned native build report.
+- [x] Authored three Python mock-Cargo tests plus two first-play gate
+  missing/zero-suite tests; updated native CLI source contracts.
+- [ ] No real Cargo, full Python suite or native Minecraft E2E yet.
+
+---
+
 # Latest source safety: incomplete first world save
 
 - [x] Detect orphaned `world.json.tmp` before treating a missing
