@@ -1,7 +1,8 @@
 // Horizon bridge. All world logic lives in civilizations_core; this module
 // translates server hooks, commands, inventory changes, and native NPC spawns.
 use crate::game::{
-    civilizations_core::{farm_plan, hut_plan, town_hall_plan, inspect_farm, inspect_hut, inspect_town_hall, is_ground,
+    civilizations_core::{farm_plan, hut_plan, town_hall_plan, hall_storage_positions,
+        BarrelDirection, BarrelPhase, inspect_farm, inspect_hut, inspect_town_hall, is_ground,
         BuildInspection, DailyPhase, FarmBlock, FarmDecision, FarmStage, Good, HomeSlot, Job, VisualBuildJob,
         World, inspect_home, hall_board_positions, HOUSING_PLOT_OFFSETS, MAX_HOUSING_SURVEY_RESULTS,
         MAX_SIM_DAYS},
@@ -10,6 +11,8 @@ use crate::game::{
     Game,
 };
 use horizon_client::text::{self, Text};
+use horizon_client::items::ItemStack;
+use horizon_core::geometry::Direction;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
@@ -256,11 +259,25 @@ fn guide_actors(game: &mut Game<'_>, world: &World) {
                     || (job.good == Good::Stone && resident.job == Job::Miner))
             {
                 let target = village.gather_job.as_ref().expect("gather exists");
-                [f64::from(target.stand[0]) + 0.5,
-                 f64::from(target.stand[1]),
-                 f64::from(target.stand[2]) + 0.5]
+                if target.issued {
+                    // A log or stone is not credited until its worker
+                    // visibly returns to the town hall's receiving area.
+                    [f64::from(village.center[0]) + 0.5,
+                     f64::from(village.center[1]),
+                     f64::from(village.center[2] - 3) + 0.5]
+                } else {
+                    [f64::from(target.stand[0]) + 0.5,
+                     f64::from(target.stand[1]),
+                     f64::from(target.stand[2]) + 0.5]
+                }
             } else if phase.on_shift(resident.job) && resident.job == Job::Farmer {
-                if let Some(farm) = &village.farm {
+                if village.wheat_delivery_pending() > 0 {
+                    // Confirmed mature wheat travels home with the actual
+                    // loaded farmer before it becomes village inventory.
+                    [f64::from(village.center[0]) + 0.5,
+                     f64::from(village.center[1]),
+                     f64::from(village.center[2] - 3) + 0.5]
+                } else if let Some(farm) = &village.farm {
                     [f64::from(farm.origin[0]) + 0.5,
                      f64::from(farm.origin[1]),
                      f64::from(farm.origin[2] - 3) + 0.5]
@@ -275,9 +292,17 @@ fn guide_actors(game: &mut Game<'_>, world: &World) {
                      f64::from(job.origin[1]),
                      f64::from(job.origin[2] - 4) + 0.5]
                 } else if let Some(job) = &village.visual_job {
-                    [f64::from(job.origin[0]) + 0.5,
-                     f64::from(job.origin[1]),
-                     f64::from(job.origin[2] - 4) + 0.5]
+                    if village.hall_complete && !village.hut_supplies_reserved {
+                        // Builders visit the actual town hall barrels first
+                        // to extract their physical bill of materials.
+                        [f64::from(village.center[0]) + 0.5,
+                         f64::from(village.center[1]),
+                         f64::from(village.center[2] - 3) + 0.5]
+                    } else {
+                        [f64::from(job.origin[0]) + 0.5,
+                         f64::from(job.origin[1]),
+                         f64::from(job.origin[2] - 4) + 0.5]
+                    }
                 } else {
                     [f64::from(village.center[0] + offset[0]) + 0.5,
                      f64::from(village.center[1] + offset[1]),
@@ -578,6 +603,34 @@ fn farm_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), Str
     }
 }
 
+/// Public civic barrels are accounted stock, not free player loot. Only
+/// real server operators may open them to inspect native contents; ordinary
+/// villagers trade using the native inventory command path. This hook does
+/// not claim arbitrary vanilla barrels or player-owned storage.
+pub fn protect_hall_inventory(
+    game: &mut Game<'_>, player: u128, _name: &str,
+    position: [i32; 3], cancel: &mut bool,
+) {
+    if *cancel || !game.native_on(MOD_ID) { return; }
+    let dimension = game.dim.id().to_owned();
+    if world_block(game, &dimension, position).as_deref() != Some("minecraft:barrel") {
+        return;
+    }
+    let Some(dir) = game.native_world_dir() else { return; };
+    let guard = active(dir.join(DIR));
+    let is_public_barrel = guard.as_ref().and_then(|state| state.world.as_ref())
+        .is_some_and(|world| world.settlements.values()
+            .filter(|v| v.dimension == dimension && v.hall_complete)
+            .any(|v| hall_storage_positions(v.center).contains(&position)));
+    drop(guard);
+    if !is_public_barrel { return; }
+    if game.native_player_permission(player).unwrap_or(0) >= 2 { return; }
+    *cancel = true;
+    let _ = game.native_tell(player, Text::literal(
+        "This is the village's public warehouse. Trade with /civ sell and /civ buy; items are reserved for real NPC construction."
+    ).with_color(text::GOLD));
+}
+
 /// Right-click dialogue for a UUID-bound civilization villager. Unbound or
 /// vanilla villagers keep their normal Minecraft interaction.
 pub fn interact_entity(game: &mut Game<'_>, entity: i32, kind: &str, claimed: &mut bool) {
@@ -647,6 +700,114 @@ pub fn interact_entity(game: &mut Game<'_>, entity: i32, kind: &str, claimed: &m
     }
 }
 
+fn quarantined_native_purchase(state: &mut ActiveWorld, village_id: u64, reason: &str) -> String {
+    let marked = state.world.as_mut().unwrap().block_market_purchase(village_id);
+    let outcome = marked.and_then(|()| save(state));
+    if let Err(error) = outcome {
+        state.problem = Some(format!("market purchase recovery halted: {error}"));
+    }
+    format!(
+        "Native warehouse purchase QUARANTINED ({reason}). Coins already reserved; no automatic retry or refund. OP must inspect the saved order and exact player/barrel inventory before recovery."
+    )
+}
+
+/// Market purchases read and extract one entire plain slot from one of the
+/// two loaded native town-hall barrels. Save the buyer's coin debit and
+/// issued purchase journal FIRST. A native/restart ambiguity can lose a
+/// purchase, but never silently grants a second identical item batch.
+fn buy_from_real_barrel(
+    game: &mut Game<'_>, state: &mut ActiveWorld, actor: &str,
+    village_id: u64, good: Good, count: u32, position: [f64; 3],
+    already_saved: &mut bool,
+) -> Result<String, String> {
+    let v = state.world.as_ref().unwrap().settlements
+        .get(&village_id).ok_or("unknown village")?.clone();
+    if game.dim.id() != v.dimension { return Err("visit the village dimension to trade".into()); }
+    if !position.iter().all(|x| x.is_finite()) {
+        return Err("invalid trading location".into());
+    }
+    let dx = position[0] - f64::from(v.center[0]);
+    let dz = position[2] - f64::from(v.center[2]);
+    if dx * dx + dz * dz > 12.0 * 12.0
+        || (position[1] - f64::from(v.center[1])).abs() > 8.0 {
+        return Err("trade within 12 blocks of the actual village hall".into());
+    }
+    if v.barrel_transfer.is_some() || v.market_purchase.is_some() {
+        return Err("warehouse transfer or previous purchase still pending; /civ warehouse shows it".into());
+    }
+    if game.native_room_for(good.item()) < count {
+        return Err("not enough empty native player inventory space".into());
+    }
+    // A single plain stack is required: native extraction is one bounded
+    // API call with a stable slot ID, never an uncontrolled multi-slot sweep.
+    let mut selected = None;
+    for barrel in hall_storage_positions(v.center) {
+        if world_block(game, &v.dimension, barrel).as_deref() != Some("minecraft:barrel") {
+            continue;
+        }
+        let Some(slots) = game.native_container_slots(&v.dimension, barrel, Direction::Up)
+        else { continue; };
+        if let Some(slot) = slots.iter().find_map(|entry| {
+            let stack = entry.stack.as_ref()?;
+            (entry.can_take && stack.item == good.item() && stack.count >= count
+                && stack.damage == 0 && stack.extra.is_none())
+                .then_some((entry.slot, stack.count))
+        }) {
+            let Some(before) = plain_barrel_count(game, &v.dimension, barrel, good) else {
+                continue;
+            };
+            selected = Some((barrel, slot.0, slot.1, before));
+            break;
+        }
+    }
+    let Some((barrel, slot, _in_slot, before)) = selected else {
+        return Err(format!(
+            "no intact native barrel stack with {count} {} available; smaller purchases can work across split stacks",
+            good.as_str()
+        ));
+    };
+
+    state.world.as_mut().unwrap().begin_market_purchase(
+        actor, village_id, good, count, barrel, slot, before
+    )?;
+    if let Err(error) = save(state) {
+        state.problem = Some(format!("market reservation save refused: {error}"));
+        return Err(format!("native warehouse purchase not started: {error}"));
+    }
+    *already_saved = true; // outer command handler must NEVER undo this debit
+    let taken = game.native_extract_item(&v.dimension, barrel, Direction::Up, slot, count);
+    let exact = taken.as_ref().is_some_and(|stack| {
+        stack.item == good.item() && stack.count == count
+            && stack.damage == 0 && stack.extra.is_none()
+    });
+    if !exact {
+        return Ok(quarantined_native_purchase(state, village_id,
+            "native barrel returned a missing or wrong item stack"));
+    }
+    if plain_barrel_count(game, &v.dimension, barrel, good)
+        != before.checked_sub(count) {
+        return Ok(quarantined_native_purchase(state, village_id,
+            "native barrel stock did not decrease by exact purchased quantity"));
+    }
+    let received = game.native_give_items(good.item(), count);
+    if received != count {
+        return Ok(quarantined_native_purchase(state, village_id,
+            "player inventory did not accept the full paid stack"));
+    }
+    let finished = state.world.as_mut().unwrap().complete_market_purchase(village_id, actor);
+    if let Err(error) = finished.and_then(|()| save(state)) {
+        state.problem = Some(format!("physical market purchase final audit save failed: {error}"));
+        return Ok(format!(
+            "Item delivery completed, but market audit persistence FAILED: {error}. World halted to prevent duplicate grants."
+        ));
+    }
+    let price = u64::from(good.price()) * u64::from(count);
+    Ok(format!(
+        "Bought {count} real {} from the town hall barrel for {price} civic coins. Native inventory and village treasury updated.",
+        good.as_str()
+    ))
+}
+
 pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, ran: &mut bool) {
     let mut args = command.split_whitespace();
     if args.next() != Some("civ") { return; }
@@ -683,33 +844,65 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
         let mayor = village.residents.iter()
             .find(|r| r.alive && r.job == Job::Merchant)
             .map(|r| r.name.as_str()).unwrap_or("unassigned");
-        let (hall_wood, hall_stone) = village.hall_materials_missing();
-        let (hut_wood, hut_stone) = (
-            crate::game::civilizations_core::HUT_WOOD_LOGS
-                .saturating_sub(village.warehouse_quantity(Good::Wood)),
-            crate::game::civilizations_core::HUT_COBBLESTONE
-                .saturating_sub(village.warehouse_quantity(Good::Stone)),
-        );
         let goods = [Good::Wheat, Good::Bread, Good::Wood, Good::Stone, Good::Iron];
-        let inventory = goods.iter().map(|good| format!(
+        let incoming = goods.iter().map(|good| format!(
             "{}:{}", good.as_str(), village.warehouse_quantity(*good)
         )).collect::<Vec<_>>().join(" / ");
+        let stored = if village.hall_complete {
+            physical_barrel_stock(game, &village.dimension, village.center)
+        } else { None };
+        let physical = stored.as_ref().map(|items| items.iter()
+            .map(|(good, count)| format!("{}:{}", good.as_str(), count))
+            .collect::<Vec<_>>().join(" / "))
+            .unwrap_or_else(|| "unloaded / not constructed".to_owned());
+        let from_barrel = |good: Good| stored.as_ref()
+            .and_then(|items| items.iter().find(|(item, _)| *item == good))
+            .map(|(_, count)| *count).unwrap_or(0);
+        let escrow = goods.iter().map(|good| format!(
+            "{}:{}", good.as_str(), village.build_escrow.get(good).copied().unwrap_or(0)
+        )).collect::<Vec<_>>().join(" / ");
+        let (hall_wood, hall_stone) = village.hall_materials_missing();
+        let (hut_wood, hut_stone) = (
+            crate::game::civilizations_core::HUT_WOOD_LOGS.saturating_sub(
+                from_barrel(Good::Wood).saturating_add(
+                    village.build_escrow.get(&Good::Wood).copied().unwrap_or(0))
+            ),
+            crate::game::civilizations_core::HUT_COBBLESTONE.saturating_sub(
+                from_barrel(Good::Stone).saturating_add(
+                    village.build_escrow.get(&Good::Stone).copied().unwrap_or(0))
+            ),
+        );
+        let transfer = village.barrel_transfer.as_ref().map(|t| format!(
+            "{:?} {:?} {} x{} at {:?}, before {}, phase {:?}",
+            t.direction, t.good, t.good.item(), t.count, t.position,
+            t.before, t.phase
+        )).unwrap_or_else(|| "none".to_owned());
+        let purchase = village.market_purchase.as_ref().map(|order| format!(
+            "{} bought {} x{} for {} coins, source {:?}, phase {:?}; no automatic retries",
+            order.buyer, order.good.as_str(), order.count, order.price,
+            order.position, order.phase
+        )).unwrap_or_else(|| "none".to_owned());
         if action == "warehouse" {
             reply(game, format!(
-                "{} PHYSICAL warehouse [{}]. Current hall needs {} logs, {} cobblestone; next hut needs {} logs, {} cobblestone. Player /civ sell <good> <amount> delivers actual inventory. Abstract daily-production stock is NOT this warehouse.",
-                village.name, inventory, hall_wood, hall_stone, hut_wood, hut_stone
+                "{} ACTUAL BARRELS [{}]. Awaiting steward delivery [{}]. Farmer carrying {} wheat. Physically extracted building escrow [{}]. Next hut needs {} logs / {} cobble. Durable transfer: {}. Market order: {}. Physical items in the two native containers are authoritative after hall completion; abstract daily stock is separate.",
+                village.name, physical, incoming, village.wheat_delivery_pending(), escrow,
+                hut_wood, hut_stone, transfer, purchase
             ));
         } else {
             let building = village.hall_job.as_ref().map(|job| format!(
                 "{}/{} blocks verified at {:?}, blocked={}",
                 job.cursor, town_hall_plan(job.origin).len(), job.origin, job.blocked
             )).unwrap_or_else(|| "waiting for funded construction".to_owned());
-            let state = if village.hall_complete {
-                "COMPLETED: mayor desk, resource barrels and 2 bulletin signs"
+            let condition = if village.hall_complete {
+                "COMPLETED: native barrel warehouse, mayor desk, 2 information signs"
             } else { "UNDER CONSTRUCTION / UNFUNDED" };
             reply(game, format!(
-                "{} civic center: {}. Mayor: {} (village merchant). {}. Physical goods: [{}]. Need {} logs and {} stone to fund hall. Signs refresh when a complete hall is loaded.",
-                village.name, state, mayor, building, inventory, hall_wood, hall_stone
+                "{} civic center: {}. Mayor: {}. {}. Native stored items [{}], incoming [{}]. Hall funding deficit: {} logs / {} cobble. {}",
+                village.name, condition, mayor, building, physical, incoming,
+                hall_wood, hall_stone,
+                if village.barrel_transfer.is_some() {
+                    "See /civ warehouse for pending or blocked transfer"
+                } else { "Warehouse transfer journal clear" }
             ));
         }
         return;
@@ -884,7 +1077,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             ));
         } else {
             reply(game, format!(
-                "{} proposes huts: {} physical spaces missing, {} abstract houses awaiting build. {}. OP must visit a plot and run /civ approvehouse {} <slot> <y>. Suggestions expire if terrain changes; all blocks are rechecked.",
+                "{} can use these optional safe building slots: {} spaces missing, {} abstract houses awaiting build. {}. Autonomous builders select free plots by default after the funded town hall; OP /civ approvehouse {} <slot> <y> is an optional manual override. Real blocks and player plots are always rechecked.",
                 village.name, waiting, village.pending_visual_buildings,
                 proposals.join(" | "), village.name
             ));
@@ -938,7 +1131,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             .map(|receipt| format!("#{} day {} ({} crops)",
                 receipt.sequence, receipt.world_day, receipt.crops)).collect();
         reply(game, format!(
-            "{} observed physical harvest evidence: {} recorded batches, {} kept in bounded log. {}. Physical warehouse credits confirmed crops only; no abstract stock or player items credited.",
+            "{} observed physical harvest evidence: {} recorded batches, {} kept in bounded log. {}. Confirmed crops remain with the farmer until hall delivery; steward then inserts real wheat into the public barrels. No abstract or player inventory credit.",
             village.name, farm.harvest_sequence, farm.harvest_receipts.len(),
             if details.is_empty() { "No harvest receipts".to_owned() } else { details.join(" | ") },
         ));
@@ -958,7 +1151,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
                 farm.blocked, farm.completed_cycles, farm.harvest_sequence,
             )
         } else {
-            format!("{} has no farm; OP: select empty 3x3 natural patch 12..80 blocks away, /civ farm {}", settlement.name, settlement.name)
+            format!("{} has no physical farm yet; UUID-bound farmers automatically select a loaded natural 3x3 plot. OP /civ farm {} remains an optional manual fallback.", settlement.name, settlement.name)
         };
         reply(game, message);
         return;
@@ -1102,7 +1295,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             check_empty_hut_site(game, &village.dimension, site)?;
             let price = state.world.as_mut().unwrap().commission_house(&actor, village.id, site)?;
             Ok(format!(
-                "Commissioned your own 5x5 hut at {:?} for {} civic coins, 8 village wood and 6 stone. A UUID-linked builder will physically build during work hours. /civ construction {}",
+                "Commissioned your own 5x5 hut at {:?} for {} civic coins (labor fee). A UUID-bound builder will collect 20 actual oak logs and 25 actual cobblestone from the hall barrels before physically building. /civ warehouse {}",
                 site, price, village.name
             ))
         })(),
@@ -1190,7 +1383,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             let name = args.next().ok_or("usage: /civ found <name>")?;
             let center = player.position.map(|v| v.floor() as i32);
             let id = state.world.as_mut().unwrap().found(name, &player.dimension, center, &actor)?;
-            Ok(format!("Founded {name} (#{id}). Use /civ actors {name} to summon its 10 villagers."))
+            Ok(format!("Founded {name} (#{id}). Autonomous NPC spawning and town hall planning start by default. The first civic hall needs 24 real logs and 25 cobblestone; /civ hall {name} and /civ warehouse {name} show progress."))
         })(),
         "promote" => (|| {
             let rank = state.world.as_mut().unwrap().promote(&actor)?;
@@ -1221,6 +1414,19 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             let good = Good::parse(args.next().ok_or("good required")?).ok_or("unknown good")?;
             let count = parse_amount(args.next())?;
             let village_id = own_settlement(&previous, &actor)?;
+            let village = &previous.settlements[&village_id];
+            if village.dimension != player.dimension {
+                return Err("trade from within the settlement dimension".into());
+            }
+            if !player.position.iter().all(|component| component.is_finite()) {
+                return Err("invalid player trading location".into());
+            }
+            let dx = player.position[0] - f64::from(village.center[0]);
+            let dz = player.position[2] - f64::from(village.center[2]);
+            if dx * dx + dz * dz > 12.0 * 12.0
+                || (player.position[1] - f64::from(village.center[1])).abs() > 8.0 {
+                return Err("trade within 12 blocks of the actual village hall".into());
+            }
             let item = good.item();
             if action == "sell" {
                 if game.native_count_items(item) < count { return Err(format!("you need {count} {item}")); }
@@ -1237,6 +1443,13 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
                 }
                 already_saved = true;
                 Ok(format!("Sold {count} {} for {payout} coins", good.as_str()))
+            } else if previous.settlements[&village_id].hall_complete {
+                // After the hall is built, the source of truth for a shop
+                // purchase is an ACTUAL native vanilla barrel slot.
+                buy_from_real_barrel(
+                    game, state, &actor, village_id, good, count,
+                    player.position, &mut already_saved,
+                )
             } else {
                 if game.native_room_for(item) < count { return Err("not enough inventory space".into()); }
                 let cost = state.world.as_mut().unwrap().buy(&actor, village_id, good, count)?;
@@ -1444,6 +1657,268 @@ fn auto_spawn_villagers(
     Ok(())
 }
 
+/// A native barrel is the authoritative on-site storage after the civic
+/// hall completes. Only plain item stacks count (never damaged/NBT-bearing
+/// equipment that a trader might have placed in the container).
+fn plain_barrel_count(game: &Game<'_>, dimension: &str, pos: [i32; 3], good: Good) -> Option<u32> {
+    if world_block(game, dimension, pos).as_deref() != Some("minecraft:barrel") {
+        return None;
+    }
+    let slots = game.native_container_slots(dimension, pos, Direction::Up)?;
+    slots.iter().filter_map(|entry| entry.stack.as_ref())
+        .filter(|stack| stack.item == good.item() && stack.damage == 0 && stack.extra.is_none())
+        .try_fold(0_u32, |total, stack| total.checked_add(stack.count))
+}
+
+/// Reads exactly the two village hall barrels, never a nearby player chest.
+fn physical_barrel_stock(
+    game: &Game<'_>, dimension: &str, center: [i32; 3]
+) -> Option<Vec<(Good, u32)>> {
+    let mut values = Vec::new();
+    for good in [Good::Wheat, Good::Bread, Good::Wood, Good::Stone, Good::Iron] {
+        let mut count = 0_u32;
+        for pos in hall_storage_positions(center) {
+            count = count.checked_add(plain_barrel_count(game, dimension, pos, good)?)?;
+        }
+        values.push((good, count));
+    }
+    Some(values)
+}
+
+/// A transfer has to be serviced by a real, UUID-linked NPC in the same
+/// loaded village. The merchant deposits; builders collect their materials.
+fn storage_worker_near(game: &mut Game<'_>, world: &World, id: u64, role: Job) -> bool {
+    let v = &world.settlements[&id];
+    let linked = loaded_actors(game, world, id);
+    v.residents.iter().filter(|r| r.alive && r.job == role).any(|r| {
+        linked.iter().any(|(known, mob)| *known == r.id
+            && game.native_mob(&v.dimension, *mob).is_some_and(|actor| {
+                let dx = actor.pos[0] - f64::from(v.center[0]);
+                let dz = actor.pos[2] - f64::from(v.center[2]);
+                dx * dx + dz * dz <= 8.0 * 8.0
+            }))
+    })
+}
+
+/// Never re-issue a native operation marked Issued in saved world.json.
+/// An uncertain barrel result becomes Blocked rather than being replayed.
+/// The first attempt saves Issued *before* mutating a native inventory.
+fn barrel_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), String> {
+    let dimension = game.dim.id().to_owned();
+    let ids: Vec<u64> = state.world.as_ref().unwrap().settlements.values()
+        .filter(|v| v.dimension == dimension && v.hall_complete)
+        .map(|v| v.id).collect();
+    for id in ids {
+        let village = state.world.as_ref().unwrap().settlements[&id].clone();
+        // Never move village items behind a precharged player purchase.
+        // Issued market orders require explicit local reconciliation.
+        if village.market_purchase.is_some() { continue; }
+        if let Some(transfer) = village.barrel_transfer {
+            if transfer.phase == BarrelPhase::Blocked { continue; }
+            let Some(actual) = plain_barrel_count(game, &dimension, transfer.position, transfer.good)
+            else { continue; }; // unloaded, missing block entity: no mutation
+            let before = state.world.as_ref().unwrap().clone();
+            if transfer.phase == BarrelPhase::Issued {
+                if transfer.expected_after() == Some(actual) {
+                    state.world.as_mut().unwrap().confirm_barrel_transfer(id, actual)?;
+                } else {
+                    state.world.as_mut().unwrap().block_barrel_transfer(id)?;
+                    log::warn!(
+                        "[civilizations] {} barrel transfer discrepancy: expected {:?}, observed {}, requires inspection",
+                        village.name, transfer.expected_after(), actual
+                    );
+                }
+                save_autonomous(state, before)?;
+                return Ok(());
+            }
+            if actual != transfer.before {
+                state.world.as_mut().unwrap().block_barrel_transfer(id)?;
+                save_autonomous(state, before)?;
+                return Ok(());
+            }
+            // Aggregate counts alone do not identify the reserved slot.
+            // An operator/hopper may replace the exact source stack between
+            // planning and issuing. Never take a foreign item even when the
+            // total number of logs/stone in the barrel is unchanged.
+            if transfer.direction == BarrelDirection::ToBuilder {
+                let valid_slot = transfer.slot.is_some_and(|selected| {
+                    game.native_container_slots(
+                        &dimension, transfer.position, Direction::Up
+                    ).is_some_and(|slots| slots.iter().any(|entry| {
+                        entry.slot == selected && entry.can_take
+                            && entry.stack.as_ref().is_some_and(|stack| {
+                                stack.item == transfer.good.item()
+                                    && stack.damage == 0 && stack.extra.is_none()
+                                    && stack.count >= transfer.count
+                            })
+                    }))
+                });
+                if !valid_slot {
+                    state.world.as_mut().unwrap().block_barrel_transfer(id)?;
+                    save_autonomous(state, before)?;
+                    return Ok(());
+                }
+            }
+            // Mark issued and durably save BEFORE the external inventory edit.
+            state.world.as_mut().unwrap().issue_barrel_transfer(id)?;
+            save_autonomous(state, before)?;
+            let success = match transfer.direction {
+                BarrelDirection::ToBarrel => {
+                    let item = ItemStack {
+                        item: transfer.good.item().into(),
+                        count: transfer.count, damage: 0, extra: None,
+                    };
+                    game.insert_stack_through(transfer.position, Direction::Up, item).is_none()
+                }
+                BarrelDirection::ToBuilder => {
+                    let Some(slot) = transfer.slot else {
+                        return Err("native barrel extraction has no recorded slot".into());
+                    };
+                    let taken = game.native_extract_item(
+                        &dimension, transfer.position, Direction::Up, slot, transfer.count
+                    );
+                    taken.is_some_and(|stack| {
+                        stack.item == transfer.good.item() && stack.count == transfer.count
+                            && stack.damage == 0 && stack.extra.is_none()
+                    })
+                }
+            };
+            if !success {
+                let before = state.world.as_ref().unwrap().clone();
+                state.world.as_mut().unwrap().block_barrel_transfer(id)?;
+                save_autonomous(state, before)?;
+                log::warn!("[civilizations] {} failed native barrel transfer; no blind retry", village.name);
+            }
+            return Ok(());
+        }
+
+        let can_collect = village.visual_job.is_some()
+            && !village.hut_supplies_reserved
+            && DailyPhase::at(game.world.day_time).on_shift(Job::Builder)
+            && storage_worker_near(game, state.world.as_ref().unwrap(), id, Job::Builder);
+        if can_collect {
+            // A builder must finish collecting their bill at the town hall
+            // and have it durably reserved BEFORE routing to the build plot.
+            // Otherwise the old build_one_step near-plot check would deadlock
+            // with the new hall-first worker navigation.
+            let wood_ready = village.build_escrow.get(&Good::Wood).copied().unwrap_or(0)
+                >= crate::game::civilizations_core::HUT_WOOD_LOGS;
+            let stone_ready = village.build_escrow.get(&Good::Stone).copied().unwrap_or(0)
+                >= crate::game::civilizations_core::HUT_COBBLESTONE;
+            if wood_ready && stone_ready {
+                let prior = state.world.as_ref().unwrap().clone();
+                if state.world.as_mut().unwrap().reserve_hut_supplies(id)? {
+                    save_autonomous(state, prior)?;
+                    log::info!("[civilizations] {} builder collected real hut materials at the public warehouse", village.name);
+                    return Ok(());
+                }
+            }
+            for (good, target) in [
+                (Good::Wood, crate::game::civilizations_core::HUT_WOOD_LOGS),
+                (Good::Stone, crate::game::civilizations_core::HUT_COBBLESTONE),
+            ] {
+                let in_hand = village.build_escrow.get(&good).copied().unwrap_or(0);
+                let missing = target.saturating_sub(in_hand);
+                if missing == 0 { continue; }
+                for position in hall_storage_positions(village.center) {
+                    if world_block(game, &dimension, position).as_deref() != Some("minecraft:barrel") {
+                        continue;
+                    }
+                    let Some(slots) = game.native_container_slots(&dimension, position, Direction::Up)
+                    else { continue; };
+                    let Some((slot, available)) = slots.iter().find_map(|entry| {
+                        let stack = entry.stack.as_ref()?;
+                        (entry.can_take && stack.item == good.item()
+                            && stack.damage == 0 && stack.extra.is_none()
+                            && stack.count > 0).then_some((entry.slot, stack.count))
+                    }) else { continue; };
+                    let Some(before) = plain_barrel_count(game, &dimension, position, good) else {
+                        continue;
+                    };
+                    let quantity = missing.min(available).min(8);
+                    let prior = state.world.as_ref().unwrap().clone();
+                    state.world.as_mut().unwrap().plan_barrel_transfer(
+                        id, position, good, BarrelDirection::ToBuilder,
+                        before, quantity, Some(slot)
+                    )?;
+                    save_autonomous(state, prior)?;
+                    return Ok(());
+                }
+            }
+        }
+
+        // Delivery into actual Minecraft barrels is served by the real
+        // village merchant/steward; no player-owned inventory is silently
+        // consumed, and source goods came from prior verified receipts.
+        if !storage_worker_near(game, state.world.as_ref().unwrap(), id, Job::Merchant) {
+            continue;
+        }
+        for good in [Good::Wood, Good::Stone, Good::Wheat, Good::Bread, Good::Iron] {
+            let waiting = village.warehouse_quantity(good);
+            if waiting == 0 { continue; }
+            let spots = hall_storage_positions(village.center);
+            let preferred = if matches!(good, Good::Wood | Good::Stone) {
+                spots
+            } else { [spots[1], spots[0]] };
+            for position in preferred {
+                if world_block(game, &dimension, position).as_deref() != Some("minecraft:barrel") {
+                    continue;
+                }
+                let Some(slots) = game.native_container_slots(&dimension, position, Direction::Up)
+                else { continue; };
+                let space: u32 = slots.iter().map(|entry| match &entry.stack {
+                    None => 64,
+                    Some(stack) if stack.item == good.item()
+                        && stack.damage == 0 && stack.extra.is_none() =>
+                        64_u32.saturating_sub(stack.count),
+                    _ => 0,
+                }).sum();
+                let count = waiting.min(space).min(8);
+                if count == 0 { continue; }
+                let Some(before) = plain_barrel_count(game, &dimension, position, good) else {
+                    continue;
+                };
+                let prior = state.world.as_ref().unwrap().clone();
+                state.world.as_mut().unwrap().plan_barrel_transfer(
+                    id, position, good, BarrelDirection::ToBarrel, before, count, None
+                )?;
+                save_autonomous(state, prior)?;
+                return Ok(());
+            }
+        }
+    }
+    Ok(())
+}
+
+/// One physical farmer delivery per village, after an actual UUID-linked
+/// villager has returned from a fully confirmed crop harvest to the hall.
+fn farmer_delivery_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), String> {
+    if !DailyPhase::at(game.world.day_time).on_shift(Job::Farmer) { return Ok(()); }
+    let dim = game.dim.id().to_owned();
+    let ids: Vec<u64> = state.world.as_ref().unwrap().settlements.values()
+        .filter(|v| v.dimension == dim && v.wheat_delivery_pending() > 0)
+        .map(|v| v.id).collect();
+    for id in ids {
+        let world = state.world.as_ref().unwrap();
+        let v = &world.settlements[&id];
+        let loaded = loaded_actors(game, world, id);
+        let returned = v.residents.iter().filter(|r| r.alive && r.job == Job::Farmer)
+            .any(|r| loaded.iter().any(|(known, mob)| *known == r.id
+                && game.native_mob(&dim, *mob).is_some_and(|actor| {
+                    let dx = actor.pos[0] - f64::from(v.center[0]);
+                    let dz = actor.pos[2] - f64::from(v.center[2]);
+                    dx * dx + dz * dz <= 8.0 * 8.0
+                })));
+        if !returned { continue; }
+        let before = state.world.as_ref().unwrap().clone();
+        if state.world.as_mut().unwrap().deliver_farm_wheat(id)? {
+            save_autonomous(state, before)?;
+        }
+        return Ok(());
+    }
+    Ok(())
+}
+
 /// One bounded planning step per 100 loaded level ticks. NPCs choose free
 /// natural plots *inside their settlement radius* and start actual physical
 /// jobs. Paid player parcels are hard exclusions in BOTH domain paths.
@@ -1608,14 +2083,23 @@ fn refresh_hall_boards(game: &mut Game<'_>, world: &World) {
             .find(|r| r.alive && r.job == Job::Merchant)
             .map(|r| r.name.as_str()).unwrap_or("NONE");
         let (_, _, homeless) = village.physical_housing();
-        let (wood_missing, stone_missing) = if village.hall_complete {
-            let next = if village.visual_job.is_some() || village.pending_visual_buildings > 0 {
-                (crate::game::civilizations_core::HUT_WOOD_LOGS,
-                 crate::game::civilizations_core::HUT_COBBLESTONE)
-            } else { (0, 0) };
-            (next.0.saturating_sub(village.warehouse_quantity(Good::Wood)),
-             next.1.saturating_sub(village.warehouse_quantity(Good::Stone)))
-        } else { village.hall_materials_missing() };
+        // Never print legacy JSON stock as though it is a visible barrel.
+        // If a container is missing or unloaded, keep the signs unchanged.
+        let Some(stored) = physical_barrel_stock(game, &dimension, village.center) else {
+            continue;
+        };
+        let count = |good: Good| stored.iter()
+            .find(|(item, _)| *item == good).map(|(_, amount)| *amount).unwrap_or(0);
+        let next = if village.visual_job.is_some() || village.pending_visual_buildings > 0 {
+            (crate::game::civilizations_core::HUT_WOOD_LOGS,
+             crate::game::civilizations_core::HUT_COBBLESTONE)
+        } else { (0, 0) };
+        let (wood_missing, stone_missing) = (
+            next.0.saturating_sub(count(Good::Wood).saturating_add(
+                village.build_escrow.get(&Good::Wood).copied().unwrap_or(0))),
+            next.1.saturating_sub(count(Good::Stone).saturating_add(
+                village.build_escrow.get(&Good::Stone).copied().unwrap_or(0))),
+        );
         let [mayor_sign, needs_sign] = hall_board_positions(village.center);
         for (pos, lines) in [
             (mayor_sign, [
@@ -1717,6 +2201,23 @@ fn gather_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
     let before = state.world.as_ref().unwrap().clone();
     if job.issued {
         if name == "minecraft:air" {
+            let world = state.world.as_ref().unwrap();
+            let v = &world.settlements[&id];
+            let role = if job.good == Good::Wood { Job::Lumberjack } else { Job::Miner };
+            let linked = loaded_actors(game, world, id);
+            let delivered = v.residents.iter().filter(|r| r.alive && r.job == role).any(|r| {
+                linked.iter().any(|(known, mob)| *known == r.id
+                    && game.native_mob(&dimension, *mob).is_some_and(|actor| {
+                        let dx = actor.pos[0] - f64::from(v.center[0]);
+                        let dz = actor.pos[2] - f64::from(v.center[2]);
+                        dx * dx + dz * dz <= 8.0 * 8.0
+                    }))
+            });
+            if !delivered {
+                // No resource is credited simply because a log disappeared:
+                // the named worker must return to the loaded receiving area.
+                return Ok(());
+            }
             state.world.as_mut().unwrap().confirm_gather(id)?;
         } else {
             // Commands can be refused or a plot may be modified. Never
@@ -1814,6 +2315,20 @@ pub fn level_tick(game: &mut Game<'_>, dimension: &str) {
         }
     }
     if state.physical_ticks % 8 == 0 {
+        if let Err(error) = farmer_delivery_one_step(game, state) {
+            log::warn!("[civilizations] returning wheat to hall failed: {error}");
+            if error.starts_with("persistence:") {
+                state.problem = Some(error);
+                return;
+            }
+        }
+        if let Err(error) = barrel_one_step(game, state) {
+            log::warn!("[civilizations] native barrel transfer paused: {error}");
+            if error.starts_with("persistence:") {
+                state.problem = Some(error);
+                return;
+            }
+        }
         if let Err(error) = gather_one_step(game, state) {
             log::warn!("[civilizations] physical gathering paused: {error}");
             if error.starts_with("persistence:") {

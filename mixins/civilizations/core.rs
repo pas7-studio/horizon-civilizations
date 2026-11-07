@@ -420,6 +420,75 @@ pub fn town_hall_plan(origin: [i32; 3]) -> Vec<HutBlock> {
     plan
 }
 
+/// The actual vanilla barrel blocks inside the public town hall, not
+/// surrogate entries in the settlement's JSON. Never allow player parcels
+/// or unverified nearby chests to substitute for these positions.
+pub fn hall_storage_positions(origin: [i32; 3]) -> [[i32; 3]; 2] {
+    [[origin[0] - 1, origin[1], origin[2] + 1],
+     [origin[0] + 1, origin[1], origin[2] + 1]]
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BarrelDirection {
+    /// Saved, verified transit goods become one physical barrel item.
+    ToBarrel,
+    /// One physical barrel item becomes protected build escrow.
+    ToBuilder,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BarrelPhase {
+    Planned,
+    /// Persisted before native mutation: never automatically issue again.
+    Issued,
+    /// Interference/uncertain native result: OP inspection required.
+    Blocked,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BarrelTransfer {
+    pub position: [i32; 3],
+    pub good: Good,
+    pub direction: BarrelDirection,
+    pub phase: BarrelPhase,
+    /// Exact count of this plain item in this specific barrel before issue.
+    pub before: u32,
+    /// One bounded batch per durable journal (at most 8 native items).
+    pub count: u32,
+    /// Exact native container slot (required for ToBuilder).
+    pub slot: Option<usize>,
+}
+
+impl BarrelTransfer {
+    pub fn expected_after(&self) -> Option<u32> {
+        match self.direction {
+            BarrelDirection::ToBarrel => self.before.checked_add(self.count),
+            BarrelDirection::ToBuilder => self.before.checked_sub(self.count),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MarketPhase {
+    Issued, // coins committed before native extraction; never auto-retry
+    Blocked,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MarketPurchase {
+    pub buyer: String,
+    pub good: Good,
+    pub count: u32,
+    pub price: u64,
+    pub position: [i32; 3],
+    pub slot: usize,
+    pub before: u32,
+    pub phase: MarketPhase,
+}
+
 /// Bulletin signs are real blocks inside the civic hall; the native adapter
 /// supplies validated, bounded sign text after the town hall is complete.
 pub fn hall_board_positions(origin: [i32; 3]) -> [[i32; 3]; 2] {
@@ -752,10 +821,26 @@ pub struct Settlement {
     pub founder: String,
     pub residents: Vec<Resident>,
     pub stock: BTreeMap<Good, u32>,
-    /// Physical goods acquired from verified inventory transfers and
-    /// completed observable harvests. NOT the abstract daily stock.
+    /// Actual player deliveries and confirmed native harvests pending
+    /// placement in the visible hall barrels. NOT virtual daily stock and
+    /// NOT duplicated by a successful barrel deposit.
     #[serde(default)]
     pub warehouse: BTreeMap<Good, u32>,
+    /// Goods already physically removed from a barrel for the current
+    /// construction request. No native items remain in the container.
+    #[serde(default)]
+    pub build_escrow: BTreeMap<Good, u32>,
+    /// Single journalled native barrel operation. Write-ahead state prevents
+    /// repeated external insertion/extraction on crash or reload.
+    #[serde(default)]
+    pub barrel_transfer: Option<BarrelTransfer>,
+    /// One direct native-barrel player purchase, precharged in world.json.
+    #[serde(default)]
+    pub market_purchase: Option<MarketPurchase>,
+    /// Confirmed physical wheat harvested but still being carried by
+    /// UUID-linked farmers toward the central village receiving area.
+    #[serde(default)]
+    pub wheat_in_transit: u32,
     /// Active physical civic hall construction; never inferred from a JSON
     /// house counter, and can resume after restarting with observed blocks.
     #[serde(default)]
@@ -991,6 +1076,25 @@ impl Settlement {
         priorities
     }
 
+    pub fn wheat_delivery_pending(&self) -> u32 { self.wheat_in_transit }
+
+    /// Called only after the native server sees an actual UUID-bound
+    /// farmer return to the hall. Same world-JSON save commits the pending
+    /// receipt and delivered stock; no second crop receipt is created.
+    pub fn deliver_farm_wheat(&mut self, village_id: u64) -> Result<bool, String> {
+        let v = self.settlements.get_mut(&village_id).ok_or("unknown village")?;
+        if v.wheat_in_transit == 0 { return Ok(false); }
+        let next = v.warehouse_quantity(Good::Wheat)
+            .checked_add(v.wheat_in_transit).ok_or("wheat delivery overflow")?;
+        if next > 10_000_000 { return Err("village wheat receiving capacity exceeded".into()); }
+        let delivered = v.wheat_in_transit;
+        v.warehouse.insert(Good::Wheat, next);
+        v.wheat_in_transit = 0;
+        let name = v.name.clone();
+        self.event(format!("{name}: farmer brought {delivered} verified wheat to the hall"));
+        Ok(true)
+    }
+
     pub fn warehouse_quantity(&self, good: Good) -> u32 {
         self.warehouse.get(&good).copied().unwrap_or(0)
     }
@@ -1138,6 +1242,36 @@ impl World {
                     || i64::from(z).abs() > 29_999_988
                     || !(-2046..=2046).contains(&y) {
                     return Err("invalid physical gather record".into());
+                }
+            }
+            if let Some(purchase) = &village.market_purchase {
+                if !village.hall_complete
+                    || !hall_storage_positions(village.center).contains(&purchase.position)
+                    || !(1..=64).contains(&purchase.count) || purchase.count > purchase.before
+                    || purchase.price != u64::from(purchase.good.price()) * u64::from(purchase.count)
+                    || !self.players.contains_key(&purchase.buyer) {
+                    return Err("invalid pending native market purchase".into());
+                }
+            }
+            if village.wheat_in_transit > 10_000_000 {
+                return Err("wheat in physical transit exceeds cap".into());
+            }
+            if village.build_escrow.values().any(|&amount| amount > 10_000_000) {
+                return Err("physical builder escrow entry too large".into());
+            }
+            if let Some(t) = &village.barrel_transfer {
+                if !village.hall_complete || !hall_storage_positions(village.center).contains(&t.position)
+                    || t.before > 10_000_000 || !(1..=8).contains(&t.count)
+                    || t.expected_after().is_none() {
+                    return Err("invalid official barrel transfer record".into());
+                }
+                match t.direction {
+                    BarrelDirection::ToBuilder if t.slot.is_none()
+                        || !matches!(t.good, Good::Wood | Good::Stone) =>
+                        return Err("invalid builder barrel extraction slot".into()),
+                    BarrelDirection::ToBarrel if t.slot.is_some() =>
+                        return Err("native barrel deposit cannot name a slot".into()),
+                    _ => {}
                 }
             }
             if village.hall_complete && village.hall_job.is_some() {
@@ -1326,6 +1460,10 @@ impl World {
             ]),
             // Founding abstract stock is NOT physical inventory.
             warehouse: BTreeMap::new(),
+            build_escrow: BTreeMap::new(),
+            barrel_transfer: None,
+            market_purchase: None,
+            wheat_in_transit: 0,
             hall_job: None,
             hall_complete: false,
             gather_job: None,
@@ -1469,6 +1607,155 @@ impl World {
         v.hall_job = None;
         v.hall_complete = true;
         self.event(format!("{name}: physical civic hall completed"));
+        Ok(())
+    }
+
+    /// Prepare one and only one actual vanilla barrel mutation; native code
+    /// must read the exact barrel count/slot before calling. Planning itself
+    /// creates no item and deducts no warehouse quantity.
+    pub fn plan_barrel_transfer(
+        &mut self, id: u64, position: [i32; 3], good: Good,
+        direction: BarrelDirection, before: u32, count: u32, slot: Option<usize>,
+    ) -> Result<(), String> {
+        let v = self.settlements.get(&id).ok_or("unknown settlement")?;
+        if !v.hall_complete { return Err("physical town hall not complete".into()); }
+        if v.barrel_transfer.is_some() || v.market_purchase.is_some() {
+            return Err("barrel transfer or player purchase already pending".into());
+        }
+        if !hall_storage_positions(v.center).contains(&position) {
+            return Err("barrel is not an official village hall warehouse".into());
+        }
+        if before > 10_000_000 || !(1..=8).contains(&count) {
+            return Err("invalid native barrel batch or item count".into());
+        }
+        match direction {
+            BarrelDirection::ToBarrel => {
+                if v.warehouse_quantity(good) < count {
+                    return Err("insufficient confirmed goods awaiting barrel delivery".into());
+                }
+                if slot.is_some() { return Err("deposit is not a slot extraction".into()); }
+                before.checked_add(count).ok_or("barrel count overflow")?;
+            }
+            BarrelDirection::ToBuilder => {
+                if v.visual_job.is_none() || v.hut_supplies_reserved {
+                    return Err("no unfunded physical hut work order".into());
+                }
+                let required = match good {
+                    Good::Wood => HUT_WOOD_LOGS,
+                    Good::Stone => HUT_COBBLESTONE,
+                    _ => return Err("builders only reserve verified wood and cobblestone".into()),
+                };
+                if v.build_escrow.get(&good).copied().unwrap_or(0)
+                    .checked_add(count).is_none_or(|n| n > required) {
+                    return Err("building material batch exceeds project bill".into());
+                }
+                if before < count || slot.is_none() {
+                    return Err("missing native barrel item/slot for extraction".into());
+                }
+            }
+        }
+        self.settlements.get_mut(&id).unwrap().barrel_transfer = Some(BarrelTransfer {
+            position, good, direction, phase: BarrelPhase::Planned, before, count, slot,
+        });
+        Ok(())
+    }
+
+    /// Persist this state BEFORE inserting or extracting from native barrels.
+    /// Issued transactions must NEVER be dispatched again after a reload.
+    pub fn issue_barrel_transfer(&mut self, id: u64) -> Result<(), String> {
+        let transfer = self.settlements.get_mut(&id).ok_or("unknown settlement")?
+            .barrel_transfer.as_mut().ok_or("no barrel transfer")?;
+        if transfer.phase != BarrelPhase::Planned {
+            return Err("barrel transfer already issued/blocked".into());
+        }
+        transfer.phase = BarrelPhase::Issued;
+        Ok(())
+    }
+
+    /// Compare a later native snapshot of precisely the same barrel.
+    pub fn confirm_barrel_transfer(&mut self, id: u64, after: u32) -> Result<(), String> {
+        let v = self.settlements.get_mut(&id).ok_or("unknown settlement")?;
+        let t = v.barrel_transfer.as_ref().ok_or("no barrel transfer")?;
+        if t.phase != BarrelPhase::Issued || t.expected_after() != Some(after) {
+            return Err("barrel item count does not match the issued transfer".into());
+        }
+        let good = t.good;
+        let direction = t.direction;
+        let count = t.count;
+        match direction {
+            BarrelDirection::ToBarrel => v.warehouse_debit(good, count)?,
+            BarrelDirection::ToBuilder => {
+                let previous = v.build_escrow.get(&good).copied().unwrap_or(0);
+                let next = previous.checked_add(count).ok_or("building escrow overflow")?;
+                v.build_escrow.insert(good, next);
+            }
+        }
+        v.barrel_transfer = None;
+        Ok(())
+    }
+
+    /// A refused/ambiguous external mutation never retries automatically.
+    pub fn block_barrel_transfer(&mut self, id: u64) -> Result<(), String> {
+        let v = self.settlements.get_mut(&id).ok_or("unknown settlement")?;
+        let t = v.barrel_transfer.as_mut().ok_or("no barrel transfer")?;
+        t.phase = BarrelPhase::Blocked;
+        Ok(())
+    }
+
+    /// Called only after the adapter has checked a live barrel slot, the
+    /// authenticated player identity, and available inventory space.
+    /// Coins are durably debited BEFORE the native item extraction.
+    pub fn begin_market_purchase(
+        &mut self, buyer: &str, id: u64, good: Good, count: u32,
+        position: [i32; 3], slot: usize, before: u32,
+    ) -> Result<u64, String> {
+        if !(1..=64).contains(&count) || count > before {
+            return Err("purchase exceeds one visible native stack".into());
+        }
+        let v = self.settlements.get(&id).ok_or("unknown settlement")?;
+        if !v.hall_complete { return Err("real warehouse is not constructed".into()); }
+        if !hall_storage_positions(v.center).contains(&position) {
+            return Err("purchase source is not an official town hall barrel".into());
+        }
+        if v.barrel_transfer.is_some() || v.market_purchase.is_some() {
+            return Err("warehouse has an outstanding transfer or purchase".into());
+        }
+        let person = self.players.get(buyer).ok_or("join village before buying")?;
+        if person.settlement != Some(id) { return Err("join this village before buying".into()); }
+        let price = u64::from(good.price()) * u64::from(count);
+        if person.coins < price { return Err("insufficient civic coins".into()); }
+        let treasury = v.treasury_coins.checked_add(price).ok_or("treasury coin overflow")?;
+        self.players.get_mut(buyer).unwrap().coins -= price;
+        let v = self.settlements.get_mut(&id).unwrap();
+        v.treasury_coins = treasury;
+        v.market_purchase = Some(MarketPurchase {
+            buyer: buyer.to_owned(), good, count, price, position,
+            slot, before, phase: MarketPhase::Issued,
+        });
+        Ok(price)
+    }
+
+    /// Only clear a pending purchase after the external native barrel item
+    /// was removed and the exact item was handed to the authenticated buyer.
+    pub fn complete_market_purchase(&mut self, id: u64, buyer: &str) -> Result<(), String> {
+        let v = self.settlements.get_mut(&id).ok_or("unknown settlement")?;
+        let order = v.market_purchase.as_ref().ok_or("no physical market purchase")?;
+        if order.buyer != buyer || order.phase != MarketPhase::Issued {
+            return Err("buyer identity or market state mismatch".into());
+        }
+        let good = order.good;
+        let count = order.count;
+        v.market_purchase = None;
+        let name = v.name.clone();
+        self.event(format!("{name}: player acquired {count} real {} from a hall barrel",
+            good.as_str()));
+        Ok(())
+    }
+
+    pub fn block_market_purchase(&mut self, id: u64) -> Result<(), String> {
+        let order = self.settlements.get_mut(&id).ok_or("unknown settlement")?
+            .market_purchase.as_mut().ok_or("no market order")?;
+        order.phase = MarketPhase::Blocked;
         Ok(())
     }
 
@@ -1723,12 +2010,27 @@ impl World {
         if job.cursor != 0 || job.blocked {
             return Err("unfunded partial/blocked hut needs inspection before any physical work".into());
         }
-        if v.warehouse_quantity(Good::Wood) < HUT_WOOD_LOGS
-            || v.warehouse_quantity(Good::Stone) < HUT_COBBLESTONE {
-            return Ok(false);
+        // A completed town hall changes the authoritative storage source:
+        // only goods physically extracted from its real vanilla barrels
+        // into the write-ahead builder escrow can pay this construction bill.
+        let available = if v.hall_complete {
+            v.build_escrow.get(&Good::Wood).copied().unwrap_or(0) >= HUT_WOOD_LOGS
+                && v.build_escrow.get(&Good::Stone).copied().unwrap_or(0) >= HUT_COBBLESTONE
+        } else {
+            // Historical pre-hall work orders may finish from their already
+            // accounted delivered ledger; new automatic huts wait for the
+            // real completed civic hall.
+            v.warehouse_quantity(Good::Wood) >= HUT_WOOD_LOGS
+                && v.warehouse_quantity(Good::Stone) >= HUT_COBBLESTONE
+        };
+        if !available { return Ok(false); }
+        if v.hall_complete {
+            *v.build_escrow.get_mut(&Good::Wood).ok_or("missing wood escrow")? -= HUT_WOOD_LOGS;
+            *v.build_escrow.get_mut(&Good::Stone).ok_or("missing stone escrow")? -= HUT_COBBLESTONE;
+        } else {
+            v.warehouse_debit(Good::Wood, HUT_WOOD_LOGS)?;
+            v.warehouse_debit(Good::Stone, HUT_COBBLESTONE)?;
         }
-        v.warehouse_debit(Good::Wood, HUT_WOOD_LOGS)?;
-        v.warehouse_debit(Good::Stone, HUT_COBBLESTONE)?;
         v.hut_supplies_reserved = true;
         Ok(true)
     }
@@ -1809,10 +2111,10 @@ impl World {
         let credit_harvest = matches!(&decision, FarmDecision::StageComplete)
             && village.farm.as_ref().is_some_and(|farm| farm.stage == FarmStage::Harvesting);
         let new_wheat = if credit_harvest {
-            let n = village.warehouse_quantity(Good::Wheat)
-                .checked_add(8).ok_or("wheat warehouse overflow")?;
-            if n > 10_000_000 { return Err("wheat warehouse full".into()); }
-            Some(n)
+            let pending = village.wheat_in_transit.checked_add(8)
+                .ok_or("wheat farm delivery overflow")?;
+            if pending > 10_000_000 { return Err("wheat delivery queue exceeded".into()); }
+            Some(pending)
         } else { None };
         let farm = village.farm.as_mut().ok_or("no farm")?;
         match decision {
@@ -1863,11 +2165,11 @@ impl World {
                     }
                 };
                 farm.cursor = 0;
-                // This physical wheat is a *receipt-backed* ledger entry,
-                // never the abstract stock produced by daily simulation.
-                // No item is placed in a vanilla barrel (separate API needed).
+                // Harvest is physically observed and has exactly one
+                // receipt. The stock remains in the farmer's transit queue
+                // until a live UUID-bound farmer returns to the hall.
                 if let Some(count) = new_wheat {
-                    village.warehouse.insert(Good::Wheat, count);
+                    village.wheat_in_transit = count;
                 }
                 Ok(true)
             }
@@ -3578,13 +3880,202 @@ mod civic_hall_warehouse_tests {
         }
         let abstract_before = world.settlements[&id].quantity(Good::Wheat);
         world.advance_farm(id, FarmDecision::StageComplete).unwrap();
-        assert_eq!(world.settlements[&id].warehouse_quantity(Good::Wheat), 8);
+        assert_eq!(world.settlements[&id].warehouse_quantity(Good::Wheat), 0);
+        assert_eq!(world.settlements[&id].wheat_delivery_pending(), 8);
         assert_eq!(world.settlements[&id].quantity(Good::Wheat), abstract_before);
         assert_eq!(world.settlements[&id].farm.as_ref().unwrap().harvest_sequence, 1);
         assert!(world.advance_farm(id, FarmDecision::StageComplete).is_err());
+        assert_eq!(world.settlements[&id].wheat_delivery_pending(), 8);
+        // The native adapter must first verify a UUID-bound farmer returned
+        // to the hall. This unit test exercises only its domain commit.
+        assert_eq!(world.deliver_farm_wheat(id), Ok(true));
+        assert_eq!(world.deliver_farm_wheat(id), Ok(false));
         assert_eq!(world.settlements[&id].warehouse_quantity(Good::Wheat), 8);
+        assert_eq!(world.settlements[&id].wheat_delivery_pending(), 0);
         let restored: World = serde_json::from_str(&serde_json::to_string(&world).unwrap()).unwrap();
         restored.validate().unwrap();
         assert_eq!(restored.settlements[&id].warehouse_quantity(Good::Wheat), 8);
+    }
+}
+
+#[cfg(test)]
+mod native_barrel_transactions_tests {
+    use super::*;
+
+    fn town() -> (World, u64) {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0,70,0], "owner").unwrap();
+        world.settlements.get_mut(&id).unwrap().hall_complete = true;
+        (world,id)
+    }
+
+    #[test]
+    fn barrel_origins_are_exact_and_inside_native_town_hall_plan() {
+        let places = hall_storage_positions([0,70,0]);
+        assert_eq!(places, [[-1,70,1],[1,70,1]]);
+        let blueprint = town_hall_plan([0,70,0]);
+        assert!(places.iter().all(|pos| blueprint.iter().any(|b|
+            b.pos == *pos && b.block == "minecraft:barrel")));
+        assert_ne!(places[0], places[1]);
+    }
+
+    #[test]
+    fn historic_saves_have_empty_real_barrel_journal_and_escrow() {
+        let (world,id) = town();
+        let mut saved = serde_json::to_value(&world).unwrap();
+        let village = saved["settlements"].as_object_mut().unwrap()
+            .get_mut(&id.to_string()).unwrap().as_object_mut().unwrap();
+        village.remove("barrel_transfer");
+        village.remove("market_purchase");
+        village.remove("build_escrow");
+        village.remove("wheat_in_transit");
+        let migrated: World = serde_json::from_value(saved).unwrap();
+        migrated.validate().unwrap();
+        let v = &migrated.settlements[&id];
+        assert!(v.barrel_transfer.is_none());
+        assert!(v.market_purchase.is_none());
+        assert!(v.build_escrow.is_empty());
+        assert_eq!(v.wheat_in_transit, 0);
+    }
+
+    #[test]
+    fn barrel_deposit_requires_real_incoming_receipts_and_a_named_hall_barrel() {
+        let (mut world,id) = town();
+        let barrel = hall_storage_positions([0,70,0])[0];
+        assert!(world.plan_barrel_transfer(id, barrel, Good::Wood,
+            BarrelDirection::ToBarrel, 0, 1, None).is_err());
+        world.settlements.get_mut(&id).unwrap().warehouse_credit(Good::Wood, 8).unwrap();
+        assert!(world.plan_barrel_transfer(id, [80,70,0], Good::Wood,
+            BarrelDirection::ToBarrel, 0, 1, None).is_err());
+        assert!(world.plan_barrel_transfer(id, barrel, Good::Wood,
+            BarrelDirection::ToBarrel, 0, 9, None).is_err());
+        assert!(world.plan_barrel_transfer(id, barrel, Good::Wood,
+            BarrelDirection::ToBarrel, 0, 8, Some(0)).is_err());
+        world.plan_barrel_transfer(id, barrel, Good::Wood,
+            BarrelDirection::ToBarrel, 0, 8, None).unwrap();
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn native_deposit_credits_container_only_after_later_observation() {
+        let (mut world,id) = town();
+        let barrel = hall_storage_positions([0,70,0])[0];
+        world.settlements.get_mut(&id).unwrap().warehouse_credit(Good::Wood, 8).unwrap();
+        world.plan_barrel_transfer(id, barrel, Good::Wood,
+            BarrelDirection::ToBarrel, 3, 8, None).unwrap();
+        assert!(world.confirm_barrel_transfer(id, 11).is_err());
+        assert_eq!(world.settlements[&id].warehouse_quantity(Good::Wood), 8);
+        world.issue_barrel_transfer(id).unwrap();
+        assert!(world.issue_barrel_transfer(id).is_err());
+        assert!(world.confirm_barrel_transfer(id, 10).is_err());
+        assert_eq!(world.settlements[&id].warehouse_quantity(Good::Wood), 8);
+        world.confirm_barrel_transfer(id, 11).unwrap(); // native observer
+        assert_eq!(world.settlements[&id].warehouse_quantity(Good::Wood), 0);
+        assert!(world.settlements[&id].barrel_transfer.is_none());
+        assert!(world.confirm_barrel_transfer(id, 11).is_err());
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn in_progress_native_transfer_never_reissues_or_mutates_unproven_stock() {
+        let (mut world,id) = town();
+        let barrel = hall_storage_positions([0,70,0])[0];
+        world.settlements.get_mut(&id).unwrap().warehouse_credit(Good::Stone, 2).unwrap();
+        world.plan_barrel_transfer(id, barrel, Good::Stone,
+            BarrelDirection::ToBarrel, 0, 2, None).unwrap();
+        world.issue_barrel_transfer(id).unwrap();
+        let json = serde_json::to_string(&world).unwrap();
+        let mut rebooted: World = serde_json::from_str(&json).unwrap();
+        rebooted.validate().unwrap();
+        assert!(rebooted.issue_barrel_transfer(id).is_err());
+        rebooted.block_barrel_transfer(id).unwrap();
+        assert!(rebooted.confirm_barrel_transfer(id, 2).is_err());
+        assert_eq!(rebooted.settlements[&id].warehouse_quantity(Good::Stone), 2);
+        assert_eq!(rebooted.settlements[&id].barrel_transfer.as_ref().unwrap().phase,
+                   BarrelPhase::Blocked);
+        rebooted.validate().unwrap();
+    }
+
+    #[test]
+    fn builder_only_funds_from_materials_extracted_from_real_barrel() {
+        let (mut world,id) = town();
+        world.advance(1).unwrap();
+        world.start_visual_house(id, [20,70,0]).unwrap();
+        let v = world.settlements.get_mut(&id).unwrap();
+        v.warehouse_credit(Good::Wood, HUT_WOOD_LOGS).unwrap();
+        v.warehouse_credit(Good::Stone, HUT_COBBLESTONE).unwrap();
+        assert!(!world.reserve_hut_supplies(id).unwrap());
+        let barrel = hall_storage_positions([0,70,0])[0];
+        for (good,count) in [(Good::Wood, 8),(Good::Stone, 8)] {
+            world.plan_barrel_transfer(id, barrel, good,
+                BarrelDirection::ToBuilder, count, count, Some(0)).unwrap();
+            world.issue_barrel_transfer(id).unwrap();
+            world.confirm_barrel_transfer(id, 0).unwrap();
+        }
+        assert_eq!(world.settlements[&id].build_escrow[&Good::Wood], 8);
+        assert!(!world.reserve_hut_supplies(id).unwrap());
+        world.settlements.get_mut(&id).unwrap().build_escrow.insert(Good::Wood,HUT_WOOD_LOGS);
+        world.settlements.get_mut(&id).unwrap().build_escrow.insert(Good::Stone,HUT_COBBLESTONE);
+        assert!(world.reserve_hut_supplies(id).unwrap());
+        assert!(!world.reserve_hut_supplies(id).unwrap());
+        assert!(world.settlements[&id].hut_supplies_reserved);
+        assert_eq!(world.settlements[&id].build_escrow[&Good::Wood], 0);
+        assert_eq!(world.settlements[&id].warehouse_quantity(Good::Wood), HUT_WOOD_LOGS);
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn native_market_purchase_debits_currency_before_external_delivery() {
+        let (mut world,id) = town();
+        let barrel = hall_storage_positions([0,70,0])[0];
+        let coins = world.players["owner"].coins;
+        let cost = world.begin_market_purchase("owner", id, Good::Wood,
+            4, barrel, 0, 18).unwrap();
+        assert_eq!(cost, 12);
+        assert_eq!(world.players["owner"].coins, coins - 12);
+        assert_eq!(world.settlements[&id].treasury_coins, 12);
+        assert_eq!(world.settlements[&id].market_purchase.as_ref().unwrap().phase,
+                   MarketPhase::Issued);
+        assert!(world.begin_market_purchase("owner", id, Good::Wood,
+            4, barrel, 0, 18).is_err());
+        assert!(world.complete_market_purchase(id, "forged").is_err());
+        world.complete_market_purchase(id, "owner").unwrap(); // native delivery validated
+        assert!(world.settlements[&id].market_purchase.is_none());
+        assert_eq!(world.players["owner"].coins, coins - 12);
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn unresolved_market_purchase_blocks_concurrent_native_stock_movements() {
+        let (mut world,id) = town();
+        let barrel = hall_storage_positions([0,70,0])[0];
+        world.begin_market_purchase("owner", id, Good::Wood, 4, barrel, 0, 18).unwrap();
+        world.settlements.get_mut(&id).unwrap().warehouse_credit(Good::Stone, 3).unwrap();
+        assert!(world.plan_barrel_transfer(id, barrel, Good::Stone,
+            BarrelDirection::ToBarrel, 0, 3, None).is_err());
+        world.block_market_purchase(id).unwrap();
+        assert!(world.complete_market_purchase(id, "owner").is_err());
+        let persisted: World = serde_json::from_str(&serde_json::to_string(&world).unwrap()).unwrap();
+        persisted.validate().unwrap();
+        assert_eq!(persisted.settlements[&id].market_purchase.as_ref().unwrap().phase,
+                   MarketPhase::Blocked);
+    }
+
+    #[test]
+    fn receipt_wheat_is_delivered_once_by_farmer_before_barrel_transfer() {
+        let (mut world,id) = town();
+        world.settlements.get_mut(&id).unwrap().wheat_in_transit = 16;
+        assert_eq!(world.settlements[&id].warehouse_quantity(Good::Wheat), 0);
+        assert_eq!(world.deliver_farm_wheat(id), Ok(true));
+        assert_eq!(world.deliver_farm_wheat(id), Ok(false));
+        assert_eq!(world.settlements[&id].wheat_delivery_pending(), 0);
+        assert_eq!(world.settlements[&id].warehouse_quantity(Good::Wheat), 16);
+        let barrel = hall_storage_positions([0,70,0])[1];
+        world.plan_barrel_transfer(id, barrel, Good::Wheat,
+            BarrelDirection::ToBarrel, 0, 8, None).unwrap();
+        world.issue_barrel_transfer(id).unwrap();
+        world.confirm_barrel_transfer(id, 8).unwrap();
+        assert_eq!(world.settlements[&id].warehouse_quantity(Good::Wheat), 8);
+        world.validate().unwrap();
     }
 }
