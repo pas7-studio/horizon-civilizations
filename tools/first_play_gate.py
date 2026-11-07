@@ -20,7 +20,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-DEFAULT_BRANCH = "feat/guarded-partial-villager-recovery-v0115"
+DEFAULT_BRANCH = "feat/independent-npc-towns-v0115"
 
 
 @dataclass(frozen=True)

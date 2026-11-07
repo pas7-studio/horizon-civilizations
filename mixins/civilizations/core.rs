@@ -29,6 +29,8 @@ pub const LAND_PRICE_COINS: u64 = 10;
 pub const COMMISSION_PRICE_COINS: u64 = 15;
 pub const FINISHED_HUT_PRICE_COINS: u64 = 35;
 pub const MAX_PLAYER_PARCELS: usize = 32;
+pub const MAX_NPC_SETTLEMENTS: usize = 8;
+pub const NPC_FOUNDER: &str = "civilizations:npc";
 
 fn autonomous_by_default() -> bool { true }
 
@@ -810,6 +812,7 @@ pub enum BarrelDirection {
     ToBakeryBuilder,
     /// A baker picks up real wheat for one or more vanilla bread recipes.
     ToBakerIngredients,
+    ToResidentMeal,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -834,6 +837,10 @@ pub struct BarrelTransfer {
     pub count: u32,
     /// Exact native container slot (required for ToBuilder).
     pub slot: Option<usize>,
+    /// Only set on ToResidentMeal. One resident per durable extraction;
+    /// a stale Issued/Blocked transaction is never reissued on restart.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub recipient_id: Option<u64>,
 }
 
 impl BarrelTransfer {
@@ -842,7 +849,8 @@ impl BarrelTransfer {
             BarrelDirection::ToBarrel => self.before.checked_add(self.count),
             BarrelDirection::ToBuilder
             | BarrelDirection::ToBakeryBuilder
-            | BarrelDirection::ToBakerIngredients => self.before.checked_sub(self.count),
+            | BarrelDirection::ToBakerIngredients
+            | BarrelDirection::ToResidentMeal => self.before.checked_sub(self.count),
         }
     }
 }
@@ -1053,10 +1061,16 @@ pub fn render_hall_boards(input: &HallBoardInput<'_>) -> [SignSpec; 6] {
 
     let forecast = v.forecast_abstract_days(COUNCIL_FORECAST_DAYS);
     let hunger = forecast.iter().find(|d| d.starving_days > 0).map(|d| d.offset);
-    let food_line = if v.starving_days > 0 {
-        sl("STARVING NOW", SignColor::Alert)
+    let real_meals_missing = v.meal_day.is_some()
+        && v.living_meals_served() < v.population() as usize;
+    let food_line = if v.meal_shortage_days > 0 {
+        sl(format!("MEALS SHORT {}d", v.meal_shortage_days), SignColor::Alert)
+    } else if real_meals_missing {
+        sl(format!("Fed {}/{}", v.living_meals_served(), v.population()), SignColor::Warn)
+    } else if v.starving_days > 0 {
+        sl("ABSTRACT STARVING", SignColor::Alert)
     } else if let Some(day) = hunger {
-        sl(format!("Hunger in {day}d"), SignColor::Warn)
+        sl(format!("Abstract hunger {day}d"), SignColor::Warn)
     } else {
         sl("Food OK", SignColor::Good)
     };
@@ -1067,7 +1081,7 @@ pub fn render_hall_boards(input: &HallBoardInput<'_>) -> [SignSpec; 6] {
             sl(format!("Bread {} Wht {}", have(Good::Bread), have(Good::Wheat)), SignColor::Black),
             food_line,
         ],
-        glow: v.starving_days > 0,
+        glow: v.starving_days > 0 || v.meal_shortage_days > 0,
     };
 
     let council = match v.council_priorities().into_iter().next() {
@@ -1969,6 +1983,74 @@ pub struct Settlement {
     pub houses: u32,
     pub building_progress: u32,
     pub starving_days: u32,
+    pub houses: u32,
+    pub pending_visual_buildings: u32,
+}
+
+#[derive(Clone, Debug, Serialize, Deserialize)]
+pub struct Settlement {
+    pub id: u64,
+    pub name: String,
+    pub culture: String,
+    pub dimension: String,
+    pub center: [i32; 3],
+    pub founder: String,
+    pub residents: Vec<Resident>,
+    pub stock: BTreeMap<Good, u32>,
+    /// Actual player deliveries and confirmed native harvests pending
+    /// placement in the visible hall barrels. NOT virtual daily stock and
+    /// NOT duplicated by a successful barrel deposit.
+    #[serde(default)]
+    pub warehouse: BTreeMap<Good, u32>,
+    /// Goods already physically removed from a barrel for the current
+    /// construction request. No native items remain in the container.
+    #[serde(default)]
+    pub build_escrow: BTreeMap<Good, u32>,
+    /// Single journalled native barrel operation. Write-ahead state prevents
+    /// repeated external insertion/extraction on crash or reload.
+    #[serde(default)]
+    pub barrel_transfer: Option<BarrelTransfer>,
+    /// One direct native-barrel player purchase, precharged in world.json.
+    #[serde(default)]
+    pub market_purchase: Option<MarketPurchase>,
+    /// Confirmed physical wheat harvested but still being carried by
+    /// UUID-linked farmers toward the central village receiving area.
+    #[serde(default)]
+    pub wheat_in_transit: u32,
+    /// One physical bakery, built and operated by actual NPC workers.
+    #[serde(default)]
+    pub bakery: Option<BakeryWorkshop>,
+    /// Active physical civic hall construction; never inferred from a JSON
+    /// house counter, and can resume after restarting with observed blocks.
+    #[serde(default)]
+    pub hall_job: Option<VisualBuildJob>,
+    /// The civic center is proven complete only after all plan blocks read.
+    #[serde(default)]
+    pub hall_complete: bool,
+    /// Pending actual tree/stone harvest; reconciled against native blocks.
+    #[serde(default)]
+    pub gather_job: Option<GatherJob>,
+    /// Optional continuation for a proven short native oak trunk.
+    /// Each log is still a separate issued gather and delivered receipt.
+    #[serde(default)]
+    pub oak_stem: Option<OakStem>,
+    /// Player civic coin payments are transferred here, not silently burned.
+    #[serde(default)]
+    pub treasury_coins: u64,
+    pub houses: u32,
+    pub building_progress: u32,
+    pub starving_days: u32,
+    /// Physical NPC meals are not the simulated abstract bread economy.
+    /// Each real, UUID-bound living resident may consume at most ONE
+    /// observed native loaf per host day. Legacy saves start with no day.
+    #[serde(default)]
+    pub meal_day: Option<i64>,
+    #[serde(default)]
+    pub meal_served: BTreeSet<u64>,
+    /// Consecutive completed physical days with at least one unfed NPC.
+    /// Updated only on host-day rollover; no offline imaginary food.
+    #[serde(default)]
+    pub meal_shortage_days: u32,
     pub morale: i32,
     pub relationships: BTreeMap<u64, i16>,
     pub active_wars: BTreeSet<u64>,
@@ -2071,6 +2153,15 @@ impl Settlement {
 
     pub fn population(&self) -> u32 {
         self.residents.iter().filter(|r| r.alive).count() as u32
+    }
+
+    /// Historic meals to residents who subsequently died remain recorded
+    /// for audit, but they must NEVER hide a living person's food shortage.
+    pub fn living_meals_served(&self) -> usize {
+        self.residents.iter()
+            .filter(|resident| resident.alive
+                && self.meal_served.contains(&resident.id))
+            .count()
     }
 
     /// How many residents this village can actually employ, by role. Every
@@ -2564,8 +2655,8 @@ impl World {
             }
             if let Some(gather) = &village.gather_job {
                 if let Some(worker_id) = gather.worker_id {
-                    let role = if gather.good == Good::Wood { Job::Lumberjack }
-                        else { Job::Miner };
+                    let role = gather.good.job()
+                        .ok_or("physical gather good has no qualified worker")?;
                     if !village.residents.iter().any(|r|
                         r.id == worker_id && r.job == role) {
                         return Err("physical gather worker ID is invalid".into());
@@ -2628,6 +2719,13 @@ impl World {
                     return Err("invalid saved physical bakery state".into());
                 }
             }
+            if village.meal_shortage_days > 1_000_000
+                || (village.meal_day.is_none() && !village.meal_served.is_empty())
+                || village.meal_served.len() > village.residents.len()
+                || village.meal_served.iter().any(|id|
+                    !village.residents.iter().any(|resident| resident.id == *id)) {
+                return Err("invalid saved physical resident meal journal".into());
+            }
             if village.wheat_in_transit > 10_000_000 {
                 return Err("wheat in physical transit exceeds cap".into());
             }
@@ -2662,6 +2760,17 @@ impl World {
                                 || b.wheat_escrow.checked_add(t.count)
                                     .is_none_or(|n| n > BREAD_WHEAT_RECIPE)) =>
                         return Err("invalid native baker wheat extraction".into()),
+                    BarrelDirection::ToResidentMeal if t.good != Good::Bread
+                        || t.count != 1 || t.slot.is_none()
+                        || village.meal_day.is_none()
+                        || t.recipient_id.is_none_or(|recipient|
+                            village.meal_served.contains(&recipient)
+                                || !village.residents.iter().any(|r|
+                                    r.id == recipient)) =>
+                        return Err("invalid native resident meal receipt".into()),
+                    _ if t.direction != BarrelDirection::ToResidentMeal
+                        && t.recipient_id.is_some() =>
+                        return Err("non-meal barrel transfer contains resident identity".into()),
                     _ => {}
                 }
             }
@@ -2871,6 +2980,32 @@ impl World {
         center: [i32; 3],
         founder: &str,
     ) -> Result<u64, String> {
+        self.found_internal(name, dimension, center, founder, true)
+    }
+
+    /// NPC-founded towns reuse the real founding logic without creating
+    /// synthetic player accounts or granting free Lord ranks / coins.
+    pub fn found_autonomous(
+        &mut self, name: &str, dimension: &str, center: [i32; 3],
+    ) -> Result<u64, String> {
+        if dimension != "minecraft:overworld" {
+            return Err("autonomous frontier settlements require the overworld".into());
+        }
+        if self.settlements.values()
+            .filter(|s| s.founder == NPC_FOUNDER).count() >= MAX_NPC_SETTLEMENTS {
+            return Err("autonomous settlement cap reached".into());
+        }
+        self.found_internal(name, dimension, center, NPC_FOUNDER, false)
+    }
+
+    fn found_internal(
+        &mut self,
+        name: &str,
+        dimension: &str,
+        center: [i32; 3],
+        founder: &str,
+        player_founded: bool,
+    ) -> Result<u64, String> {
         if self.settlements.len() >= MAX_SETTLEMENTS {
             return Err("settlement cap reached".into());
         }
@@ -2930,6 +3065,9 @@ impl World {
             houses: 2,
             building_progress: 0,
             starving_days: 0,
+            meal_day: None,
+            meal_served: BTreeSet::new(),
+            meal_shortage_days: 0,
             morale: 50,
             relationships: BTreeMap::new(),
             active_wars: BTreeSet::new(),
@@ -2946,12 +3084,16 @@ impl World {
             quarry_step: 0,
         };
         self.settlements.insert(id, settlement);
-        let p = self.players.entry(founder.to_owned()).or_default();
-        p.settlement = Some(id);
-        p.rank = Rank::Lord;
-        p.coins = p.coins.saturating_add(25);
-        p.reputation.insert(id, 50);
-        self.event(format!("{name} founded"));
+        if player_founded {
+            let p = self.players.entry(founder.to_owned()).or_default();
+            p.settlement = Some(id);
+            p.rank = Rank::Lord;
+            p.coins = p.coins.saturating_add(25);
+            p.reputation.insert(id, 50);
+            self.event(format!("{name} founded"));
+        } else {
+            self.event(format!("{name} founded by an independent NPC council"));
+        }
         Ok(id)
     }
 
@@ -3199,6 +3341,14 @@ impl World {
         &mut self, id: u64, position: [i32; 3], good: Good,
         direction: BarrelDirection, before: u32, count: u32, slot: Option<usize>,
     ) -> Result<(), String> {
+        self.plan_barrel_transfer_for(id, position, good, direction, before, count, slot, None)
+    }
+
+    fn plan_barrel_transfer_for(
+        &mut self, id: u64, position: [i32; 3], good: Good,
+        direction: BarrelDirection, before: u32, count: u32, slot: Option<usize>,
+        recipient_id: Option<u64>,
+    ) -> Result<(), String> {
         let v = self.settlements.get(&id).ok_or("unknown settlement")?;
         if !v.hall_complete { return Err("physical town hall not complete".into()); }
         if v.barrel_transfer.is_some() || v.market_purchase.is_some() {
@@ -3263,11 +3413,89 @@ impl World {
                     return Err("baker cannot take additional unverified wheat".into());
                 }
             }
-
+            BarrelDirection::ToResidentMeal => {
+                if good != Good::Bread || count != 1 || before < 1 || slot.is_none()
+                    || v.meal_day.is_none()
+                    || recipient_id.is_none_or(|recipient|
+                        v.meal_served.contains(&recipient)
+                            || !v.residents.iter().any(|resident|
+                                resident.id == recipient && resident.alive
+                                    && resident.entity_uuid.is_some())) {
+                    return Err("meal needs one real loaf and an unserved UUID-bound living resident".into());
+                }
+            }
+        }
+        if direction != BarrelDirection::ToResidentMeal && recipient_id.is_some() {
+            return Err("recipient IDs are only valid for actual resident meals".into());
         }
         self.settlements.get_mut(&id).unwrap().barrel_transfer = Some(BarrelTransfer {
             position, good, direction, phase: BarrelPhase::Planned, before, count, slot,
+            recipient_id,
         });
+        Ok(())
+    }
+
+    /// Begin a REAL physical meal service day. Does not read or mint native
+    /// stock. The old day's shortage is accounted exactly once on rollover.
+    /// An unfinished external food extraction freezes the day boundary until
+    /// a human reconciles the journal; never erase a pending recipient.
+    pub fn begin_meal_day(&mut self, id: u64, host_day: i64) -> Result<bool, String> {
+        let village = self.settlements.get(&id).ok_or("unknown settlement")?;
+        if !village.hall_complete || !village.actors_spawned
+            || village.meal_day.is_some_and(|previous| host_day <= previous)
+            || village.barrel_transfer.as_ref().is_some_and(|transfer|
+                transfer.direction == BarrelDirection::ToResidentMeal) {
+            return Ok(false);
+        }
+        let previous_day = village.meal_day;
+        let was_short = village.living_meals_served() < village.population() as usize;
+        let name = village.name.clone();
+        let v = self.settlements.get_mut(&id).unwrap();
+        if previous_day.is_some() {
+            if was_short {
+                v.meal_shortage_days = v.meal_shortage_days.saturating_add(1).min(1_000_000);
+                v.morale = (v.morale - 2).max(-100);
+            } else {
+                v.meal_shortage_days = 0;
+                v.morale = (v.morale + 1).min(100);
+            }
+        }
+        v.meal_day = Some(host_day);
+        v.meal_served.clear();
+        self.event(format!("{name}: new physical meal day {host_day} (no abstract stock consumed)"));
+        Ok(true)
+    }
+
+    /// Plan a durable native barrel extraction for one specific resident.
+    /// A successful native item removal must be confirmed by a later fresh
+    /// barrel snapshot before this resident is marked fed in world.json.
+    pub fn plan_resident_meal(
+        &mut self, id: u64, resident_id: u64, host_day: i64,
+        position: [i32; 3], before: u32, slot: usize,
+    ) -> Result<(), String> {
+        let v = self.settlements.get(&id).ok_or("unknown settlement")?;
+        if v.meal_day != Some(host_day) {
+            return Err("meal day has not started or host clock changed".into());
+        }
+        self.plan_barrel_transfer_for(
+            id, position, Good::Bread, BarrelDirection::ToResidentMeal,
+            before, 1, Some(slot), Some(resident_id),
+        )
+    }
+
+    /// A resident left or died before the planned bread extraction. Since
+    /// this is still Planned, NO native mutation was issued; discard the
+    /// unissued intent rather than consuming bread for an absent actor.
+    /// Issued/Blocked receipts must be manually reconciled, never canceled.
+    pub fn cancel_unissued_meal(&mut self, id: u64) -> Result<(), String> {
+        let village = self.settlements.get_mut(&id).ok_or("unknown settlement")?;
+        let receipt = village.barrel_transfer.as_ref()
+            .ok_or("no pending resident meal")?;
+        if receipt.direction != BarrelDirection::ToResidentMeal
+            || receipt.phase != BarrelPhase::Planned {
+            return Err("cannot cancel an already issued native meal".into());
+        }
+        village.barrel_transfer = None;
         Ok(())
     }
 
@@ -3293,6 +3521,7 @@ impl World {
         let good = t.good;
         let direction = t.direction;
         let count = t.count;
+        let recipient_id = t.recipient_id;
         match direction {
             BarrelDirection::ToBarrel => v.warehouse_debit(good, count)?,
             BarrelDirection::ToBuilder => {
@@ -3310,6 +3539,12 @@ impl World {
                 let b = v.bakery.as_mut().ok_or("no bakery")?;
                 b.wheat_escrow = b.wheat_escrow.checked_add(count)
                     .ok_or("baker wheat carry overflow")?;
+            }
+            BarrelDirection::ToResidentMeal => {
+                let recipient = recipient_id.ok_or("missing meal recipient")?;
+                if !v.meal_served.insert(recipient) {
+                    return Err("resident meal already credited today".into());
+                }
             }
         }
         v.barrel_transfer = None;
@@ -3532,9 +3767,7 @@ impl World {
         if job.issued || job.blocked {
             return Err("cannot assign an already issued or blocked gather".into());
         }
-        let required = if job.good == Good::Wood { Job::Lumberjack }
-            else if job.good == Good::Stone { Job::Miner }
-            else { return Err("unsupported native gather good".into()); };
+        let required = job.good.job().ok_or("unsupported native gather good")?;
         if !village.residents.iter().any(|resident|
             resident.alive && resident.id == resident_id && resident.job == required) {
             return Err("worker is not a living qualified settlement resident".into());
@@ -6612,6 +6845,7 @@ mod physical_logistics_hardening_tests {
             position: barrel, good: Good::Wheat,
             direction: BarrelDirection::ToBakerIngredients,
             phase: BarrelPhase::Planned, before: 2, count: 1, slot: Some(0),
+            recipient_id: None,
         });
         assert!(world.validate().is_err()); // no completed workstation
         let bakery = world.settlements.get_mut(&id).unwrap().bakery.as_mut().unwrap();
@@ -6632,6 +6866,7 @@ mod physical_logistics_hardening_tests {
             position: barrel, good: Good::Wood,
             direction: BarrelDirection::ToBakeryBuilder,
             phase: BarrelPhase::Planned, before: 2, count: 1, slot: Some(0),
+            recipient_id: None,
         });
         assert!(world.validate().is_ok());
         world.settlements.get_mut(&id).unwrap().bakery = None;
@@ -7946,6 +8181,339 @@ mod guarded_partial_native_actor_recovery_tests {
         let (mut world, id, worker) = partial_spawn();
         world.reserve_actor_recovery(id, worker).unwrap();
         world.settlements.get_mut(&id).unwrap().actors_spawned = false;
+        assert!(world.validate().is_err());
+    }
+}
+
+#[cfg(test)]
+mod autonomous_frontier_tests {
+    use super::*;
+
+    #[test]
+    fn npc_founding_creates_full_independent_society_without_player_gifts() {
+        let mut world = World::default();
+        let id = world.found_autonomous(
+            "Oakford_1", "minecraft:overworld", [96, 71, 96]
+        ).unwrap();
+        let settlement = &world.settlements[&id];
+        assert_eq!(settlement.founder, NPC_FOUNDER);
+        assert_eq!(settlement.residents.len(), 10);
+        assert!(settlement.autonomy_enabled);
+        assert!(!settlement.actors_spawned);
+        assert!(!settlement.hall_complete);
+        assert!(settlement.warehouse.is_empty());
+        assert!(settlement.build_escrow.is_empty());
+        assert!(world.players.is_empty(), "no fake player, lordship or free coins");
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn a_real_player_may_join_an_independent_village_without_becoming_founder() {
+        let mut world = World::default();
+        let id = world.found_autonomous(
+            "Stonevale_1", "minecraft:overworld", [80, 70, 90]
+        ).unwrap();
+        world.join("player-uuid", id).unwrap();
+        let human = &world.players["player-uuid"];
+        assert_eq!(human.rank, Rank::Citizen);
+        assert_eq!(human.coins, 25);
+        assert_eq!(human.settlement, Some(id));
+        assert_eq!(world.settlements[&id].founder, NPC_FOUNDER);
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn autonomous_and_manual_settlements_share_spatial_collision_guards() {
+        let mut world = World::default();
+        world.found("HumanTown", "minecraft:overworld", [0, 70, 0], "op")
+            .unwrap();
+        assert!(world.found_autonomous(
+            "TooNear", "minecraft:overworld", [100, 70, 0]
+        ).is_err());
+        assert!(world.found_autonomous(
+            "WrongDim", "minecraft:the_nether", [300, 70, 0]
+        ).is_err());
+        let id = world.found_autonomous(
+            "SafeTown", "minecraft:overworld", [300, 70, 0]
+        ).unwrap();
+        assert_eq!(world.settlements[&id].residents.len(), 10);
+        assert_eq!(world.players["op"].rank, Rank::Lord);
+        assert_eq!(world.players["op"].coins, 25);
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn autonomous_villages_are_bounded_without_disabling_manual_founding() {
+        let mut world = World::default();
+        for n in 0..MAX_NPC_SETTLEMENTS {
+            world.found_autonomous(
+                &format!("Frontier_{n}"), "minecraft:overworld",
+                [n as i32 * 256, 70, 0],
+            ).unwrap();
+        }
+        assert!(world.found_autonomous(
+            "NinthTown", "minecraft:overworld", [2600, 70, 0]
+        ).is_err());
+        let human = world.found(
+            "HumanTown", "minecraft:overworld", [3000, 70, 0], "op"
+        ).unwrap();
+        assert_ne!(world.settlements[&human].founder, NPC_FOUNDER);
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn reload_cannot_found_a_second_npc_town_on_the_same_site() {
+        let mut world = World::default();
+        let original = world.found_autonomous(
+            "Oakford_1", "minecraft:overworld", [88, 70, 0]
+        ).unwrap();
+        let json = serde_json::to_string(&world).unwrap();
+        let mut reloaded: World = serde_json::from_str(&json).unwrap();
+        assert!(reloaded.found_autonomous(
+            "NewName", "minecraft:overworld", [90, 70, 1]
+        ).is_err());
+        assert_eq!(reloaded.settlements.len(), 1);
+        assert_eq!(reloaded.settlements[&original].name, "Oakford_1");
+        reloaded.validate().unwrap();
+    }
+
+    #[test]
+    fn npc_founding_roundtrip_does_not_materialize_synthetic_accounts() {
+        let mut world = World::default();
+        world.found_autonomous(
+            "Birchmere_1", "minecraft:overworld", [88, 65, -64]
+        ).unwrap();
+        let encoded = serde_json::to_string(&world).unwrap();
+        let decoded: World = serde_json::from_str(&encoded).unwrap();
+        decoded.validate().unwrap();
+        assert_eq!(decoded.settlements[&1].founder, NPC_FOUNDER);
+        assert!(decoded.players.is_empty());
+        assert_eq!(decoded.settlements[&1].residents.len(), 10);
+    }
+}
+
+#[cfg(test)]
+mod physical_pit_courier_tests {
+    use super::*;
+
+    fn exercise_digger_delivery(good: Good, kind: PostKind) {
+        let mut world = World::default();
+        let id = world.found("PitTown", "minecraft:overworld", [0, 70, 0], "owner").unwrap();
+        world.add_post(id, kind, [18, 70, 0]).unwrap();
+        world.settlements.get_mut(&id).unwrap().staff_workplaces();
+        let digger = world.settlements[&id].residents.iter()
+            .find(|r| r.alive && r.job == Job::Digger).unwrap().id;
+        let miner = world.settlements[&id].residents.iter()
+            .find(|r| r.alive && r.job == Job::Miner).unwrap().id;
+        world.set_post_worker(id, kind, digger).unwrap();
+        world.plan_gather(id, good, [20, 70, 0], [21, 70, 0]).unwrap();
+        assert!(world.assign_gather_worker(id, miner).is_err());
+        assert!(world.mark_gather_issued(id).is_err());
+        world.assign_gather_worker(id, digger).unwrap();
+        world.validate().unwrap();
+        world.mark_gather_issued(id).unwrap();
+        world.mark_gather_native_edit_confirmed(id).unwrap();
+        assert!(world.confirm_gather(id).is_err()); // source pickup is not witnessed
+        world.witness_gather_pickup(id, digger).unwrap();
+        let saved = serde_json::to_string(&world).unwrap();
+        let mut restored: World = serde_json::from_str(&saved).unwrap();
+        restored.validate().unwrap(); // a bound digger must survive a save/reload
+        assert!(restored.assign_gather_worker(id, miner).is_err());
+        restored.confirm_gather(id).unwrap();
+        assert_eq!(restored.settlements[&id].warehouse_quantity(good), 1);
+        assert!(restored.confirm_gather(id).is_err()); // exactly-once stock credit
+        restored.validate().unwrap();
+    }
+
+    #[test]
+    fn real_sand_pit_digger_delivers_one_witnessed_item_after_reboot() {
+        exercise_digger_delivery(Good::Sand, PostKind::Sand);
+    }
+
+    #[test]
+    fn real_dirt_pit_digger_delivers_one_witnessed_item_after_reboot() {
+        exercise_digger_delivery(Good::Dirt, PostKind::Dirt);
+    }
+}
+
+#[cfg(test)]
+mod physical_meals_tests {
+    use super::*;
+
+    fn town() -> (World, u64, [i32; 3]) {
+        let mut world = World::default();
+        let id = world.found("MealTown", "minecraft:overworld", [0,70,0], "op").unwrap();
+        let village = world.settlements.get_mut(&id).unwrap();
+        village.hall_complete = true;
+        village.actors_spawned = true;
+        for (index, resident) in village.residents.iter_mut().enumerate() {
+            resident.entity_uuid = Some((index + 1) as u128);
+        }
+        world.validate().unwrap();
+        (world, id, hall_storage_positions([0,70,0])[0])
+    }
+
+    #[test]
+    fn meal_day_is_one_shot_and_legacy_saves_need_no_migration() {
+        let (mut world, id, _) = town();
+        let mut saved = serde_json::to_value(&world).unwrap();
+        let village = saved["settlements"].as_object_mut().unwrap()
+            .get_mut(&id.to_string()).unwrap().as_object_mut().unwrap();
+        village.remove("meal_day");
+        village.remove("meal_served");
+        village.remove("meal_shortage_days");
+        let loaded: World = serde_json::from_value(saved).unwrap();
+        loaded.validate().unwrap();
+        assert_eq!(loaded.settlements[&id].meal_day, None);
+        assert!(world.begin_meal_day(id, 100).unwrap());
+        assert!(!world.begin_meal_day(id, 100).unwrap());
+        assert!(!world.begin_meal_day(id, 99).unwrap());
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn meals_are_paid_only_after_issued_native_receipt_confirmation() {
+        let (mut world, id, barrel) = town();
+        let resident = world.settlements[&id].residents[0].id;
+        let abstract_bread = world.settlements[&id].quantity(Good::Bread);
+        world.begin_meal_day(id, 100).unwrap();
+        world.plan_resident_meal(id, resident, 100, barrel, 2, 0).unwrap();
+        assert!(world.confirm_barrel_transfer(id, 1).is_err());
+        assert!(world.settlements[&id].meal_served.is_empty());
+        world.issue_barrel_transfer(id).unwrap();
+        let json = serde_json::to_string(&world).unwrap();
+        let mut restarted: World = serde_json::from_str(&json).unwrap();
+        restarted.validate().unwrap();
+        assert!(restarted.issue_barrel_transfer(id).is_err());
+        assert!(restarted.confirm_barrel_transfer(id, 2).is_err());
+        assert!(restarted.settlements[&id].meal_served.is_empty());
+        restarted.confirm_barrel_transfer(id, 1).unwrap();
+        assert_eq!(restarted.settlements[&id].meal_served.len(), 1);
+        assert!(restarted.settlements[&id].meal_served.contains(&resident));
+        assert!(restarted.confirm_barrel_transfer(id, 1).is_err());
+        assert_eq!(restarted.settlements[&id].quantity(Good::Bread), abstract_bread);
+        restarted.validate().unwrap();
+    }
+
+    #[test]
+    fn one_resident_cannot_eat_twice_or_use_wheat_or_foreign_storage() {
+        let (mut world, id, barrel) = town();
+        let resident = world.settlements[&id].residents[0].id;
+        assert!(world.plan_resident_meal(id, resident, 12, barrel, 1, 0).is_err());
+        world.begin_meal_day(id, 12).unwrap();
+        assert!(world.plan_resident_meal(id, resident, 13, barrel, 1, 0).is_err());
+        assert!(world.plan_resident_meal(id, resident, 12, [15,70,15], 1, 0).is_err());
+        assert!(world.plan_barrel_transfer(id, barrel, Good::Bread,
+            BarrelDirection::ToResidentMeal, 1, 1, Some(0)).is_err());
+        world.plan_resident_meal(id, resident, 12, barrel, 1, 0).unwrap();
+        assert!(world.plan_resident_meal(id, resident, 12, barrel, 1, 0).is_err());
+        world.issue_barrel_transfer(id).unwrap();
+        world.confirm_barrel_transfer(id, 0).unwrap();
+        assert!(world.plan_resident_meal(id, resident, 12, barrel, 1, 0).is_err());
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn blocked_native_meal_cannot_be_reissued_or_skip_into_next_day() {
+        let (mut world, id, barrel) = town();
+        let resident = world.settlements[&id].residents[0].id;
+        world.begin_meal_day(id, 7).unwrap();
+        world.plan_resident_meal(id, resident, 7, barrel, 5, 0).unwrap();
+        world.issue_barrel_transfer(id).unwrap();
+        world.block_barrel_transfer(id).unwrap();
+        assert!(!world.begin_meal_day(id, 8).unwrap());
+        assert!(world.issue_barrel_transfer(id).is_err());
+        assert!(world.confirm_barrel_transfer(id, 4).is_err());
+        assert!(world.settlements[&id].meal_served.is_empty());
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn completed_day_shortage_changes_morale_once_per_real_day() {
+        let (mut world, id, barrel) = town();
+        let original = world.settlements[&id].morale;
+        world.begin_meal_day(id, 10).unwrap();
+        for i in 0..10 {
+            let resident = world.settlements[&id].residents[i].id;
+            world.plan_resident_meal(id, resident, 10, barrel, 12 - i as u32, 0).unwrap();
+            world.issue_barrel_transfer(id).unwrap();
+            world.confirm_barrel_transfer(id, 11 - i as u32).unwrap();
+        }
+        assert!(world.begin_meal_day(id, 11).unwrap());
+        assert_eq!(world.settlements[&id].meal_shortage_days, 0);
+        assert_eq!(world.settlements[&id].morale, original + 1);
+        assert!(!world.begin_meal_day(id, 11).unwrap());
+        assert!(world.begin_meal_day(id, 12).unwrap());
+        assert_eq!(world.settlements[&id].meal_shortage_days, 1);
+        assert_eq!(world.settlements[&id].morale, original - 1);
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn cancelled_unissued_meal_never_debits_bread_or_marks_fed() {
+        let (mut world, id, barrel) = town();
+        let resident = world.settlements[&id].residents[0].id;
+        world.begin_meal_day(id, 4).unwrap();
+        world.plan_resident_meal(id, resident, 4, barrel, 2, 0).unwrap();
+        world.cancel_unissued_meal(id).unwrap();
+        assert!(world.settlements[&id].barrel_transfer.is_none());
+        assert!(world.settlements[&id].meal_served.is_empty());
+        world.validate().unwrap();
+        world.plan_resident_meal(id, resident, 4, barrel, 2, 0).unwrap();
+        world.issue_barrel_transfer(id).unwrap();
+        assert!(world.cancel_unissued_meal(id).is_err());
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn pending_issued_meal_stays_loadable_if_recipient_dies() {
+        let (mut world, id, barrel) = town();
+        let resident = world.settlements[&id].residents[0].id;
+        world.begin_meal_day(id, 5).unwrap();
+        world.plan_resident_meal(id, resident, 5, barrel, 2, 0).unwrap();
+        world.issue_barrel_transfer(id).unwrap();
+        let village = world.settlements.get_mut(&id).unwrap();
+        village.residents[0].alive = false;
+        village.residents[0].entity_uuid = None;
+        let json = serde_json::to_string(&world).unwrap();
+        let mut restarted: World = serde_json::from_str(&json).unwrap();
+        restarted.validate().unwrap();
+        assert!(restarted.issue_barrel_transfer(id).is_err());
+        assert!(!restarted.begin_meal_day(id, 6).unwrap());
+        restarted.confirm_barrel_transfer(id, 1).unwrap();
+        assert!(restarted.settlements[&id].meal_served.contains(&resident));
+        assert_eq!(restarted.settlements[&id].living_meals_served(), 0);
+        restarted.validate().unwrap();
+    }
+
+    #[test]
+    fn death_does_not_hide_an_unfed_living_resident() {
+        let (mut world, id, barrel) = town();
+        let first = world.settlements[&id].residents[0].id;
+        world.begin_meal_day(id, 1).unwrap();
+        world.plan_resident_meal(id, first, 1, barrel, 1, 0).unwrap();
+        world.issue_barrel_transfer(id).unwrap();
+        world.confirm_barrel_transfer(id, 0).unwrap();
+        assert_eq!(world.settlements[&id].living_meals_served(), 1);
+        world.settlements.get_mut(&id).unwrap().residents[0].alive = false;
+        assert_eq!(world.settlements[&id].meal_served.len(), 1);
+        assert_eq!(world.settlements[&id].living_meals_served(), 0);
+        assert!(world.begin_meal_day(id, 2).unwrap());
+        assert_eq!(world.settlements[&id].meal_shortage_days, 1);
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn meal_is_never_confirmed_for_a_missing_uuid_or_invalid_saved_recipient() {
+        let (mut world, id, barrel) = town();
+        let resident = world.settlements[&id].residents[0].id;
+        world.settlements.get_mut(&id).unwrap().residents[0].entity_uuid = None;
+        world.begin_meal_day(id, 50).unwrap();
+        assert!(world.plan_resident_meal(id, resident, 50, barrel, 3, 0).is_err());
+        world.settlements.get_mut(&id).unwrap().residents[0].entity_uuid = Some(999);
+        world.plan_resident_meal(id, resident, 50, barrel, 3, 0).unwrap();
+        world.settlements.get_mut(&id).unwrap().barrel_transfer.as_mut().unwrap()
+            .recipient_id = Some(999999);
         assert!(world.validate().is_err());
     }
 }

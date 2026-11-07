@@ -160,12 +160,12 @@ pub fn closed() {
 
 pub fn register(commands: &mut Vec<NativeCommand>) {
     for usage in [
-        "civ", "civ help", "civ list", "civ info", "civ info <name:word>",
+        "civ", "civ help", "civ list", "civ nearby", "civ info", "civ info <name:word>",
         "civ roster <name:word>", "civ schedule <name:word>",
         "civ homes <name:word>", "civ survey <name:word>",
         "civ council <name:word>", "civ forecast <name:word>",
         "civ plots <name:word>", "civ development <name:word>",
-        "civ hall <name:word>", "civ warehouse <name:word>", "civ bakery <name:word>",
+        "civ hall <name:word>", "civ warehouse <name:word>", "civ meals <name:word>", "civ bakery <name:word>",
         "civ posts <name:word>",
         "civ roles <name:word>",
         "civ status <name:word>",
@@ -276,15 +276,29 @@ fn guide_actors(game: &mut Game<'_>, world: &World) {
             } else {
                 None
             };
-            let pos = if let Some(home) = home_target {
+            // Morning/evening meals must not occupy all work hours when
+            // the physical bread barrel is empty; the farm and bakery must
+            // still be able to produce food for the next service window.
+            let meal_due = village.hall_complete
+                && matches!(phase, DailyPhase::Dawn | DailyPhase::Evening)
+                && village.meal_day == Some(game.world.day_time.div_euclid(24_000))
+                && !village.meal_served.contains(&resident.id);
+            let pos = if meal_due {
+                // Citizens actually walk to the public dining/warehouse
+                // entrance before one real loaf can be taken for them.
+                // Spread waiting citizens over five approach positions.
+                let lane = (resident.id % 5) as i32 - 2;
+                [f64::from(village.center[0] + lane) + 0.5,
+                 f64::from(village.center[1]),
+                 f64::from(village.center[2] - 4) + 0.5]
+            } else if let Some(home) = home_target {
                 home
             } else if phase.on_shift(resident.job)
-                && matches!(resident.job, Job::Lumberjack | Job::Miner)
+                && matches!(resident.job, Job::Lumberjack | Job::Miner | Job::Digger)
                 && village.gather_job.as_ref().is_some_and(|job|
                     !job.blocked
                         && job.worker_id.is_none_or(|assigned| assigned == resident_id)
-                        && ((job.good == Good::Wood && resident.job == Job::Lumberjack)
-                            || (job.good == Good::Stone && resident.job == Job::Miner)))
+                        && job.good.job() == Some(resident.job))
             {
                 let target = village.gather_job.as_ref().expect("gather exists");
                 if target.issued && target.pickup_witnessed {
@@ -1367,7 +1381,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
     let actor = format!("{:032x}", player.uuid);
     let action = args.next().unwrap_or("help");
     if action == "help" {
-        reply(game, "Civilizations: /civ list | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | hall <name> | warehouse <name> | posts <name> | roles <name> | status <name> | chunks <name> | diagnose <name> | buyplot <name> | buyhouse <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, recoveractor <name> <resident-id> attempt, barrelcheck <name>, resolvebarrel <name> confirm|cancel <observed_count>, gathercheck <name>, discardgather <name> intact|empty, day [days], construct <name>, post <name> lumber|quarry|sand|dirt, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
+        reply(game, "Civilizations: /civ list | nearby | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | hall <name> | warehouse <name> | meals <name> | posts <name> | roles <name> | status <name> | chunks <name> | diagnose <name> | buyplot <name> | buyhouse <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, recoveractor <name> <resident-id> attempt, barrelcheck <name>, resolvebarrel <name> confirm|cancel <observed_count>, gathercheck <name>, discardgather <name> intact|empty, day [days], construct <name>, post <name> lumber|quarry|sand|dirt, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
         return;
     }
     if action == "list" {
@@ -1375,7 +1389,73 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
         for s in world.settlements.values().take(12) {
             items.push(format!("#{} {} [{}] pop={} houses={}", s.id, s.name, s.culture, s.population(), s.houses));
         }
-        reply(game, if items.is_empty() { "No settlements yet. OP: /civ found Ashford".into() } else { items.join(" | ") });
+        reply(game, if items.is_empty() { "No settlements yet. Explore natural loaded Overworld terrain; NPC pioneers can found independent towns. OP /civ found NAME is optional.".into() } else { items.join(" | ") });
+        return;
+    }
+    if action == "nearby" {
+        // All information is derived from existing authoritative world.json.
+        // No chunk loads, scans, inventory access, markers, or transactions.
+        if !player.position.iter().all(|value| value.is_finite()) {
+            error(game, "unable to determine a finite player position");
+            return;
+        }
+        let mut villages: Vec<(f64, u64, String)> = world.settlements.values()
+            .filter(|v| v.dimension == player.dimension)
+            .map(|v| {
+                let dx = f64::from(v.center[0]) - player.position[0];
+                let dz = f64::from(v.center[2]) - player.position[2];
+                let distance = dx.hypot(dz);
+                let direction = format!(
+                    "{}{}", if dz < 0.0 { "N" } else { "S" },
+                    if dx < 0.0 { "W" } else { "E" }
+                );
+                let stage = if v.hall_complete { "hall built" }
+                    else if v.hall_job.is_some() { "hall building" }
+                    else { "starting" };
+                (distance, v.id, format!(
+                    "{} ({:.0}m {}, X{} Z{}, {})",
+                    v.name, distance, direction, v.center[0], v.center[2], stage
+                ))
+            }).collect();
+        villages.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        let shown: Vec<_> = villages.iter().take(4)
+            .map(|(_, _, description)| description.as_str()).collect();
+        reply(game, if shown.is_empty() {
+            "No known settlements in this dimension. Explore natural land; NPC communities can found on loaded, clear Overworld terrain.".to_owned()
+        } else {
+            format!(
+                "Nearest settlements ({} known): {}. Visit a village or talk to a resident; /civ join NAME to become a citizen.",
+                villages.len(), shown.join(" | ")
+            )
+        });
+        return;
+    }
+    if action == "meals" {
+        let name = args.next().unwrap_or("");
+        let Some(village) = world.by_name(name) else {
+            error(game, "unknown settlement: /civ meals <name>");
+            return;
+        };
+        let fed = village.living_meals_served();
+        let population = village.population() as usize;
+        let pending = village.barrel_transfer.as_ref()
+            .filter(|t| t.direction == BarrelDirection::ToResidentMeal)
+            .map(|t| format!(
+                "recipient {:?}, {:?}, native before={}, count={}",
+                t.recipient_id, t.phase, t.before, t.count
+            )).unwrap_or_else(|| "none".to_owned());
+        let physical = if village.dimension == player.dimension && village.hall_complete {
+            physical_barrel_stock(game, &village.dimension, village.center)
+                .and_then(|items| items.into_iter()
+                    .find(|(good, _)| *good == Good::Bread).map(|(_, amount)| amount))
+                .map(|value| format!("{value} verified loaves"))
+                .unwrap_or_else(|| "unloaded / unavailable".to_owned())
+        } else { "no nearby completed native hall".to_owned() };
+        reply(game, format!(
+            "{} REAL meals: host day {:?}, served {}/{} living residents, shortage streak {} completed days. Bread in vanilla barrels: {}. Pending native receipt: {}. Every portion requires a UUID-bound resident at the hall, steward and exactly one extracted real loaf; virtual food does NOT count.",
+            village.name, village.meal_day, fed, population,
+            village.meal_shortage_days, physical, pending
+        ));
         return;
     }
     if action == "hall" || action == "warehouse" {
@@ -2905,6 +2985,31 @@ fn barrel_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
                     return Ok(());
                 }
             }
+            if transfer.direction == BarrelDirection::ToResidentMeal {
+                // A citizen can die or walk away between Planned and Issued.
+                // Reverify the saved recipient UUID, real mob location and
+                // steward immediately before physically consuming bread.
+                // Cancel only a never-issued intent, without any native edit.
+                let still_eligible = transfer.recipient_id.is_some_and(|recipient| {
+                    village.residents.iter().any(|r| r.id == recipient
+                        && r.alive && r.entity_uuid.is_some()
+                        && !village.meal_served.contains(&recipient))
+                }) && storage_worker_near(
+                    game, state.world.as_ref().unwrap(), id, Job::Merchant
+                ) && {
+                    let actors = loaded_actors(game, state.world.as_ref().unwrap(), id);
+                    transfer.recipient_id.is_some_and(|recipient| {
+                        actors.iter().any(|(known, mob)| *known == recipient
+                            && game.native_mob(&dimension, *mob).is_some_and(|actor|
+                                native_worker_near(actor.pos, village.center, 8.0, 4.0)))
+                    })
+                };
+                if !still_eligible {
+                    state.world.as_mut().unwrap().cancel_unissued_meal(id)?;
+                    save_autonomous(state, before)?;
+                    return Ok(());
+                }
+            }
             // Mark issued and durably save BEFORE the external inventory edit.
             state.world.as_mut().unwrap().issue_barrel_transfer(id)?;
             save_autonomous(state, before)?;
@@ -2918,7 +3023,8 @@ fn barrel_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
                 }
                 BarrelDirection::ToBuilder
                 | BarrelDirection::ToBakeryBuilder
-                | BarrelDirection::ToBakerIngredients => {
+                | BarrelDirection::ToBakerIngredients
+                | BarrelDirection::ToResidentMeal => {
                     let Some(slot) = transfer.slot else {
                         return Err("native barrel extraction has no recorded slot".into());
                     };
@@ -3100,6 +3206,79 @@ fn barrel_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
     Ok(())
 }
 
+/// A meal is served only to a genuine nearby UUID-bound resident. Every
+/// portion is one actual bread item removed from a loaded civic barrel by
+/// the EXISTING durable Planned -> Issued -> observed/Blocked transaction.
+/// Unloaded players/NPCs and abstract food are never treated as evidence.
+fn resident_meal_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), String> {
+    let dimension = game.dim.id().to_owned();
+    let host_day = game.world.day_time.div_euclid(24_000);
+    let ids: Vec<u64> = state.world.as_ref().unwrap().settlements.values()
+        .filter(|v| v.dimension == dimension && v.hall_complete
+            && v.actors_spawned && v.autonomy_enabled)
+        .map(|v| v.id).collect();
+    for id in ids {
+        let village = state.world.as_ref().unwrap().settlements[&id].clone();
+        if village.meal_day != Some(host_day) {
+            let old = state.world.as_ref().unwrap().clone();
+            if state.world.as_mut().unwrap().begin_meal_day(id, host_day)? {
+                save_autonomous(state, old)?;
+                return Ok(());
+            }
+            continue;
+        }
+        // A single shared, durable transfer serializes meals with building,
+        // bakery supplies, steward deposits, and real player purchases.
+        if village.barrel_transfer.is_some() || village.market_purchase.is_some() {
+            continue;
+        }
+        if village.living_meals_served() >= village.population() as usize {
+            continue;
+        }
+        // The steward AND the actual recipient must have arrived. An NPC's
+        // saved UUID plus a visible villager at the hall is the only identity
+        // accepted; names alone, unloaded villagers or virtual stock do not count.
+        if !storage_worker_near(game, state.world.as_ref().unwrap(), id, Job::Merchant) {
+            continue;
+        }
+        let loaded = loaded_actors(game, state.world.as_ref().unwrap(), id);
+        let recipient = village.residents.iter()
+            .filter(|r| r.alive && r.entity_uuid.is_some()
+                && !village.meal_served.contains(&r.id))
+            .find_map(|r| loaded.iter().find_map(|(known, mob)| {
+                if *known != r.id { return None; }
+                game.native_mob(&dimension, *mob).and_then(|actor| {
+                    native_worker_near(actor.pos, village.center, 8.0, 4.0)
+                        .then_some(r.id)
+                })
+            }));
+        let Some(resident_id) = recipient else { continue; };
+        for position in hall_storage_positions(village.center) {
+            if world_block(game, &dimension, position).as_deref() != Some("minecraft:barrel") {
+                continue;
+            }
+            let Some(slots) = game.native_container_slots(&dimension, position, Direction::Up)
+            else { continue; };
+            let source = slots.iter().find_map(|entry| {
+                let stack = entry.stack.as_ref()?;
+                (entry.can_take && stack.item.as_ref() == Good::Bread.item()
+                    && stack.damage == 0 && stack.extra.is_none()
+                    && stack.count >= 1).then_some(entry.slot)
+            });
+            let Some(slot) = source else { continue; };
+            let Some(before) = plain_barrel_count(game, &dimension, position, Good::Bread)
+            else { continue; };
+            let old = state.world.as_ref().unwrap().clone();
+            state.world.as_mut().unwrap().plan_resident_meal(
+                id, resident_id, host_day, position, before, slot,
+            )?;
+            save_autonomous(state, old)?;
+            return Ok(());
+        }
+    }
+    Ok(())
+}
+
 /// One physical farmer delivery per village, after an actual UUID-linked
 /// villager has returned from a fully confirmed crop harvest to the hall.
 fn farmer_delivery_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), String> {
@@ -3180,6 +3359,119 @@ fn baker_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), St
             save_autonomous(state, before)?;
         }
         return Ok(());
+    }
+    Ok(())
+}
+
+/// Natural frontier founding: players may DISCOVER an independent town
+/// without operator commands, but the game never creates one on an unloaded
+/// chunk or modifies the user's immediate base. A successful write only adds
+/// the social record; the existing one-shot guarded actor startup and
+/// resource-backed town hall perform native work on subsequent ticks.
+const FRONTIER_OFFSETS: [[i32; 2]; 8] = [
+    [88, 0], [-88, 0], [0, 88], [0, -88],
+    [64, 64], [-64, 64], [64, -64], [-64, -64],
+];
+const FRONTIER_NAMES: [&str; 8] = [
+    "Oakford", "Stonevale", "Birchmere", "Redmoor",
+    "Rivermark", "Pinewatch", "Ashfield", "Dawnhold",
+];
+
+fn autonomous_frontier_found(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), String> {
+    let dimension = game.dim.id();
+    if dimension != "minecraft:overworld" { return Ok(()); }
+    let Some(world) = state.world.as_ref() else { return Ok(()); };
+    if world.settlements.len() >= crate::game::civilizations_core::MAX_SETTLEMENTS
+        || world.settlements.values().filter(|s|
+            s.founder == crate::game::civilizations_core::NPC_FOUNDER).count()
+            >= crate::game::civilizations_core::MAX_NPC_SETTLEMENTS {
+        return Ok(());
+    }
+
+    // Observe only real authoritative players in the currently ticked
+    // dimension. Include the integrated single-player host, which the
+    // upstream native_server_players() guest-only API intentionally omits.
+    let mut explorers = Vec::new();
+    if let Some(host) = game.player.as_ref() {
+        explorers.push([host.position.x, host.position.y, host.position.z]);
+    }
+    for player in game.native_server_players() {
+        if player.dimension == dimension {
+            explorers.push(player.position);
+        }
+    }
+    let first_direction = (state.physical_ticks / 2_400) as usize % FRONTIER_OFFSETS.len();
+    for explorer in explorers {
+        if !explorer.iter().all(|c| c.is_finite()) { continue; }
+        // Keep the candidate offsets and native block reads inside
+        // Minecraft's world boundary, away from arithmetic wraparound.
+        if explorer[0].abs() > 29_999_000.0
+            || explorer[2].abs() > 29_999_000.0
+            || explorer[1].abs() > 1_900.0 {
+            continue;
+        }
+        let origin = explorer.map(|v| v.floor() as i32);
+        // Do not generate another settlement just because the player is
+        // standing in their own town or has built a base around one.
+        let near_existing = world.settlements.values()
+            .filter(|s| s.dimension == dimension)
+            .any(|v| {
+                let dx = i64::from(v.center[0]) - i64::from(origin[0]);
+                let dz = i64::from(v.center[2]) - i64::from(origin[2]);
+                dx * dx + dz * dz < 192_i64 * 192
+            });
+        if near_existing { continue; }
+
+        for index in 0..FRONTIER_OFFSETS.len() {
+            let offset = FRONTIER_OFFSETS[(index + first_direction) % FRONTIER_OFFSETS.len()];
+            let (Some(x), Some(z)) = (
+                origin[0].checked_add(offset[0]),
+                origin[2].checked_add(offset[1])
+            ) else { continue; };
+            for dy in [0_i32, -1, 1, -2, 2, -3, 3] {
+                let Some(y) = origin[1].checked_add(dy) else { continue; };
+                let candidate = [x, y, z];
+                // The 5x5 site survey rejects trees, player structures,
+                // non-natural ground, unloaded chunks and terrain cliffs.
+                // Do not dig, level, clear or forcibly load ANY blocks.
+                if check_empty_hut_site(game, dimension, candidate).is_err() {
+                    continue;
+                }
+                let id = world.next_id;
+                let name = format!(
+                    "{}_{}", FRONTIER_NAMES[((id - 1) % FRONTIER_NAMES.len() as u64) as usize], id
+                );
+                // Recheck domain constraints against a trial, avoiding an
+                // unnecessary save on name or inter-village collisions.
+                let mut trial = world.clone();
+                let Ok(trial_id) = trial.found_autonomous(&name, dimension, candidate)
+                else { continue; };
+                // Do not leave behind an independent village whose first
+                // ten residents can never appear. Require the SAME full
+                // loaded-chunk, no-duplicate, collision-free ten-position
+                // NPC survey used for the actual native spawn reservation.
+                // This first-pass survey is read-only; the later real
+                // spawn path rechecks all preconditions before persistence.
+                if surveyed_initial_actor_positions(
+                    game, &trial.settlements[&trial_id]
+                ).is_err() {
+                    continue;
+                }
+                let before = state.world.as_ref().unwrap().clone();
+                state.world.as_mut().unwrap()
+                    .found_autonomous(&name, dimension, candidate)?;
+                save_autonomous(state, before)?;
+                log::info!(
+                    "[civilizations] independent NPC village {} founded at {:?}; loaded natural plot",
+                    name, candidate
+                );
+                game.native_broadcast(Text::literal(format!(
+                    "Explorers report a new independent settlement: {} near {}, {}. Visit its town hall or use /civ info {}.",
+                    name, x, z, name
+                )));
+                return Ok(());
+            }
+        }
     }
     Ok(())
 }
@@ -3896,7 +4188,7 @@ fn gather_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
         return Ok(());
     };
     let (id, job) = eligible[slot].clone();
-    let role = if job.good == Good::Wood { Job::Lumberjack } else { Job::Miner };
+    let Some(role) = job.good.job() else { return Ok(()); };
     if !DailyPhase::at(game.world.day_time).on_shift(role) {
         return Ok(());
     }
@@ -3922,7 +4214,7 @@ fn gather_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
         if name == "minecraft:air" {
             let world = state.world.as_ref().unwrap();
             let v = &world.settlements[&id];
-            let role = if job.good == Good::Wood { Job::Lumberjack } else { Job::Miner };
+            let Some(role) = job.good.job() else { return Ok(()); };
             let linked = loaded_actors(game, world, id);
             if !job.pickup_witnessed {
                 // Seeing air alone is not proof of resource custody. Check
@@ -3979,7 +4271,7 @@ fn gather_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
     }
     let world = state.world.as_ref().unwrap();
     let v = &world.settlements[&id];
-    let profession = job.good.job().unwrap_or(Job::Miner);
+    let profession = role;
     let camp_kind = PostKind::for_good(job.good);
     // A camp already bound to one resident is serviced by that resident only:
     // the name on the camp sign and the worker who delivers stay the same.
@@ -4136,6 +4428,17 @@ pub fn level_tick(game: &mut Game<'_>, dimension: &str) {
     let state = guard.as_mut().expect("active initialized");
     if state.problem.is_some() || state.world.is_none() { return; }
     state.physical_ticks = state.physical_ticks.saturating_add(1);
+    // At most one loaded-world frontier survey every 2,400 ticks.
+    // Only this authoritative server-level hook may found villages.
+    if state.physical_ticks % 2_400 == 0 {
+        if let Err(error) = autonomous_frontier_found(game, state) {
+            log::warn!("[civilizations] frontier founding paused: {error}");
+            if error.starts_with("persistence:") {
+                state.problem = Some(error);
+                return;
+            }
+        }
+    }
     // Villages start their own visible work by default, without needing
     // OP construction/field/spawn commands. The planner is bounded and
     // *never* edits a block without the existing worker-aware tick.
@@ -4210,6 +4513,13 @@ pub fn level_tick(game: &mut Game<'_>, dimension: &str) {
         }
     }
     if state.physical_ticks % 8 == 0 {
+        if let Err(error) = resident_meal_one_step(game, state) {
+            log::warn!("[civilizations] physical resident dining paused: {error}");
+            if error.starts_with("persistence:") {
+                state.problem = Some(error);
+                return;
+            }
+        }
         if let Err(error) = farmer_delivery_one_step(game, state) {
             log::warn!("[civilizations] returning wheat to hall failed: {error}");
             if error.starts_with("persistence:") {
