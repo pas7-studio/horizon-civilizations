@@ -157,3 +157,10 @@
   credits, actions, land claims, combat decisions, or world-save writes.
 - No GitHub Actions or actual Rust/Python/native/game executions. Only
   structural source audits can be claimed until local testing.
+
+- Added a local-only PowerShell validator for formatting, Clippy, Cargo,
+  Python, packaging and optional pinned native client compilation.
+- Fixed the native test filter from `civilizations_core::tests` (which misses
+  newer sibling test modules) to `civilizations_core::` (all nested core tests).
+- Exposed the top council concern in UUID-bound resident right-click text.
+- Extended Python contracts to guard the dialogue and local validation path.
