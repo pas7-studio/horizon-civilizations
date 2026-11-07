@@ -15,7 +15,7 @@ coins. The existing manual OP founding flow is unchanged. Players can locate
 independent communities with **`/civ nearby`** (nearest four in their current
 dimension, coordinates and town hall state), talk to residents and join them.
 
-**Assurance:** 5 new Rust domain tests and 11 Python source contracts
+**Assurance:** 6 new Rust domain tests and 11 Python source contracts
 authored; these remain unexecuted by a native Rust/Horizon build in this
 environment. Do not consider automatic world generation or NPC gameplay
 verified until disposable-world E2E.
