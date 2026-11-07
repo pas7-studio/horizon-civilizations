@@ -48,3 +48,15 @@ After `/civ actors Ashford` and `/civ roster Ashford`, right-click a UUID-bound 
 ## Wheat plot trial (v0.1.4)
 
 Use **only a disposable world**. From a standing position on the center of flat natural 3×3 ground, 12–80 blocks from Ashford, execute `/civ farm Ashford` and `/civ farming Ashford`. Wait for UUID-bound farmers to reach the plot; verify eight tilled squares, a center water source and wheat planted above each tilled square. Let the vanilla wheat age to 7; verify harvest and replant, checking the visual cycle counter. No Minecraft item drops or extra simulated wheat should appear due to visual harvesting. Reboot the world during each phase; confirm the saved cursor reconciles and foreign blocks never get overwritten. Native compile success is not a substitute for these tests.
+
+## One-command Windows playtest (optional)
+
+When the Windows native compile workflow has uploaded `horizon-client.exe` (not just a source-only `.hnmod`), download the artifact and extract it locally. Install the **official Horizon Launcher** and sign in with your own Minecraft: Java Edition entitlement. Then run from a PowerShell terminal in this project directory:
+
+```powershell
+.\scripts\start-windows-playtest.ps1 -ClientExe 'C:\Games\HorizonTest\horizon-client.exe' -TrustUnsigned
+```
+
+The script imports that exact executable, prepares resources using the official launcher and launches the disposable `Civilizations-Test` creative world. It does not distribute resources, bypass sign-in or alter another save. The `-TrustUnsigned` switch is required to make trust in your own CI artifact an explicit decision. If official resources are already prepared for this installed build, `-SkipPrepare` skips preparing them again.
+
+This launcher flow is **not yet run in this workspace**. If Horizon Launcher reports that a compiled binary is incompatible with its selected version, use the pinned compatible upstream build and a new disposable world instead of patching an existing Minecraft save.
