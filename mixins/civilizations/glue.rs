@@ -1,7 +1,7 @@
 // Horizon bridge. All world logic lives in civilizations_core; this module
 // translates server hooks, commands, inventory changes, and native NPC spawns.
 use crate::game::{
-    civilizations_core::{hut_plan, Good, World, MAX_SIM_DAYS},
+    civilizations_core::{hut_plan, inspect_hut, is_ground, BuildInspection, Good, World, MAX_SIM_DAYS},
     native_mobs::NativeSpawn,
     native_server::{NativeCommand, NativeServerPlayer},
     Game,
@@ -223,10 +223,6 @@ fn world_block(game: &Game<'_>, dimension: &str, pos: [i32; 3]) -> Option<String
         .map(|state| state.name.to_string())
 }
 
-fn is_ground(name: &str) -> bool {
-    matches!(name, "minecraft:grass_block" | "minecraft:dirt" | "minecraft:stone")
-}
-
 fn check_empty_hut_site(game: &Game<'_>, dimension: &str, origin: [i32; 3]) -> Result<(), String> {
     for z in -2..=2 {
         for x in -2..=2 {
@@ -247,71 +243,74 @@ fn check_empty_hut_site(game: &Game<'_>, dimension: &str, origin: [i32; 3]) -> R
 /// mutations occur on a later authoritative server tick.
 fn build_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), String> {
     let dim = game.dim.id().to_string();
-    let selected = state.world.as_ref().and_then(|world| world.settlements.values()
-        .filter(|s| s.dimension == dim)
-        .find_map(|s| s.visual_job.as_ref().filter(|j| !j.blocked).map(|j| (s.id, j.clone()))));
-    let Some((village_id, job)) = selected else { return Ok(()); };
-    let plan = hut_plan(job.origin);
-    // World JSON may be saved before Minecraft flushes a chunk. A crash can
-    // leave cursor ahead of the physical state; reconcile *all* earlier steps
-    // before finishing or placing the next one. No blind overwrites.
-    for (index, step) in plan.iter().take(job.cursor).enumerate() {
-        let Some(observed) = world_block(game, &dim, step.pos) else { return Ok(()); };
-        if observed == step.block { continue; }
-        let safe = if step.floor { is_ground(&observed) } else { observed == "minecraft:air" };
-        let s = state.world.as_mut().unwrap().settlements.get_mut(&village_id).unwrap();
-        let current = s.visual_job.as_mut().unwrap();
-        if safe {
-            current.cursor = index;
-            save(state).map_err(|e| format!("persistence: {e}"))?;
-            return Ok(());
+    // The next active build is chosen fairly, only among loaded plots in this
+    // dimension. A paused first settlement cannot starve another village.
+    let selected = state.world.as_ref().and_then(|world| {
+        world.next_visual_job(&dim, (state.physical_ticks / 4) as usize, |pos| {
+            game.world.loaded(pos[0], pos[2])
+        })
+    });
+    let Some((village_id, job)) = selected else {
+        return Ok(());
+    };
+    // This pure function rechecks all previously reported blocks and makes
+    // one conservative decision. It does not mutate the world or save.
+    let inspection = inspect_hut(&job, |pos| world_block(game, &dim, pos));
+    match inspection {
+        BuildInspection::Unloaded | BuildInspection::Paused => Ok(()),
+        BuildInspection::InvalidCursor => {
+            Err(format!("invalid construction cursor for settlement {village_id}"))
         }
-        current.blocked = true;
-        save(state).map_err(|e| format!("persistence: {e}"))?;
-        return Err(format!("placed building block changed at {:?}: {observed}", step.pos));
+        BuildInspection::Blocked { position, found } => {
+            let s = state.world.as_mut().unwrap().settlements.get_mut(&village_id).unwrap();
+            s.visual_job.as_mut().unwrap().blocked = true;
+            save(state).map_err(|e| format!("persistence: {e}"))?;
+            Err(format!("construction blocked at {position:?} by {found}"))
+        }
+        BuildInspection::Rewind(cursor) => {
+            let s = state.world.as_mut().unwrap().settlements.get_mut(&village_id).unwrap();
+            s.visual_job.as_mut().unwrap().cursor = cursor;
+            save(state).map_err(|e| format!("persistence: {e}"))?;
+            Ok(())
+        }
+        BuildInspection::Advance => {
+            let s = state.world.as_mut().unwrap().settlements.get_mut(&village_id).unwrap();
+            s.visual_job.as_mut().unwrap().cursor += 1;
+            save(state).map_err(|e| format!("persistence: {e}"))?;
+            Ok(())
+        }
+        BuildInspection::Complete => {
+            state.world.as_mut().unwrap().finish_visual_house(village_id)?;
+            save(state).map_err(|e| format!("persistence: {e}"))?;
+            Ok(())
+        }
+        BuildInspection::Place { position, old_block, new_block } => {
+            let world = state.world.as_ref().expect("active civilization world");
+            let linked = loaded_actors(game, world, village_id);
+            let builders: Vec<_> = world.settlements[&village_id].residents.iter()
+                .filter(|r| r.alive && r.job == crate::game::civilizations_core::Job::Builder)
+                .filter_map(|r| linked.iter().find(|(id, _)| *id == r.id).map(|(_, mob)| *mob))
+                .collect();
+            let near = builders.iter().any(|&id| game.native_mob(&dim, id).is_some_and(|mob| {
+                let dx = mob.pos[0] - f64::from(job.origin[0]);
+                let dz = mob.pos[2] - f64::from(job.origin[2]);
+                dx * dx + dz * dz <= 9.0 * 9.0
+            }));
+            if !near {
+                return Ok(());
+            }
+            let [x, y, z] = position;
+            // Conditional server write: the saved cursor advances only after
+            // the expected resulting block is observed on a later tick.
+            let command = format!(
+                "execute in {dim} if block {x} {y} {z} {old_block} run setblock {x} {y} {z} {new_block} replace"
+            );
+            if !game.native_run_command(&command) {
+                log::warn!("[civilizations] conditional build command refused: {command}");
+            }
+            Ok(())
+        }
     }
-    if job.cursor >= plan.len() {
-        state.world.as_mut().unwrap().finish_visual_house(village_id)?;
-        save(state).map_err(|e| format!("persistence: {e}"))?;
-        return Ok(());
-    }
-    let world = state.world.as_ref().expect("active civilization world");
-    let builders = loaded_actors(game, world, village_id);
-    let builder_ids: Vec<u32> = world.settlements[&village_id].residents.iter()
-        .filter(|r| r.alive && r.job == crate::game::civilizations_core::Job::Builder)
-        .filter_map(|r| builders.iter().find(|(id, _)| *id == r.id).map(|(_, mob)| *mob))
-        .collect();
-    let close = builder_ids.iter().any(|mob_id| game.native_mob(&dim, *mob_id).is_some_and(|mob| {
-        let dx = mob.pos[0] - f64::from(job.origin[0]);
-        let dz = mob.pos[2] - f64::from(job.origin[2]);
-        dx * dx + dz * dz <= 9.0 * 9.0
-    }));
-    if !close { return Ok(()); }
-    let step = &plan[job.cursor];
-    let observed = world_block(game, &dim, step.pos).ok_or("build chunk unloaded")?;
-    if observed == step.block {
-        let s = state.world.as_mut().unwrap().settlements.get_mut(&village_id).unwrap();
-        s.visual_job.as_mut().unwrap().cursor += 1;
-        save(state).map_err(|e| format!("persistence: {e}"))?;
-        return Ok(());
-    }
-    if !(if step.floor { is_ground(&observed) } else { observed == "minecraft:air" }) {
-        let s = state.world.as_mut().unwrap().settlements.get_mut(&village_id).unwrap();
-        s.visual_job.as_mut().unwrap().blocked = true;
-        save(state).map_err(|e| format!("persistence: {e}"))?;
-        return Err(format!("building blocked at {:?}: {observed}", step.pos));
-    }
-    let [x, y, z] = step.pos;
-    let command = format!(
-        "execute in {dim} if block {x} {y} {z} {observed} run setblock {x} {y} {z} {} replace",
-        step.block,
-    );
-    // Re-check occupancy within the authoritative Minecraft command itself.
-    // Cursor is not committed until the target state is observed on a later tick.
-    if !game.native_run_command(&command) {
-        log::warn!("[civilizations] command refused (will retry): {command}");
-    }
-    Ok(())
 }
 
 pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, ran: &mut bool) {

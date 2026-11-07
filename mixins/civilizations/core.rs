@@ -208,6 +208,64 @@ pub struct VisualBuildJob {
     pub blocked: bool,
 }
 
+ 
+/// Pure, non-mutating decision after inspecting the actual loaded world blocks.
+/// Horizon performs writes separately, and confirms each result on a later tick.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum BuildInspection {
+    Unloaded,
+    Paused,
+    Rewind(usize),
+    Blocked { position: [i32; 3], found: String },
+    InvalidCursor,
+    Advance,
+    Complete,
+    Place { position: [i32; 3], old_block: String, new_block: &'static str },
+}
+
+pub fn is_ground(name: &str) -> bool {
+    matches!(name, "minecraft:grass_block" | "minecraft:dirt" | "minecraft:stone")
+}
+
+/// Check every previously committed step; the save file and chunk data are
+/// not atomic, so a committed cursor does not prove the blocks still exist.
+pub fn inspect_hut(job: &VisualBuildJob, mut read: impl FnMut([i32; 3]) -> Option<String>) -> BuildInspection {
+    if job.blocked {
+        return BuildInspection::Paused;
+    }
+    let plan = hut_plan(job.origin);
+    if job.cursor > plan.len() {
+        return BuildInspection::InvalidCursor;
+    }
+    for (index, step) in plan.iter().enumerate() {
+        if index > job.cursor {
+            break;
+        }
+        let Some(actual) = read(step.pos) else {
+            return BuildInspection::Unloaded;
+        };
+        if actual == step.block {
+            if index == job.cursor {
+                return BuildInspection::Advance;
+            }
+            continue;
+        }
+        let may_replace = if step.floor { is_ground(&actual) } else { actual == "minecraft:air" };
+        if !may_replace {
+            return BuildInspection::Blocked { position: step.pos, found: actual };
+        }
+        if index < job.cursor {
+            return BuildInspection::Rewind(index);
+        }
+        return BuildInspection::Place {
+            position: step.pos,
+            old_block: actual,
+            new_block: step.block,
+        };
+    }
+    BuildInspection::Complete
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Settlement {
     pub id: u64,
@@ -490,6 +548,29 @@ impl World {
         }
         village.visual_job = Some(VisualBuildJob { origin, cursor: 0, blocked: false });
         Ok(())
+    }
+
+
+    /// Rotate across loaded, unblocked physical jobs in a deterministic order.
+    /// Never let an unloaded first village stall all other civilizations.
+    pub fn next_visual_job(
+        &self,
+        dimension: &str,
+        sequence: usize,
+        mut loaded: impl FnMut([i32; 3]) -> bool,
+    ) -> Option<(u64, VisualBuildJob)> {
+        let eligible: Vec<_> = self.settlements.values()
+            .filter(|s| s.dimension == dimension)
+            .filter_map(|s| {
+                let job = s.visual_job.as_ref()?;
+                (!job.blocked && loaded(job.origin)).then(|| (s.id, job.clone()))
+            })
+            .collect();
+        if eligible.is_empty() {
+            None
+        } else {
+            Some(eligible[sequence % eligible.len()].clone())
+        }
     }
 
     /// Called only after all block states have been observed at their targets.
@@ -781,6 +862,87 @@ mod tests {
         assert_eq!(reloaded.settlements[&id].pending_visual_buildings, 0);
         assert!(reloaded.start_visual_house(id, [21, 64, 0]).is_err());
         reloaded.validate().unwrap();
+    }
+
+
+    #[test]
+    fn physical_builder_never_overwrites_an_unexpected_block() {
+        let job = VisualBuildJob { origin: [32, 70, -16], cursor: 0, blocked: false };
+        let first = hut_plan(job.origin)[0].pos;
+        assert_eq!(
+            inspect_hut(&job, |p| (p == first).then(|| "minecraft:chest".to_owned())),
+            BuildInspection::Blocked { position: first, found: "minecraft:chest".to_owned() }
+        );
+    }
+
+    #[test]
+    fn physical_builder_places_only_a_natural_foundation_or_air() {
+        let job = VisualBuildJob { origin: [32, 70, -16], cursor: 0, blocked: false };
+        let first = hut_plan(job.origin)[0].pos;
+        assert_eq!(
+            inspect_hut(&job, |_| Some("minecraft:dirt".to_owned())),
+            BuildInspection::Place {
+                position: first,
+                old_block: "minecraft:dirt".to_owned(),
+                new_block: "minecraft:cobblestone",
+            }
+        );
+        assert_eq!(
+            inspect_hut(&job, |_| Some("minecraft:cobblestone".to_owned())),
+            BuildInspection::Advance
+        );
+    }
+
+    #[test]
+    fn physical_builder_repairs_a_cursor_ahead_of_chunk_persistence() {
+        let job = VisualBuildJob { origin: [32, 70, -16], cursor: 3, blocked: false };
+        let plan = hut_plan(job.origin);
+        let first = plan[0].pos;
+        assert_eq!(
+            inspect_hut(&job, |p| Some(if p == first { "minecraft:grass_block" } else { "minecraft:cobblestone" }.into())),
+            BuildInspection::Rewind(0)
+        );
+        let second = plan[1].pos;
+        assert_eq!(
+            inspect_hut(&job, |p| Some(if p == second { "minecraft:bedrock" } else { "minecraft:cobblestone" }.into())),
+            BuildInspection::Blocked { position: second, found: "minecraft:bedrock".to_owned() }
+        );
+    }
+
+    #[test]
+    fn physical_builder_pauses_on_unloaded_chunk_and_finishes_only_after_recheck() {
+        let origin = [32, 70, -16];
+        let mut job = VisualBuildJob { origin, cursor: 0, blocked: false };
+        assert_eq!(inspect_hut(&job, |_| None), BuildInspection::Unloaded);
+        job.blocked = true;
+        assert_eq!(inspect_hut(&job, |_| Some("minecraft:dirt".into())), BuildInspection::Paused);
+        job.blocked = false;
+        job.cursor = hut_plan(origin).len();
+        let by_pos: BTreeMap<[i32; 3], String> = hut_plan(origin)
+            .into_iter().map(|step| (step.pos, step.block.to_owned())).collect();
+        assert_eq!(inspect_hut(&job, |p| by_pos.get(&p).cloned()), BuildInspection::Complete);
+        let missing = hut_plan(origin)[5].pos;
+        assert_eq!(inspect_hut(&job, |p| Some(if p == missing { "minecraft:dirt".to_owned() }
+            else { by_pos[&p].clone() })), BuildInspection::Rewind(5));
+        job.cursor += 1;
+        assert_eq!(inspect_hut(&job, |p| by_pos.get(&p).cloned()), BuildInspection::InvalidCursor);
+    }
+
+    #[test]
+    fn loaded_construction_jobs_take_fair_turns_and_ignore_unloaded_worlds() {
+        let (mut sim, a) = world();
+        let b = sim.found("Brightfield", "minecraft:overworld", [450, 70, 0], "other").unwrap();
+        sim.advance(1).unwrap();
+        sim.start_visual_house(a, [20, 64, 0]).unwrap();
+        sim.start_visual_house(b, [470, 70, 0]).unwrap();
+        assert_eq!(sim.next_visual_job("minecraft:overworld", 0, |_| true).unwrap().0, a);
+        assert_eq!(sim.next_visual_job("minecraft:overworld", 1, |_| true).unwrap().0, b);
+        assert_eq!(sim.next_visual_job("minecraft:overworld", 2, |_| true).unwrap().0, a);
+        assert_eq!(sim.next_visual_job("minecraft:overworld", 0, |p| p[0] > 400).unwrap().0, b);
+        assert_eq!(sim.next_visual_job("minecraft:the_nether", 0, |_| true), None);
+        sim.settlements.get_mut(&a).unwrap().visual_job.as_mut().unwrap().blocked = true;
+        assert_eq!(sim.next_visual_job("minecraft:overworld", 0, |_| true).unwrap().0, b);
+        assert_eq!(sim.next_visual_job("minecraft:overworld", 0, |_| false), None);
     }
 
     #[test]

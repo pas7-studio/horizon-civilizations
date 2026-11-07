@@ -27,3 +27,12 @@ NPCs; save corruption; unauthorised commands; unbounded server tick stalls.
 19. **Resource accounting**: abstract house costs wood and stone once. Materializing it must not charge resources a second time or increment `houses` again.
 
 **These checks have not yet been executed against Horizon.**
+
+## Post-native-build construction scenarios
+
+20. **Multi-settlement scheduling:** approve hut jobs for two villages. With both loaded, both cursors must advance; with A unloaded or blocked, B must continue. No inactive dimension may receive edits.
+21. **Saved cursor ahead of blocks:** restore a saved chunk missing one previously verified natural foundation block; cursor must rewind to it rather than skip work.
+22. **Foreign block:** insert a chest into an already completed position. The job must block without overwriting it or continuing elsewhere.
+23. **Write-before-cursor crash:** commit a physical block but not JSON cursor. The next tick must detect it and commit progress once, with no duplicate write.
+
+These now have pure Rust state-machine tests, not in-game proofs; keep valuable worlds out of this experiment.

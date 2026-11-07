@@ -59,3 +59,7 @@ Design caveats:
 ## GitHub CI observations (2026-11-07)
 
 The first run stopped at rustfmt; an automated formatting capture gate followed. Clippy then requested `u64::is_multiple_of(4)` and the native mixin stage rejected upstream's `CLAUDE.md` symlink. These two defects are corrected in source but must pass a new CI run. Gameplay E2E remains unverified.
+
+## Updated GitHub CI evidence (2026-11-07)
+
+The historical verification table above describes the original prototype, **not** the current GitHub branch. GitHub native compile + embedded Rust tests: PASS (run 42375553368). Core CI (cargo, Clippy, tests and source packaging): PASS (run 42375993049). These prove compile compatibility with the pinned Horizon, **not** a real gameplay E2E. Construction reconciliation and fair scheduling are further work being tested in a follow-up PR. In-game launch, physical progress, restart/unload and multiplayer remain unverified.
