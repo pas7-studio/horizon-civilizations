@@ -2168,7 +2168,10 @@ fn safe_actor_spawn_points(
             if spots.len() == 10 { return spots; }
         }
     }
-    Vec::new()
+    // Return every available safe spot even if there are fewer than ten.
+    // The INITIAL batch still requires exactly ten before it reserves
+    // anything. The explicit single-resident recovery needs just one.
+    spots
 }
 
 /// Vanilla villagers are UUID-bound, once, after a persistent one-shot
