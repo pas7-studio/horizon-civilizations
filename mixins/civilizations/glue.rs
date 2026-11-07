@@ -1467,6 +1467,62 @@ fn autonomous_village_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Resu
     Ok(())
 }
 
+/// Refresh two actual native Minecraft sign tile entities with readable
+/// information. Only the mod's expected signs in a COMPLETED hall qualify.
+/// No change to stock, players or civic JSON is made by this operation.
+fn refresh_hall_boards(game: &mut Game<'_>, world: &World) {
+    let dimension = game.dim.id().to_owned();
+    let mut commands = Vec::new();
+    for village in world.settlements.values()
+        .filter(|v| v.dimension == dimension && v.hall_complete)
+    {
+        let mayor = village.residents.iter()
+            .find(|r| r.alive && r.job == Job::Merchant)
+            .map(|r| r.name.as_str()).unwrap_or("NONE");
+        let (_, _, homeless) = village.physical_housing();
+        let (wood_missing, stone_missing) = if village.hall_complete {
+            let next = if village.visual_job.is_some() || village.pending_visual_buildings > 0 {
+                (crate::game::civilizations_core::HUT_WOOD_LOGS,
+                 crate::game::civilizations_core::HUT_COBBLESTONE)
+            } else { (0, 0) };
+            (next.0.saturating_sub(village.warehouse_quantity(Good::Wood)),
+             next.1.saturating_sub(village.warehouse_quantity(Good::Stone)))
+        } else { village.hall_materials_missing() };
+        let [mayor_sign, needs_sign] = hall_board_positions(village.center);
+        for (pos, lines) in [
+            (mayor_sign, [
+                "TOWN HALL".to_owned(), village.name.clone(),
+                format!("MAYOR {mayor}"), format!("POP {}", village.population()),
+            ]),
+            (needs_sign, [
+                "VILLAGE NEEDS".to_owned(),
+                format!("WOOD -{wood_missing}"),
+                format!("STONE -{stone_missing}"),
+                format!("NO HOME {homeless}"),
+            ]),
+        ] {
+            if world_block(game, &dimension, pos).as_deref() != Some("minecraft:oak_sign") {
+                continue;
+            }
+            // All printed inputs originate from names constrained to ASCII
+            // letters/digits/underscore and bounded integer counters.
+            let json_lines: Vec<String> = lines.iter().map(|line| {
+                format!("'{}'", serde_json::json!({"text": line}).to_string())
+            }).collect();
+            let [x, y, z] = pos;
+            commands.push(format!(
+                "execute in {dimension} if block {x} {y} {z} minecraft:oak_sign run data merge block {x} {y} {z} {{front_text:{{messages:[{}]}}}}",
+                json_lines.join(",")
+            ));
+        }
+    }
+    for command in commands {
+        if !game.native_run_command(&command) {
+            log::warn!("[civilizations] town hall sign refresh unsupported: {command}");
+        }
+    }
+}
+
 /// Runs after an authoritative level tick: the selected dimension and its
 /// loaded chunks are guaranteed to be the ones inspected/modified here.
 pub fn level_tick(game: &mut Game<'_>, dimension: &str) {
@@ -1482,6 +1538,11 @@ pub fn level_tick(game: &mut Game<'_>, dimension: &str) {
     // Villages start their own visible work by default, without needing
     // OP construction/field/spawn commands. The planner is bounded and
     // *never* edits a block without the existing worker-aware tick.
+    if state.physical_ticks % 400 == 0 {
+        if let Some(world) = state.world.as_ref() {
+            refresh_hall_boards(game, world);
+        }
+    }
     if state.physical_ticks % 100 == 0 {
         if let Err(error) = autonomous_village_step(game, state) {
             log::warn!("[civilizations] autonomous planning stopped: {error}");
