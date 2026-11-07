@@ -978,7 +978,12 @@ impl World {
     pub fn start_visual_house(&mut self, village_id: u64, origin: [i32; 3]) -> Result<(), String> {
         self.check_visual_house_site(village_id, origin)?;
         let village = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?;
+        let name = village.name.clone();
         village.visual_job = Some(VisualBuildJob { origin, cursor: 0, blocked: false });
+        self.event(format!(
+            "{name}: operator approved construction at {},{},{}",
+            origin[0], origin[1], origin[2]
+        ));
         Ok(())
     }
 
