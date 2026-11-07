@@ -6,6 +6,8 @@ use std::collections::{BTreeMap, BTreeSet};
 pub const SCHEMA: u32 = 1;
 pub const MAX_SETTLEMENTS: usize = 64;
 pub const MAX_SIM_DAYS: u32 = 30;
+/// Bounded on-disk audit of observed visual harvests.
+pub const MAX_HARVEST_RECEIPTS: usize = 32;
 pub const MIN_SETTLEMENT_DISTANCE: i64 = 192;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -308,6 +310,15 @@ pub enum FarmStage {
     Replanting,
 }
 
+/// Evidence that all eight crops were observed as physically harvested.
+/// This does NOT authorize any warehouse stock, player items or coin credit.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HarvestReceipt {
+    pub sequence: u64,
+    pub world_day: u64,
+    pub crops: u8,
+}
+
 /// One operator-approved field (8 crops around a permanent center water block).
 /// Harvest is visual-only: Minecraft blocks and simulation stock are distinct.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -319,6 +330,11 @@ pub struct FarmPlot {
     pub blocked: bool,
     #[serde(default)]
     pub completed_cycles: u32,
+    /// Persistent lifetime counter: older receipt entries may be compacted.
+    #[serde(default)]
+    pub harvest_sequence: u64,
+    #[serde(default)]
+    pub harvest_receipts: Vec<HarvestReceipt>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -621,6 +637,22 @@ impl World {
                 let count = if plot.stage == FarmStage::Preparing { farm_plan(plot.origin).len() } else { 8 };
                 if plot.cursor > count { return Err("farm cursor beyond phase".into()); }
                 if plot.completed_cycles > 1_000_000 { return Err("farm cycle counter invalid".into()); }
+                if plot.harvest_receipts.len() > MAX_HARVEST_RECEIPTS {
+                    return Err("farm harvest receipt history too large".into());
+                }
+                let mut previous = 0_u64;
+                for receipt in &plot.harvest_receipts {
+                    if receipt.sequence <= previous
+                        || receipt.sequence > plot.harvest_sequence
+                        || receipt.crops != 8
+                        || receipt.world_day > self.day {
+                        return Err("farm receipt invalid or out of order".into());
+                    }
+                    previous = receipt.sequence;
+                }
+                if plot.harvest_receipts.last().is_some_and(|r| r.sequence != plot.harvest_sequence) {
+                    return Err("farm receipt tail does not match sequence".into());
+                }
             }
             if village.visual_sites.len() > 32 { return Err("visual building site cap exceeded".into()); }
             if village.visual_sites.len() as u32 > village.houses { return Err("visual buildings exceed houses".into()); }
@@ -825,6 +857,7 @@ impl World {
         }
         self.settlements.get_mut(&village_id).unwrap().farm = Some(FarmPlot {
             origin, stage: FarmStage::Preparing, cursor: 0, blocked: false, completed_cycles: 0,
+            harvest_sequence: 0, harvest_receipts: Vec::new(),
         });
         Ok(())
     }
@@ -840,6 +873,7 @@ impl World {
     }
 
     pub fn advance_farm(&mut self, village_id: u64, decision: FarmDecision) -> Result<bool, String> {
+        let world_day = self.day;
         let village = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?;
         let farm = village.farm.as_mut().ok_or("no farm")?;
         match decision {
@@ -869,7 +903,20 @@ impl World {
                 farm.stage = match farm.stage {
                     FarmStage::Preparing => FarmStage::Growing,
                     FarmStage::Growing => FarmStage::Harvesting,
-                    FarmStage::Harvesting => FarmStage::Replanting,
+                    FarmStage::Harvesting => {
+                        let sequence = farm.harvest_sequence.checked_add(1)
+                            .ok_or("harvest sequence overflow")?;
+                        farm.harvest_sequence = sequence;
+                        farm.harvest_receipts.push(HarvestReceipt {
+                            sequence, world_day, crops: 8,
+                        });
+                        if farm.harvest_receipts.len() > MAX_HARVEST_RECEIPTS {
+                            farm.harvest_receipts.remove(0);
+                        }
+                        // Receipt + phase are committed in one JSON save.
+                        // No inventory/warehouse/coin credit is applied.
+                        FarmStage::Replanting
+                    },
                     FarmStage::Replanting => {
                         farm.completed_cycles = farm.completed_cycles.saturating_add(1);
                         FarmStage::Growing
