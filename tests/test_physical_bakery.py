@@ -89,7 +89,7 @@ class PhysicalBakerySourceContracts(unittest.TestCase):
         self.assertIn("let need_bakery =", method)
         self.assertIn("start_bakery(id, site)?", method)
         self.assertIn("check_empty_hut_site(game, &dimension, site)", method)
-        self.assertIn("has_baker && village.hall_complete", method)
+        self.assertIn("has_builder && village.hall_complete", method)
         self.assertIn("save_autonomous(state, old)?", method)
 
     def test_native_inventory_demand_includes_stored_goods_and_transit(self):
@@ -136,10 +136,10 @@ class PhysicalBakerySourceContracts(unittest.TestCase):
         self.assertIn('if action == "bakery"',GLUE)
         self.assertIn("Completed 3-wheat-to-1-bread batches",GLUE)
 
-    def test_manifest_uses_nine_real_horizon_injections(self):
+    def test_manifest_uses_eleven_real_horizon_injections(self):
         cargo=tomllib.loads((ROOT/"Cargo.toml").read_text())
         self.assertEqual(cargo["package"]["version"],MIXIN["mod"]["version"])
-        self.assertEqual(len(MIXIN["injection"]),9)
+        self.assertEqual(len(MIXIN["injection"]),11)
         ids={x["id"] for x in MIXIN["injection"]}
         self.assertTrue({"hopper_transfer","protect_break","warehouse_inventory"} <= ids)
 

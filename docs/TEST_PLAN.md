@@ -783,3 +783,11 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
      recovery. Collect logs, source block/actor UUID checks and
      actual barrel item counts. This proves a receipt witness only,
      NOT a visually held Minecraft ItemStack.
+245. Hall information boards (source-only; NOT run in game). In a disposable
+     world with a COMPLETED hall: six oak wall signs appear on the front wall
+     (row y+1: land, mayor, needs, diplomacy; row y+2: treasury, council).
+     Verify colored line text renders; if the log shows "colored sign text
+     refused", plain fallback must still show. Change barrel contents and
+     confirm Needs/Treasury update within ~20 s and unchanged boards are not
+     rewritten. Break a wall block behind an extra board: it must not be placed.
+     Check a hall from before this version still migrates its first two signs.

@@ -44,8 +44,8 @@ class PhysicalHomesContracts(unittest.TestCase):
         self.assertIn('"civ homes <name:word>"', GLUE)
         self.assertIn('if action == "homes"', GLUE)
         self.assertIn("village.physical_housing()", GLUE)
-        self.assertIn("village.home_slot(resident.id)", GLUE)
-        self.assertIn("Home: {}", GLUE)
+        self.assertIn("village.home_slot(resident.id)", CORE)
+        self.assertIn("Home: hut, place", CORE)
 
     def test_version_and_persistence_contracts(self):
         cargo = tomllib.loads((ROOT / "Cargo.toml").read_text())
