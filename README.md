@@ -44,7 +44,7 @@ python3 tools/package.py
 python3 tools/verify_static.py
 ```
 
-Packaging produces `target/civilizations-0.1.3.hnmod` (source-only; the
+Packaging produces `target/civilizations-0.1.4.hnmod` (source-only; the
 launcher compiles it). The template is based on the **native hook-point**
 pattern used by the official Horizon SMP mod. The compatibility pin is in
 `compatibility.json`; the source was inspected but not compiled in this workspace.
@@ -75,7 +75,7 @@ to compile/trust the native mod before the game can run.
 
 1. Install the official Horizon launcher from <https://playhorizon.dev/>.
 2. Create a separate test instance and back up the world.
-3. Put `civilizations-0.1.3.hnmod` in that instance's `horizon-native-mods/`
+3. Put `civilizations-0.1.4.hnmod` in that instance's `horizon-native-mods/`
    directory. The native build requires the launcher's explicit trust action.
 4. Let the launcher **build** the modded game and review build logs. If you see
    `target not found`, hook schema incompatibility, or Rust errors, stop: the
@@ -164,3 +164,18 @@ The module is checked with `game.native_on("civilizations")` before world comman
 ## First NPC dialogue (0.1.3 experimental)
 
 After `/civ actors Ashford` has created and persistently UUID-bound the village actors, **right-click one of those villagers** to display their identity, job, home settlement, morale, and how to join or trade. Only a known UUID-bound civilization villager claims the interaction. Ordinary Minecraft villagers and unmatched actors retain their vanilla behavior. The response is currently a chat line, not a custom GUI or a quest engine. Requires in-game validation on a disposable world.
+
+## First living wheat field (0.1.4 experimental)
+
+In a disposable Horizon world, after `/civ found Ashford` and `/civ actors Ashford`, select a 3×3 empty patch of natural grass/dirt/stone, 12–80 blocks from the village center. Stand on the center block and run:
+
+```text
+/civ farm Ashford
+/civ farming Ashford
+```
+
+A UUID-linked farmer approaches the plot. When the field's chunks are loaded, the mod **conditionally** creates eight farmland blocks and a center irrigation water source, plants eight wheat crops, waits for **natural age=7** growth, harvests by replacing mature wheat with air **without item drops**, and replants the eight crops. It saves the phase, cursor, and completed visual cycles after observing each block change.
+
+The visual farm **does not produce warehouse wheat, item drops, or money**. Economic wheat production remains the separately simulated daily economy until there is a tested, durable block/JSON inventory transaction journal. The plot fails closed if player blocks replace its soil, water or crop; an operator must inspect the plot and save before any recovery. Currently one 3×3 farm per settlement, no automatic new farm or additional crops.
+
+This is experimental and has not passed a real Minecraft-world playtest. The normal native build gate checks compilation, not game-world chunk persistence.

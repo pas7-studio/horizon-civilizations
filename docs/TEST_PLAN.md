@@ -47,3 +47,13 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
 28. **NPC right-click:** click a UUID-bound resident, get identity/profession/settlement/morale and join/trade instructions in the acting player's chat; claimed interaction blocks vanilla trade menu for this bound villager only.
 29. **Vanilla safety:** right-click vanilla villagers, unbound legacy villagers, and a renamed impostor: they must retain vanilla interaction, never expose another village's identity or consume the event. Repeat while mod disabled.
 30. **Reload and multiplayer:** reopen world, interact with an NPC whose UUID is saved; confirm same identity. Guest A's right-click must not write into Guest B's chat. Check with both hands and an item held.
+
+## Physical wheat farming trial (v0.1.4)
+
+31. **Approval:** as OP, stand on a 3×3 unmodified grassy/dirt/stone patch, 12–80 blocks from an existing village; `/civ farm NAME`. Reject non-natural ground, foreign blocks, overlapping structures, another farm, invalid distance/dimension, or unloaded chunk. Do not change blocks during command handling.
+32. **Farmer gate:** the eight farmland blocks, one water source and eight crops only appear as an actual UUID-linked farmer approaches within eight blocks. Without farmer or with mod disabled: no edits. New soil may not overwrite chests/foreign blocks.
+33. **Natural growth:** observe real blockstate `minecraft:wheat[age=7]` for all eight crops; the farm must remain in `growing` until all mature. The farmer may then remove each crop without item drops and replant each crop. `/civ farming NAME` should report a completed cycle. Check crop/water persistence across chunk unload/reload.
+34. **Crash:** restart at partial soil placement, mid-harvest and mid-replant. Cursor must rewind after a block/chunk rollback without minting wheat, bread, coins or player drops.
+35. **Obstruction:** replace a farm soil/water/crop block with a foreign block. It must fail closed and never overwrite that block or continue other work on this plot.
+36. **Separate economy:** compare wheat stock and player inventory before/after a physical crop cycle with auto-day ticks paused in a controlled test. Crop cycles **must not** directly increase JSON wheat, and no farm harvest item must be dropped.
+37. **Multiple worlds/villages:** fields must not edit other dimensions or other plots; only already-loaded plots may advance.
