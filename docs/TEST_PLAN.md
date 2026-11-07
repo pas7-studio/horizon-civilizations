@@ -971,3 +971,25 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
      the real non-dry-run command. It must identify the current branch
      rather than the superseded PR #33 branch. With `--expected-sha`,
      only the exact chosen head may produce a passing build report.
+
+
+## Crash-safe spawn spacing, save consistency, first error reporting (unreleased PR #34)
+
+289. On loaded flat natural terrain, the first preflight finds ten
+     non-overlapping positions at least three blocks apart. Confirm
+     native UUID-bound villagers do not collide with one another,
+     previously loaded mobs or blocked ground. Reload without duplicates.
+290. Force a save error during OP `/civ reconcile NAME` after UUID
+     binding in memory. Verify the dispatcher does not silently retry
+     the failed save or replace in-memory reservations with a stale
+     snapshot. The world must halt until the operator repairs storage.
+291. Fault-inject an error after a previously successful durable
+     command save. The dispatcher must never restore an older clone
+     over the committed `world.json`; it instead halts for inspection.
+     Never use valuable saves when testing fault injection.
+292. In the first-play CLI mock, make the Rust test stage emit
+     `error[E0425]: unknown value in native actor code` and exit 101.
+     `report.json`, `report.md` and console must surface that first
+     diagnostic and preserve `BLOCKED`. The complete stage log remains
+     available. Repeat using real Rust error logs when the actual
+     Windows build is run.
