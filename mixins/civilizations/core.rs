@@ -1592,7 +1592,9 @@ impl World {
     ) -> Result<(), String> {
         let v = self.settlements.get(&id).ok_or("unknown settlement")?;
         if !v.hall_complete { return Err("physical town hall not complete".into()); }
-        if v.barrel_transfer.is_some() { return Err("another barrel transfer is pending".into()); }
+        if v.barrel_transfer.is_some() || v.market_purchase.is_some() {
+            return Err("barrel transfer or player purchase already pending".into());
+        }
         if !hall_storage_positions(v.center).contains(&position) {
             return Err("barrel is not an official village hall warehouse".into());
         }
