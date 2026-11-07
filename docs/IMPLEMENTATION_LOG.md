@@ -705,3 +705,90 @@
   direct GitHub DNS or Windows PowerShell in the current runner; real
   Rust/Python full suite, Windows launcher and gameplay E2E not executed.
   PR Draft, main untouched, Actions not enabled.
+
+
+## 2026-11-08 — autonomous NPC-founded frontier settlements (PR #35)
+
+- Chose the largest missing first-play game loop: source had autonomous
+  builders, farms, bakery, NPCs and physical goods, but **no natural
+  settlement founding**; an OP needed to type `/civ found`.
+- Refactored core World::found into a common founding path plus
+  `World::found_autonomous`. All initial residents/starting abstract stock,
+  native building invariants and 192-block spacing are shared. Only
+  player-founded towns grant a Lord title and +25 civic coins to a real
+  authenticated founder; NPC towns have an independent founder marker and
+  NO synthetic player record, title or payout. Cap NPC-founded towns at 8;
+  manual operator founding retains the overall 64-town rules.
+- Added bounded `autonomous_frontier_found` to authoritative loaded
+  Overworld level ticks every 2,400 ticks. It observes integrated single-
+  player host plus joined server guests; requires finite/bounded player
+  coordinates and skips explorers within 192 blocks of a known town.
+  Eight deterministic ~88–91 block offsets are scanned using only loaded
+  natural 5x5 areas with no non-air obstacles (no clearing or worldgen).
+- Critically, the trial settlement must also pass the EXACT shared
+  10-villager spawn-survey and unique-clear-position preflight BEFORE its
+  first durable save, preventing stranded paper settlements. After save,
+  existing autonomous logic owns real NPC spawning and physical work.
+- Added player-facing, read-only `/civ nearby` command: sorted by horizontal
+  distance in current dimension, bounded top four, coordinates/directions,
+  hall status and joining hint. Existing commands still available.
+- Added six Rust domain tests and eleven Python source contracts; checked
+  26/26 targeted exact-source invariants, but there is NO Rust compiler or
+  native Horizon client available in this execution environment.
+- New PLAYTEST and acceptance 320–331. No new physical resource mint,
+  external inventory effect or automatic chunk loading at founding.
+- Remaining: real native Rust/Horizon build, single-player/dedicated tests,
+  terrain generation and NPC navigation E2E, actual resource work,
+  gameplay usability and server performance. PR remains Draft, no main
+  merge/Actions enablement.
+
+- Integration note: this PR is based on updated main and preserves
+  the newest native civic menus, outpost posts, role-staffing and
+  six-sign bulletin implementation rather than restoring older PR #34.
+
+
+## 2026-11-08 — daily UUID-witnessed physical resident food (PR #35)
+
+- Added to the current main-based PR #35, following natural NPC founding.
+  Existing native baker produces physical bread but citizens previously
+  never consumed those vanilla items; virtual day simulation cannot be
+  presented as an actual resident meal.
+- Extended existing `BarrelDirection` with `ToResidentMeal` and a
+  backward-compatible optional durable `recipient_id` on BarrelTransfer.
+  One real item per living UUID-linked resident per observed Horizon day;
+  no virtual ledger debit or credit during this native item extraction.
+- `World::begin_meal_day` saves one host-day anchor and served resident
+  IDs, settles a prior physical shortage once per day, and pauses rollover
+  while a previous Issued/Blocked native meal remains unresolved. The
+  initial day does not invent historical missed meals.
+- New `plan_resident_meal` enforces one loaf, native hall position,
+  actual slot, unserved living recipient and no concurrent transfer or
+  player order. The shared Planned -> Issued -> observed native inventory
+  journal remains the only path to mark the resident fed. No duplicate
+  extraction after restart.
+- Native dining planner requires a steward and exact loaded UUID-bound
+  resident near the hall. NPC movement routes an unserved citizen to the
+  hall; a fresh actor witness is rechecked before issuing the native
+  extraction. Only a never-issued plan can be canceled if the NPC leaves
+  or dies; issued/block receipts remain durable and recoverable.
+- A resident who dies after the bread was issued remains in the audit
+  but is excluded from the living-fed count, so other residents do
+  not incorrectly become satisfied.
+- Added `/civ meals NAME` read-only diagnostics, Village GUI bread line,
+  hall Treasury sign feed/shortage with abstract hunger explicitly
+  separated. Physical shortage lowers morale, a fully served day
+  recovers a small amount on next host-day rollover.
+- Authored nine Rust domain regression cases and fifteen Python source
+  contracts; core, glue, static contracts and status docs checked.
+  **Not executed**: full Python unittest, real Rust compiler, pinned
+  Horizon native client, real barrel extraction and Minecraft E2E.
+- Acceptance 332–344; PR #35 remains Draft; no main merge/Actions trigger.
+
+## 2026-11-08 — rebased onto quarry-pit main
+
+The branch was refreshed against main d0308815 which added genuine
+quarry staircase mining and plot earthwork, and removed the older
+native menu-hook integration. The NPC food and frontier source was
+ported onto that code rather than restoring obsolete menus. Meal
+status remains available through `/civ meals` and hall signs; the
+native menu is deliberately not claimed. Native compilation/E2E pending.
