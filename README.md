@@ -45,7 +45,7 @@ python3 tools/package.py
 python3 tools/verify_static.py
 ```
 
-Packaging produces `target/civilizations-0.1.8.hnmod` (source-only; the
+Packaging produces `target/civilizations-0.1.9.hnmod` (source-only; the
 launcher compiles it). The template is based on the **native hook-point**
 pattern used by the official Horizon SMP mod. The compatibility pin is in
 `compatibility.json`; the source was inspected but not compiled in this workspace.
@@ -76,7 +76,7 @@ to compile/trust the native mod before the game can run.
 
 1. Install the official Horizon launcher from <https://playhorizon.dev/>.
 2. Create a separate test instance and back up the world.
-3. Put `civilizations-0.1.8.hnmod` in that instance's `horizon-native-mods/`
+3. Put `civilizations-0.1.9.hnmod` in that instance's `horizon-native-mods/`
    directory. The native build requires the launcher's explicit trust action.
 4. Let the launcher **build** the modded game and review build logs. If you see
    `target not found`, hook schema incompatibility, or Rust errors, stop: the
@@ -247,3 +247,38 @@ door-opening, family structure, rent, house ownership or pathfinding
 guarantee is implemented.** Real interior navigation, damaged-house
 handling and world-save E2E remain untested. GitHub Actions are intentionally
 disabled; see [local playtest](docs/PLAYTEST.md).
+
+## Autonomous housing-site proposals (v0.1.9 experimental)
+
+Civilizations now offers **safe, read-only village-initiated construction
+suggestions**, based on how many living residents lack a completed physical hut
+and how many abstract houses are ready to visualize. This is an early
+autonomy/decision layer, not automatic block placement or land ownership.
+
+When an abstract house is ready (typically after simulated builder production),
+enter the village dimension and run `/civ survey Ashford`. The system checks a
+bounded set of 20 deterministic ring candidates around the settlement (12–80
+blocks from its center), scans up to five nearby Y levels at each candidate,
+and lists at most five sites that are currently **loaded**, flat, natural and
+empty. It avoids all recorded physical huts, active projects and farm plots in
+the same dimension. No chunks are loaded and no blocks are edited.
+
+An operator must physically visit the plot and explicitly reserve one:
+`/civ approvehouse Ashford 1 70` (the numbers are the displayed slot and Y
+coordinate). The server requires OP level 2, proximity within 24 horizontal
+and 8 vertical blocks, and **rechecks the current world blocks plus settlement
+collisions at approval time**. Approval saves exactly one construction job. A
+UUID-linked builder later places blocks conditionally during its daytime shift
+through the existing crash-reconciling physical construction pipeline.
+
+The older `/civ construct Ashford` remains available for manually chosen
+spots, but now shares the same full recorded-plot collision guard. No
+territorial or player ownership claim is inferred from grass/dirt/stone: **OP
+approval is the required boundary**. Proposals are not persisted, do not give
+NPCs permission to clear land, and may change when terrain/settlements change.
+If a survey finds nothing, prepare a safe area or use explicit manual siting;
+nothing is reserved.
+
+This version is source-only and **not compiled or playtested**. GitHub Actions
+remain disabled as requested; use the local commands in
+[PLAYTEST.md](docs/PLAYTEST.md) before merging the stacked drafts.
