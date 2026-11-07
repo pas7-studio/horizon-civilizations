@@ -1714,8 +1714,12 @@ impl World {
                 return Err("recovery attempts exist before actor spawn reservation".into());
             }
             for recovery_id in &village.actor_recovery_issued {
+                // A resident may legitimately die AFTER one native spawn
+                // attempt was reserved. Keep that one-shot tombstone on disk
+                // (do not revive them), but never reject the entire village
+                // save merely because their life ended.
                 if !village.residents.iter().any(|r|
-                    r.id == *recovery_id && r.alive && r.entity_uuid.is_none()) {
+                    r.id == *recovery_id && r.entity_uuid.is_none()) {
                     return Err("invalid pending actor recovery ID or already bound actor".into());
                 }
             }
@@ -6158,6 +6162,20 @@ mod guarded_partial_native_actor_recovery_tests {
             .find(|r| r.id == missing).unwrap().alive = false;
         assert!(world.reserve_actor_recovery(id, missing).is_err());
         world.validate().unwrap();
+    }
+
+    #[test]
+    fn dead_resident_with_prior_recovery_attempt_is_safe_to_reload_but_not_respawn() {
+        let (mut world, id, worker) = partial_spawn();
+        world.reserve_actor_recovery(id, worker).unwrap();
+        world.settlements.get_mut(&id).unwrap().residents.iter_mut()
+            .find(|r| r.id == worker).unwrap().alive = false;
+        world.validate().unwrap();
+        let mut restored: World = serde_json::from_str(
+            &serde_json::to_string(&world).unwrap()).unwrap();
+        restored.validate().unwrap();
+        assert!(restored.settlements[&id].actor_recovery_issued.contains(&worker));
+        assert!(restored.reserve_actor_recovery(id, worker).is_err());
     }
 
     #[test]
