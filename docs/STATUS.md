@@ -1,3 +1,41 @@
+# Current stacked feature source status — v0.1.12 (2026-11-07)
+
+**Most recent source branch:**
+`feat/physical-town-hall-warehouse-v0112`, stacked on the autonomous
+NPC implementation branch. This fixes the design where simulated virtual
+materials could make the village look productive without actually gathering,
+storing or spending Minecraft-derived resources.
+
+- Implemented in source: a native block-by-block central civic hall with a
+  named mayor/warehouse steward, two barrel markers, two oak signs and a
+  lectern. Hall construction has its own persistent blocked/cursor state,
+  and must reserve 24 **actually received** logs and 25 cobblestone.
+- Implemented in source: resource-backed physical warehouse ledger, fed by
+  player inventory trades and carefully confirmed physical wheat/wood/stone
+  harvests. Each physical hut reserves 20 logs +25 cobblestone. The old
+  abstract daily stock cannot pay those real block bills.
+- Implemented in source: two native sign data-update commands to display
+  mayor/headcount and remaining material/housing demand. This depends
+  on Minecraft NBT command support and is **NOT VERIFIED IN GAME**.
+- Implemented in source: lumberjack/miner scan loaded natural sources,
+  claim a safe NPC approach spot, issue a conditional block change and
+  confirm observed deletion before a single warehouse credit. Player
+  land/known structures are excluded. Block provenance is imperfect
+  outside registered claims.
+- **NOT IMPLEMENTED**: true transactionally synced vanilla barrel inventory;
+  a player cannot put items directly into a barrel and expect the mod
+  ledger to update, or retrieve stored stock by opening it. This remains
+  a high-priority engine integration.
+- **NOT TESTED**: current code with Rust compiler, full native Horizon
+  transform/build, Windows game launch, physical signs, NPC pathfinding,
+  mining/tree harvesting, container contents, save/restart or gameplay E2E.
+  GitHub Actions are intentionally disabled; local only.
+
+See [PLAYTEST](PLAYTEST.md) and [TEST_PLAN](TEST_PLAN.md) cases 103–119.
+No claim of a released playable milestone until actual local acceptance.
+
+---
+
 # Current feature-branch status — v0.1.11 (2026-11-07)
 
 **Correction to the original prototype:** the initial and main implementations
