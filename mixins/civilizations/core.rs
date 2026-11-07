@@ -2567,7 +2567,7 @@ impl World {
         let in_hut = |origin: [i32;3]| {
             (i64::from(pos[0]) - i64::from(origin[0])).abs() <= 2
                 && (i64::from(pos[2]) - i64::from(origin[2])).abs() <= 2
-                && (i64::from(pos[1]) - i64::from(origin[1])).abs() <= 4
+                && (-1..=3).contains(&(i64::from(pos[1]) - i64::from(origin[1])))
         };
         let in_field = |origin: [i32;3]| {
             (i64::from(pos[0]) - i64::from(origin[0])).abs() <= 1
