@@ -48,3 +48,7 @@ After `/civ actors Ashford` and `/civ roster Ashford`, right-click a UUID-bound 
 ## Wheat plot trial (v0.1.4)
 
 Use **only a disposable world**. From a standing position on the center of flat natural 3×3 ground, 12–80 blocks from Ashford, execute `/civ farm Ashford` and `/civ farming Ashford`. Wait for UUID-bound farmers to reach the plot; verify eight tilled squares, a center water source and wheat planted above each tilled square. Let the vanilla wheat age to 7; verify harvest and replant, checking the visual cycle counter. No Minecraft item drops or extra simulated wheat should appear due to visual harvesting. Reboot the world during each phase; confirm the saved cursor reconciles and foreign blocks never get overwritten. Native compile success is not a substitute for these tests.
+
+## Windows native client build (experimental)
+
+The additional GitHub Actions workflow **Windows native Horizon client (no Minecraft assets)** attempts to produce `horizon-client.exe` by applying our native source bundle to pinned upstream Horizon on a Windows runner. It is also manually dispatchable after merging to main. The build artifact contains **no Minecraft/Mojang resources** and does not establish that in-game features work. Assets must be prepared with the official Horizon launcher and owned Minecraft Java Edition resources. Never use a valuable world for the first test.
