@@ -1419,10 +1419,22 @@ impl World {
             if !seen.insert(normalized) { return Err("duplicate settlement names".into()); }
             if let Some(gather) = &village.gather_job {
                 let [x, y, z] = gather.position;
+                let [sx, sy, sz] = gather.stand;
+                let walk_dx = i128::from(sx) - i128::from(x);
+                let walk_dy = i128::from(sy) - i128::from(y);
+                let walk_dz = i128::from(sz) - i128::from(z);
+                let village_dx = i128::from(x) - i128::from(village.center[0]);
+                let village_dz = i128::from(z) - i128::from(village.center[2]);
                 if !matches!(gather.good, Good::Wood | Good::Stone)
                     || i64::from(x).abs() > 29_999_988
                     || i64::from(z).abs() > 29_999_988
-                    || !(-2046..=2046).contains(&y) {
+                    || !(-2046..=2046).contains(&y)
+                    || i64::from(sx).abs() > 29_999_988
+                    || i64::from(sz).abs() > 29_999_988
+                    || !(-2046..=2046).contains(&sy)
+                    || walk_dx * walk_dx + walk_dy * walk_dy + walk_dz * walk_dz > 16
+                    || !(12_i128 * 12..=80_i128 * 80)
+                        .contains(&(village_dx * village_dx + village_dz * village_dz)) {
                     return Err("invalid physical gather record".into());
                 }
             }
@@ -5089,6 +5101,18 @@ mod native_gather_quarantine_tests {
         assert_eq!(world.settlements[&id].warehouse_quantity(Good::Stone), before);
         assert!(world.abandon_blocked_issued_gather(id).is_err());
         world.validate().unwrap();
+    }
+
+
+    #[test]
+    fn corrupted_gather_worker_stand_is_rejected_on_load() {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0,70,0], "owner").unwrap();
+        world.plan_gather(id, Good::Stone, [16,70,0], [17,70,0]).unwrap();
+        world.validate().unwrap();
+        world.settlements.get_mut(&id).unwrap().gather_job.as_mut().unwrap().stand =
+            [i32::MAX, 70, 0];
+        assert!(world.validate().is_err());
     }
 
     #[test]
