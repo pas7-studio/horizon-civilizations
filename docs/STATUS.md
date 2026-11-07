@@ -1,3 +1,219 @@
+# PR #34 — Windows first-play correctness and recovery evidence
+
+- [x] Source fix for Windows GUI Horizon Launcher: import/prepare/play
+  are awaited with a pipeline and their actual exit statuses checked.
+- [x] Corrected PLAYTEST guide to the current PR #34 branch.
+- [x] Saved-state evidence now recognizes orphaned `world.json.tmp`
+  and persistent NPC recovery markers (including valid dead tombstones).
+- [x] Authored additional Windows launcher and Python saved-state
+  regression cases, with acceptance tests 301–306.
+- [ ] Python full-suite execution, Rust 1.95, Horizon EXE compilation,
+  Windows launcher and Minecraft E2E all remain unverified.
+
+---
+
+# Native Rust test inventory is now required
+
+- [x] The native build runs filtered `civilizations_core::` and
+  `civilizations_glue::` Rust tests, including newly authored filesystem
+  recovery tests in the glue module.
+- [x] Cargo test filters are listed first; zero matched tests block a
+  passing native build even when Cargo exits zero.
+- [x] Local first-play gate now requires both suite names, positive
+  discovered counts and PASS status from the pinned native build report.
+- [x] Authored three Python mock-Cargo tests plus two first-play gate
+  missing/zero-suite tests; updated native CLI source contracts.
+- [ ] No real Cargo, full Python suite or native Minecraft E2E yet.
+
+---
+
+# Latest source safety: incomplete first world save
+
+- [x] Detect orphaned `world.json.tmp` before treating a missing
+  `world.json` as a new empty world. The existing `world.json.swap`
+  fail-closed behavior remains intact.
+- [x] Refuse to overwrite any stale temporary/swap file on subsequent
+  writes, preserving original disk bytes for manual operator recovery.
+- [x] Authored three native Rust filesystem regressions and three Python
+  source-contract checks (six tests in world-switch module).
+- [ ] Rust execution, full Python suite, pinned native Horizon build and
+  Minecraft E2E are still not verified.
+
+---
+
+# Latest Draft — partial village NPC spawn recovery (source only)
+
+**Crash-safety and first compiler-diagnostic follow-up:** fixed the
+mutating command handler so an error after a durable write halts world
+mutations rather than restoring an old in-memory snapshot. Reconcile
+save failures now mark the command as already saved to prevent a blind
+second write. Both initial spawners inherit 3-block pairwise clearance
+between selected positions; the preflight still finds ten spots on a
+flat 7x7 survey grid. The local build gate now records the first
+compiler/test diagnostic, not just a nonzero exit. Source contracts
+updated (19 guarded actor tests and 14 build-gate harness tests authored).
+No real Rust build or full Python unittest suite has been run here.
+
+**First-spawn safety hardening (same PR #34):** removed fixed-coordinate
+OP spawning. Both OP `/civ actors` and automatic village initialization now
+require one shared preflight for ten living, unbound residents, absence of
+loaded matching tagged/legacy villagers, and ten surveyed, unoccupied native
+spawn points on loaded natural terrain. Survey fails before the persisted
+`actors_spawned` flag is set. Added four Python source regression contracts
+(16 total in `test_guarded_actor_recovery.py`), plus 17/17 connector-side
+source assertions PASS. No Rust compiler, native client or Minecraft E2E run.
+
+Branch `feat/guarded-partial-villager-recovery-v0115`, stacked on
+PR #33. Main unchanged, GitHub Actions OFF; no native Horizon compile
+or Minecraft playtest has run for this feature.
+
+- [x] Fixed a nonrecoverable lifecycle situation: automatic first
+  batch permanently reserves `actors_spawned=true` BEFORE native spawn.
+  A crash/refused spawn after 1–9 villagers leaves other residents
+  unbound and can remove the builder/merchant/miner needed for a village.
+- [x] Added explicit OP `/civ recoveractor NAME RESIDENT_ID attempt`:
+  requires reserved first batch, a living unbound resident, correct
+  dimension/nearby OP, fully loaded 96-block neighborhood sample,
+  no currently loaded matching tagged/legacy villager, and an
+  unoccupied surveyed natural spawn point.
+- [x] Persists `actor_recovery_issued` **before** native spawning.
+  Cannot re-issue the same resident's recovery after crash/native
+  refusal. UUID binding removes pending marker only in same saved
+  world state; if UUID/save fails, mutations stop. Old saves load
+  because the new field has serde default empty.
+- [x] `/civ roster NAME` now shows exact resident IDs, UUID-linked,
+  unbound and recovery-pending statuses. OP `/civ reconcile NAME`
+  is the FIRST step; no automatic duplicate villager spawning.
+- [x] Targeted single-resident recovery accepts fewer than ten
+  safe spots, while the original autonomous ten-worker batch still
+  requires all ten spots before any native spawn reservation.
+- [x] Eight Rust domain regressions and twelve Python static
+  source contracts authored; 22/22 source checks PASS.
+- [ ] Not executed: cargo test/rustfmt/Clippy, Python unittest
+  discovery, native Horizon compilation or actual Minecraft
+  recovery in a disposable world. This does not claim playability.
+- [x] A resident who dies after reservation retains a valid one-shot pending tombstone after restart; dead residents still cannot be recovered. This prevents a legitimate lifecycle change from invalidating the entire world save.
+- [ ] The recovery checks currently loaded native chunks; an
+  external actor could have wandered outside the tracked 96-block
+  area. Hence **OP confirmation** is required: no automatic
+  respawn after uncertain crash. No unbounded reset command exists.
+
+Acceptance: TEST_PLAN **272–283**.
+
+---
+
+# 2026-11-08 — compiler-first local diagnostics (updated PR #33)
+
+- [x] Release gate now runs real `cargo test` first, then Clippy,
+  then the still-required strict `cargo fmt --check` and standalone
+  mixin rustfmt checks. A formatting failure can no longer hide the
+  first Rust compiler failure.
+- [x] Two additional local harness cases verify compiler error takes
+  priority and formatting remains a PASS blocker.
+- [x] **12/12 harness unittests actually executed with mock executables
+  and passed on Linux/Python 3.13**. Python syntax compilation and
+  `--dry-run --build-client` step order also passed.
+- [ ] No real cargo compiler or native Horizon client is available in
+  this environment. Still **NOT gameplay verified**.
+
+---
+
+# Latest Draft — prevent false native client build readiness
+
+Stacked branch `fix/first-play-binary-evidence-v0115`, based on
+PR #32; `main` unchanged, GitHub Actions OFF, version 0.1.14.
+
+- [x] Release gate now parses the terminal JSON result of the pinned
+  `tools/native_build.py` rather than trusting process exit=0 alone.
+- [x] Requires exact compatible `horizon_revision`,
+  `cargo_check=PASS`, expected modded output path, and when
+  `--build-client` is supplied, the matching native client binary
+  must actually exist at the expected path and be nontrivial.
+- [x] Adds binary path, file size, SHA-256 and native result
+  verification to `report.json`/Markdown evidence; missing
+  binary or incorrect revision is a BLOCKED gate with log.
+- [x] Controlled mock tests **10/10 actually executed on Linux**
+  with Python 3.13; specifically falsified exit-zero build without
+  an executable and a wrong pinned commit. Separate native-check
+  works without requiring a client file.
+- [ ] Actual cargo/Rustfmt/Clippy/full Python project suite,
+  native Horizon client compilation, and in-game E2E remain
+  **NOT EXECUTED** in this environment. No playable claim.
+- [ ] Before release, use the exact Windows command documented in
+  PLAYTEST, review first error and run disposable-world tests.
+
+---
+
+# Latest Draft: executable local first-play gate / evidence capture
+
+Latest stacked branch `chore/first-play-native-validation-v0115` follows
+PR #31 and earlier stacked drafts. Main untouched, GitHub Actions OFF.
+The source is **NOT yet a playable proven release**.
+
+- [x] Added `tools/first_play_gate.py`: local read-only source gate with
+  explicit optional pinned native Horizon compilation/client build.
+  Checks Rust 1.95, Python 3.11+, exact branch, optional SHA, clean
+  source tree; executes cargo fmt/clippy/test, rustfmt for each mixin,
+  all Python unittest, package/static check, optional full native
+  Horizon build. Stops at first failing stage and records its log.
+- [x] Saves timestamped JSON + Markdown evidence under ignored
+  `target/first-play-gate/`. The result distinguishes BLOCKED,
+  SOURCE_CHECK_PASS, SOURCE_AND_NATIVE_CHECK_PASS and
+  READY_FOR_GAMEPLAY_E2E; **none** means actual Minecraft gameplay PASS.
+- [x] No Actions enabled, no server deployment, no external
+  credentials/Minecraft assets and no source formatting mutations.
+  Script sets PYTHONDONTWRITEBYTECODE and ignores generated caches,
+  protecting exact source-cleanliness checks.
+- [x] Seven unittest harness cases with fake Rust executables
+  **actually executed on local Python 3.13/Linux: 7/7 PASS**.
+  The mock tests verify evidence logic, clean/dirty SHA, fail-fast,
+  wrong Rust version, wrong branch/SHA and client-build status.
+- [ ] No real Rust, Clippy, full project Python suite, pinned native
+  Horizon compilation or Minecraft E2E executed in this environment:
+  no rustc/cargo and no direct network.
+- [ ] Latest PR needs `py -3 tools/first_play_gate.py --build-client`
+  on a networked Windows developer workstation with Rust 1.95,
+  followed by disposable world tests, before any merge/release.
+
+---
+
+# Latest unreleased source: native edit acknowledgement + fair gathering
+
+Branch: `fix/gather-crash-proof-fair-queue-v0115`, stacked on PR #30.
+**Not playable-proven.** `main` unchanged, GitHub Actions disabled,
+0.1.14 manifest remains. Rust/native build and game E2E not run here.
+
+- [x] Physically gathered resources now require a THREE-step durable
+  lifecycle: Issued write-ahead → actual native conditional command
+  succeeded AND immediate freshly observed source air →
+  `native_edit_confirmed` persisted → same UUID worker witnessed at
+  original work stand → same worker returns to town hall → ONE credit.
+- [x] Crash between Issued save and native result/confirmation is
+  quarantined even if block is air on restart. A player removing the
+  block while the server was down cannot create a false wood/stone
+  receipt. Failed/native-no-op commands also quarantine with ZERO credit.
+- [x] Existing PR #30 saves with pickup_witnessed=true and no newer
+  native_edit_confirmed field remain deserializable, but cannot be
+  automatically credited; their ambiguous issued job is blocked for
+  operator inspection. Other village records stay accessible.
+- [x] Native gather work now rotates among all eligible loaded villages,
+  rather than choosing the first active village forever. Selection is
+  deterministic every 8 ticks and skips blocked/unloaded jobs; the
+  actual worker profession determines its shift.
+- [x] New 8 Rust domain regression tests and 10 Python static source
+  contracts **authored**; prior tests updated for new acknowledgement
+  transition. Static 30/30 consistency checks pass, braces balanced.
+- [ ] NOT RUN: cargo/rustfmt/Clippy/Python unittest/full Horizon native
+  compile/client executable/Minecraft E2E. The current container lacks
+  rustc and cargo and cannot resolve GitHub or Rust download hosts.
+- [ ] Native command success + observed air is still not fully atomic
+  with mod JSON; uncertain crash windows deliberately reject credit.
+  True carried ItemStack and item animation remain unimplemented.
+
+See TEST_PLAN 245–254 for acceptance and PLAYTEST for Windows commands.
+
+---
+
 # Latest unreleased source — witnessed physical resource pickup (PR pending)
 
 Branch `feat/source-pickup-witness-v0115`, based on Draft PR #29.

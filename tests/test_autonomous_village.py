@@ -32,8 +32,9 @@ class AutonomousVillageContracts(unittest.TestCase):
     def test_villager_spawning_is_one_shot_uuid_bound_and_durable(self):
         method = GLUE.split("fn auto_spawn_villagers(", 1)[1]
         method = method.split("\n}", 1)[0]
-        self.assertIn("safe_actor_spawn_points(game, &village)", method)
-        self.assertIn("if positions.len() != 10", method)
+        self.assertIn("surveyed_initial_actor_positions(game, &village)", method)
+        self.assertIn("if positions.len() != 10",
+                      GLUE.split("fn surveyed_initial_actor_positions(", 1)[1].split("\n}", 1)[0])
         self.assertIn("actors_spawned = true", method)
         self.assertLess(method.index("save_autonomous(state, prior)?"),
                         method.index("game.native_spawn_mob("))
@@ -89,7 +90,8 @@ class AutonomousVillageContracts(unittest.TestCase):
         self.assertIn("game.native_on(MOD_ID)", GLUE)
 
     def test_auto_work_is_only_in_loaded_chunks_and_conditional(self):
-        self.assertIn("safe_actor_spawn_points(game, &village)", GLUE)
+        self.assertIn("safe_actor_spawn_points(game, village)", GLUE)
+        self.assertIn("surveyed_initial_actor_positions(game, &village)", GLUE)
         self.assertIn("game.world.loaded(pos[0], pos[2])", GLUE)
         self.assertIn("loaded_actors(game, state.world.as_ref().unwrap(), id)", GLUE)
         self.assertIn("game.native_run_command(&command)", GLUE)
@@ -119,7 +121,7 @@ class AutonomousVillageContracts(unittest.TestCase):
         mixin = tomllib.loads((ROOT / "mixins/civilizations/horizon-mixin.toml").read_text())
         self.assertEqual(cargo["package"]["version"], mixin["mod"]["version"])
         self.assertEqual(mixin["mod"]["version"], cargo["package"]["version"])
-        self.assertEqual(len(mixin["injection"]), 11)
+        self.assertEqual(len(mixin["injection"]), 14)
         self.assertIn("pub const SCHEMA: u32 = 1;", CORE)
         self.assertIn("#[serde(default)]\n    pub player_parcels:", CORE)
         self.assertIn("#[serde(default)]\n    pub treasury_coins:", CORE)

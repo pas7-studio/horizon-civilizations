@@ -35,9 +35,19 @@ $launcherBinary = $launcher.Source
 
 function Invoke-HorizonLauncher {
     param([string[]]$LaunchArgs)
-    & $launcherBinary @LaunchArgs
-    if ($LASTEXITCODE -ne 0) {
-        throw "Horizon Launcher failed (exit code $LASTEXITCODE): $($LaunchArgs -join ' ')"
+    # Horizon Launcher is a Windows GUI-subsystem binary. PowerShell can
+    # return immediately after a bare invocation, before import/prepare
+    # finishes, and $LASTEXITCODE can refer to an older command. Routing
+    # stdout through a pipeline makes PowerShell wait for its real exit
+    # while preserving argument boundaries (including paths with spaces).
+    $global:LASTEXITCODE = $null
+    & $launcherBinary @LaunchArgs | Out-Host
+    $exitCode = $LASTEXITCODE
+    if ($null -eq $exitCode) {
+        throw "Horizon Launcher did not return an exit code: $($LaunchArgs -join ' ')"
+    }
+    if ($exitCode -ne 0) {
+        throw "Horizon Launcher failed (exit code $exitCode): $($LaunchArgs -join ' ')"
     }
 }
 

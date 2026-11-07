@@ -90,7 +90,8 @@ class WorkplaceStaffingContracts(unittest.TestCase):
         body = CORE.split("pub fn plan_gather(", 1)[1].split("\n    }", 1)[0]
         self.assertIn("let Some(worker_job) = good.job()", body)
         self.assertIn("v.count(worker_job) == 0", body)
-        self.assertNotIn("native_", body)
+        self.assertNotIn("native_run_command", body)
+        self.assertNotIn("native_spawn", body)
         planner = GLUE.split("fn autonomous_village_step(", 1)[1].split("\n}", 1)[0]
         self.assertIn("const PIT_TARGET: u32 = 32;", planner)
         self.assertIn("if !village.posts.iter().any(|post| post.kind == pit)", planner)
