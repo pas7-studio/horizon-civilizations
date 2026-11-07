@@ -210,3 +210,23 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
 98. Run the same source on the pinned native Horizon client, collect logs
     and gameplay screenshots: successful Rust/Python tests alone do not
     demonstrate live civilization behavior.
+
+## Completed village property sales (v0.1.11)
+
+99. With a genuine completed public hut and at least 35 civic coins,
+    stand within 12 blocks of it and run `/civ buyhouse Ashford`.
+    The loaded hut must match its full native cobble/oak blueprint.
+    A successful purchase transfers 35 player coins to the village
+    treasury and persists a private player plot at the hut origin.
+100. Run the command a second time, from another player's identity,
+     or while the hut is damaged or unloaded. All failed operations
+     must leave both player balance and civic treasury unchanged.
+101. After purchase, /civ homes Ashford must exclude the sold hut
+     and the owner's land must be protected against subsequent village
+     construction/farming. NPCs with lost housing should return to
+     available public beds or commons, not remain assigned to the
+     sold house.
+102. Advance one ordinary simulated economic day in a disposable
+     world with available wood and stone. The city should work toward
+     replacing private housing with a **material-paid** public house,
+     rather than counting the sold structure as available village beds.
