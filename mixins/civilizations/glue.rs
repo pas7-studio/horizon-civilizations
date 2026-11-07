@@ -623,6 +623,9 @@ pub fn interact_entity(game: &mut Game<'_>, entity: i32, kind: &str, claimed: &m
     };
     let phase = DailyPhase::at(game.world.day_time);
     let duty = if phase.on_shift(resident.job) { "on duty" } else { "off duty" };
+    let role = if resident.job == Job::Merchant {
+        "mayor / warehouse steward"
+    } else { resident.job.name() };
     let council = village.council_priorities().first()
         .map(|priority| format!(
             "Council: {} {}/100", priority.need.label(), priority.urgency
@@ -634,7 +637,7 @@ pub fn interact_entity(game: &mut Game<'_>, entity: i32, kind: &str, claimed: &m
     };
     let message = format!(
         "{} — {} of {} (morale {}). Routine: {} / {}. Home: {}. {}. {} View: /civ info {}. Trade: /civ buy/sell <good> <amount>.",
-        resident.name, resident.job.name(), village.name, village.morale,
+        resident.name, role, village.name, village.morale,
         phase.name(), duty, home, council, invitation, village.name
     );
     drop(guard);
