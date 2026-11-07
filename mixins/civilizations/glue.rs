@@ -158,7 +158,7 @@ pub fn closed() {
 
 pub fn register(commands: &mut Vec<NativeCommand>) {
     for usage in [
-        "civ", "civ help", "civ list", "civ info", "civ info <name:word>",
+        "civ", "civ help", "civ list", "civ nearby", "civ info", "civ info <name:word>",
         "civ roster <name:word>", "civ schedule <name:word>",
         "civ homes <name:word>", "civ survey <name:word>",
         "civ council <name:word>", "civ forecast <name:word>",
@@ -989,7 +989,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
     let actor = format!("{:032x}", player.uuid);
     let action = args.next().unwrap_or("help");
     if action == "help" {
-        reply(game, "Civilizations: /civ list | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | hall <name> | warehouse <name> | diagnose <name> | buyplot <name> | buyhouse <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, recoveractor <name> <resident-id> attempt, barrelcheck <name>, resolvebarrel <name> confirm|cancel <observed_count>, gathercheck <name>, discardgather <name> intact|empty, day [days], construct <name>, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
+        reply(game, "Civilizations: /civ list | nearby | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | hall <name> | warehouse <name> | diagnose <name> | buyplot <name> | buyhouse <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, recoveractor <name> <resident-id> attempt, barrelcheck <name>, resolvebarrel <name> confirm|cancel <observed_count>, gathercheck <name>, discardgather <name> intact|empty, day [days], construct <name>, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
         return;
     }
     if action == "list" {
@@ -997,7 +997,45 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
         for s in world.settlements.values().take(12) {
             items.push(format!("#{} {} [{}] pop={} houses={}", s.id, s.name, s.culture, s.population(), s.houses));
         }
-        reply(game, if items.is_empty() { "No settlements yet. OP: /civ found Ashford".into() } else { items.join(" | ") });
+        reply(game, if items.is_empty() { "No settlements yet. Explore loaded natural Overworld terrain; independent NPC pioneers will found new towns. OP /civ found NAME is optional.".into() } else { items.join(" | ") });
+        return;
+    }
+    if action == "nearby" {
+        // All information is derived from existing authoritative world.json.
+        // No chunk loads, scans, inventory access, markers, or transactions.
+        if !player.position.iter().all(|value| value.is_finite()) {
+            error(game, "unable to determine a finite player position");
+            return;
+        }
+        let mut villages: Vec<(f64, u64, String)> = world.settlements.values()
+            .filter(|v| v.dimension == player.dimension)
+            .map(|v| {
+                let dx = f64::from(v.center[0]) - player.position[0];
+                let dz = f64::from(v.center[2]) - player.position[2];
+                let distance = dx.hypot(dz);
+                let direction = format!(
+                    "{}{}", if dz < 0.0 { "N" } else { "S" },
+                    if dx < 0.0 { "W" } else { "E" }
+                );
+                let stage = if v.hall_complete { "hall built" }
+                    else if v.hall_job.is_some() { "hall building" }
+                    else { "starting" };
+                (distance, v.id, format!(
+                    "{} ({:.0}m {}, X{} Z{}, {})",
+                    v.name, distance, direction, v.center[0], v.center[2], stage
+                ))
+            }).collect();
+        villages.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        let shown: Vec<_> = villages.iter().take(4)
+            .map(|(_, _, description)| description.as_str()).collect();
+        reply(game, if shown.is_empty() {
+            "No known settlements in this dimension. Explore natural land; NPC communities can found on loaded, clear Overworld terrain.".to_owned()
+        } else {
+            format!(
+                "Nearest settlements ({} known): {}. Visit a village or talk to a resident; /civ join NAME to become a citizen.",
+                villages.len(), shown.join(" | ")
+            )
+        });
         return;
     }
     if action == "hall" || action == "warehouse" {
