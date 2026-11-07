@@ -5048,7 +5048,7 @@ mod native_forest_origin_tests {
         let origin = [32,70,0];
         assert!(world.gather_site_unclaimed(id, origin, [33,70,0]));
         world.settlements.get_mut(&id).unwrap().player_parcels.push(PlayerParcel {
-            origin: [39,70,0], owner: "owner".into(), commissioned: false,
+            origin: [42,70,0], owner: "owner".into(), commissioned: false,
         });
         // The harvesting BLOCK is distant, but the worker stand touches
         // somebody else's registered parcel exclusion radius.
