@@ -2245,6 +2245,16 @@ fn barrel_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
             && DailyPhase::at(game.world.day_time).on_shift(Job::Baker)
             && storage_worker_near(game, state.world.as_ref().unwrap(), id, Job::Baker);
         if bakery_needs_wheat {
+            // The bakery must stop ordering wheat once actual bread stock and
+            // saved deliveries cover the settlement's bounded food buffer.
+            // A missing/unloaded barrel is NOT an empty barrel.
+            let Some(stored) = physical_barrel_stock(game, &dimension, village.center)
+            else { continue; };
+            let physical_bread = stored.iter().find(|(good, _)| *good == Good::Bread)
+                .map(|(_, count)| *count).unwrap_or(0);
+            if !crate::game::civilizations_core::needs_real_bread(&village, physical_bread) {
+                continue;
+            }
             let missing = crate::game::civilizations_core::BREAD_WHEAT_RECIPE
                 - village.bakery.as_ref().unwrap().wheat_escrow;
             if request_workshop_pickup(
@@ -2404,6 +2414,17 @@ fn baker_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), St
             return Ok(());
         }
         if b.wheat_escrow < crate::game::civilizations_core::BREAD_WHEAT_RECIPE {
+            continue;
+        }
+        // A stock already replenished by trading, another pending delivery
+        // or physical barrel items must prevent another loaf even if the
+        // baker happens to be carrying ingredients. Never inspect virtual
+        // day-simulation food for this native decision.
+        let Some(stored) = physical_barrel_stock(game, &dimension, village.center)
+        else { continue; };
+        let physical_bread = stored.iter().find(|(good, _)| *good == Good::Bread)
+            .map(|(_, count)| *count).unwrap_or(0);
+        if !crate::game::civilizations_core::needs_real_bread(village, physical_bread) {
             continue;
         }
         // Check that the whole actual workshop still exists and is loaded,
