@@ -79,3 +79,7 @@ A persistently saved 3×3 irrigated wheat field now has a finite preparation pha
 ## v0.1.5 audit (feature branch)
 
 Full physical harvest observation now creates a persistent increasing receipt (sequence, world day, eight crops). Saves retain 32 recent receipts and reject invalid sequences on load; legacy v0.1.4 farms start with empty evidence. The command /civ harvests NAME reports this audit. This is not an economy transaction or gameplay E2E. No warehouse stock or item drops are granted by this feature.
+
+## Fail-closed world switch hardening (feature branch)
+
+The outgoing world must persist successfully before replacing the singleton with an incoming world. A failed save retains existing state in memory and reports a blocking problem. Shutdown write failure also keeps the state resident for retry while the process exists. Stale world.json.swap is examined before any backup/tmp mutation. This protects against an avoidable lost-state path; it cannot prevent data loss if the operating system/process terminates before disk errors are fixed. Native build/gameplay E2E still required.
