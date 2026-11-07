@@ -1,3 +1,38 @@
+# Latest stacked v0.1.13 source milestone (2026-11-07)
+
+Branch: `feat/native-barrel-inventory-v0113`, stacked after physical town hall
+and autonomous village commits. **Not compiled or tested in game.**
+
+- The two actual town hall `minecraft:barrel` block inventories are now read
+  and mutated using inspected pinned Horizon native API 48 (slots, extract,
+  insert). Real native contents, not the old JSON ledger, determine available
+  post-hall construction materials.
+- The saved `warehouse` map is now an **incoming delivery queue**, not a
+  second copy of what's inside a real barrel. A separate build escrow holds
+  goods physically removed by the builder. Saved journals reconcile all
+  single movement batches without blind reissue.
+- NPC lumberjacks/miners and farmers return to the hall before delivery
+  credit; the steward transfers received resources into real vanilla barrel
+  slots, and the builder walks to the hall before reserving real items.
+- Post-hall trade purchases read real barrel slots and precharge coins.
+  A native API 233 block-container hook denies non-OP access to the
+  village's two public storage barrels; private containers are untouched.
+- No atomicity exists between world.json and Minecraft container/chunk
+  persistence. Ambiguous transfers become blocked, never automatically
+  repeated. No admin recovery automation is enabled.
+- **NOT VERIFIED:** Rust compilation, Python tests, transformed pinned
+  Horizon native build, in-game barrel permission hook, actual villager
+  navigation, live container transfer, NBT signs, crash windows.
+- **NOT COMPLETED:** universal player land anti-grief, courier animations,
+  real production workshops/recipes, auto-founded villages, safe recovery UI
+  for blocked transfers, player-facing physical delivery UI and full
+  economy monetary balance.
+
+Manual checks: [TEST_PLAN](TEST_PLAN.md) cases 120–138.
+Actions disabled intentionally. Main binary does not have this feature.
+
+---
+
 # Current stacked feature source status — v0.1.12 (2026-11-07)
 
 **Most recent source branch:**
