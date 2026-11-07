@@ -2786,7 +2786,17 @@ fn autonomous_frontier_found(game: &mut Game<'_>, state: &mut ActiveWorld) -> Re
                 // Recheck domain constraints against a trial, avoiding an
                 // unnecessary save on name or inter-village collisions.
                 let mut trial = world.clone();
-                if trial.found_autonomous(&name, dimension, candidate).is_err() {
+                let Ok(trial_id) = trial.found_autonomous(&name, dimension, candidate)
+                else { continue; };
+                // Do not leave behind an independent village whose first
+                // ten residents can never appear. Require the SAME full
+                // loaded-chunk, no-duplicate, collision-free ten-position
+                // NPC survey used for the actual native spawn reservation.
+                // This first-pass survey is read-only; the later real
+                // spawn path rechecks all preconditions before persistence.
+                if surveyed_initial_actor_positions(
+                    game, &trial.settlements[&trial_id]
+                ).is_err() {
                     continue;
                 }
                 let before = state.world.as_ref().unwrap().clone();
