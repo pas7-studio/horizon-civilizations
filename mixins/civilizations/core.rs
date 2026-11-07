@@ -3307,8 +3307,9 @@ mod village_land_and_autonomy_tests {
         assert_eq!(world.commission_house("owner", id, [20, 70, 0]), Ok(COMMISSION_PRICE_COINS));
         assert_eq!(world.players["owner"].coins, 0);
         assert_eq!(world.settlements[&id].treasury_coins, LAND_PRICE_COINS + COMMISSION_PRICE_COINS);
-        assert_eq!(world.settlements[&id].quantity(Good::Wood), 4);
-        assert_eq!(world.settlements[&id].quantity(Good::Stone), 2);
+        assert_eq!(world.settlements[&id].quantity(Good::Wood), 12);
+        assert_eq!(world.settlements[&id].quantity(Good::Stone), 8);
+        assert_eq!(world.settlements[&id].warehouse_quantity(Good::Wood), 0);
         assert!(world.commission_house("owner", id, [20, 70, 0]).is_err());
         assert_eq!(world.settlements[&id].houses, 3);
         assert_eq!(world.settlements[&id].pending_visual_buildings, 1);
@@ -3350,13 +3351,18 @@ mod village_land_and_autonomy_tests {
     }
 
     #[test]
-    fn commission_without_materials_never_takes_player_coins() {
+    fn commission_queues_without_virtual_materials_but_cannot_build_unfunded() {
         let (mut world, id) = founded();
         world.buy_plot("owner", id, [20, 70, 0]).unwrap();
         world.settlements.get_mut(&id).unwrap().stock.insert(Good::Wood, 0);
-        let before = serde_json::to_string(&world).unwrap();
-        assert!(world.commission_house("owner", id, [20, 70, 0]).is_err());
-        assert_eq!(serde_json::to_string(&world).unwrap(), before);
+        world.settlements.get_mut(&id).unwrap().stock.insert(Good::Stone, 0);
+        assert_eq!(world.commission_house("owner", id, [20, 70, 0]), Ok(COMMISSION_PRICE_COINS));
+        assert_eq!(world.players["owner"].coins, 0);
+        assert_eq!(world.settlements[&id].quantity(Good::Wood), 0);
+        assert_eq!(world.settlements[&id].quantity(Good::Stone), 0);
+        assert!(!world.reserve_hut_supplies(id).unwrap());
+        assert!(!world.settlements[&id].hut_supplies_reserved);
+        world.validate().unwrap();
     }
 
     #[test]
