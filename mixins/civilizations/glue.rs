@@ -1999,6 +1999,21 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             if village.actor_recovery_issued.contains(&resident_id) {
                 return Err("a recovery spawn was already issued for this resident; inspect and reconcile before any further action".into());
             }
+            // All native chunks inside the normal 96-block identity
+            // neighborhood must be loaded. An unseen older actor in an
+            // unloaded chunk would make even an OP recovery duplicate it.
+            // This is intentionally strict; return when chunks are loaded.
+            for ox in (-96_i32..=96).step_by(16) {
+                for oz in (-96_i32..=96).step_by(16) {
+                    let x = village.center[0].checked_add(ox)
+                        .ok_or("spawn recovery scan outside world bounds")?;
+                    let z = village.center[2].checked_add(oz)
+                        .ok_or("spawn recovery scan outside world bounds")?;
+                    if !game.world.loaded(x, z) {
+                        return Err("native villager recovery needs all chunks in 96-block scan loaded; no spawn was reserved".into());
+                    }
+                }
+            }
             let exact_name = village.actor_name(resident);
             let legacy_name = format!("{} [{}]", resident.name, village.name);
             // Never spawn while a tagged old entity is visible in the
