@@ -610,3 +610,29 @@
   fixture. The user can now invoke `--build-client` on the correct
   branch without an explicit `--expected-branch` override. Runtime
   gate tests and actual native compilation remain unexecuted here.
+
+
+## 2026-11-08 — post-save rollback safety, pairwise spawn clearance, build diagnostics
+
+- Confirmed the mutating command handler could restore its pre-command
+  clone after a subsequent `Err` despite an earlier successful durable
+  save. After `already_saved`, errors now fail closed with
+  `state.problem` rather than overwriting in-memory committed state.
+- In `/civ reconcile`, save failure after an in-memory UUID binding
+  sets the already-saved guard so the outer handler cannot attempt an
+  unexpected second save. Manual disk review and restart are required.
+- The ten-position native spawn survey now checks separation between
+  positions already chosen during the batch survey, not only against
+  existing mobs. Independent in-memory flat-ground survey produced
+  ten candidates at squared distances >=9 (actual min 16).
+- `tools/first_play_gate.py` now streams failed stage logs to extract
+  their first actionable Rust/compiler/Python diagnostic into the
+  structured report and console, keeping a bounded summary. Added
+  Python mock stage for a compiler `error[E0425]` on POSIX/Windows.
+- Added three guarded actor source contracts and one build-gate harness
+  case; source total now 19 actor recovery, 14 build gate tests authored.
+- Independently executed seven regex pattern probes and a ten-position
+  flat-ground spacing simulation via local Python (both PASS). Those
+  probes are **not** a cargo test, full Python unittest, native client
+  build or Minecraft gameplay E2E.
+- PR #34 remains Draft, main unchanged, Actions OFF. Acceptance 289–292.
