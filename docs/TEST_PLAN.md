@@ -503,3 +503,59 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
      external OP barrel edits or native chunk save failure. A matching total
      alone is not proof of origin; OP must compare detailed slots and logs.
      Keep multiplayer disabled until verified.
+
+
+## First-play live diagnostics (unreleased source)
+
+175. In fresh disposable creative world on the **latest** stacked branch,
+     compile the pinned native Horizon client and record exact Git commit,
+     binary path and mods loaded. Run `/civ found Ashford` once; do NOT
+     manually run actors/construct/farm. `/civ diagnose Ashford` must exist.
+176. With all chunks loaded, compare `/civ diagnose Ashford` actual
+     UUID-linked resident count and job roles with `/civ roster Ashford`.
+     The diagnostic must NOT claim unloaded, unbound or renamed impostors
+     are present. Time changes should accurately show worker shift.
+177. Before the civic hall completes, diagnose must report the exact
+     incoming real wood/stone shortage and NOT use abstract daily stock.
+     Add physical oak logs/cobblestone with real inventory trades and observe
+     the reported deficit shrink only after an actual receipt is saved.
+178. After completing the hall, unload one public barrel chunk/entity or
+     remove the barrel in a disposable save. Diagnose must report native
+     barrels unavailable, not 0 goods. Reload/restore and observe the real
+     combined bakery+hut building deficit using actual native item counts.
+179. In a test save with a pending or blocked native barrel receipt,
+     `/civ diagnose Ashford` must report native journal unresolved and
+     direct the OP to `/civ barrelcheck Ashford` without moving items.
+     A pending market purchase must take precedence; never auto-refund.
+180. Use byte-for-byte save comparison and actual inventory snapshots to
+     verify 20 diagnostic calls do not mutate world.json, blocks, barrels,
+     player coins or inventory. Other autonomous ticks may naturally change
+     game state, so stop simulation or isolate command execution when
+     comparing before/after; never attribute unrelated ticks to diagnose.
+181. Test non-OP and wrong-dimension access, an off-shift builder, a blocked
+     hall construction job, an absent builder, an unfinished bakery and
+     unavailable natural plots. Each should produce a meaningful blocker
+     without changing the world or claiming gameplay acceptance.
+
+## Physical bread demand and warehouse backpressure (unreleased source)
+
+182. Build exact branch and confirm Rust/Python suite. Create settlement
+     with 10 living residents and completed native hall/bakery. The target
+     physical bread buffer should be 20 loaves. Record both actual barrels,
+     confirmed inbound bread, and baker-carried bread separately.
+183. With 20 native bread and plentiful wheat, verify baker withdraws no
+     wheat and crafts no additional loaf. Other warehouse delivery of
+     logs/stone/wheat must still proceed normally.
+184. With 15 on shelf, 4 confirmed inbound bread, zero in transit, one
+     new loaf is needed. After it is delivered, baking must pause at 20.
+185. With 18 bread on shelf and 2 baker-carried finished bread receipts,
+     baking must pause until those loaves are deposited. Save/reload
+     cannot cause an extra batch.
+186. Missing/unloaded official native barrel must pause wheat extraction
+     and crafting. Restoring both native block entities resumes work,
+     without treating an unavailable container as empty.
+187. Trade away 5 actual bread after reaching target: the baker should
+     resume bounded real-wheat restocking once the purchase is settled.
+188. Test no living baker/residents, shifts, saved journals, extra
+     already-extracted wheat and simultaneous hut funding. No parallel
+     warehouse goods should be starved by full bread buffer.

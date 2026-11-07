@@ -1,8 +1,9 @@
 # Local Horizon Civilizations playtest
 
-**Current assurance:** native `cargo check` and embedded core unit tests passed on
-the pinned Horizon revision. The 3D client has **not** been launched or verified
-with a Minecraft world. Building an executable is not an in-game E2E.
+**Current assurance:** an older pinned Horizon native branch previously passed
+`cargo check` and embedded Rust tests. The latest v0.1.14 stacked source in
+`feat/first-play-diagnostics-v0115` has **not** passed native compile or
+Minecraft E2E. Do not reuse an old binary as evidence for this stack.
 
 ## Build on your own development PC
 
@@ -124,7 +125,7 @@ and sufficient disk/RAM, run:
 
 ```powershell
 git fetch origin
-git switch feat/safe-village-housing-proposals-v019
+git switch feat/first-play-diagnostics-v0115
 cargo fmt --all
 cargo fmt --all --check
 cargo clippy --all-targets -- -D warnings
@@ -341,3 +342,48 @@ must still work.
 **This is source-only until tested.** GitHub Actions remain disabled.
 Stop at any blocked native transaction; never repeatedly retry a crashed
 order or force-merge into main. [TEST_PLAN](TEST_PLAN.md) cases 139–158.
+
+
+## Latest first-play quickstart — unreleased diagnostic branch
+
+Use **only a disposable world**, with a local Rust 1.95.x toolchain, Python
+3.11+, Git, MSVC/C++ build dependencies, sufficient RAM/disk and legal Minecraft
+Java resources. Old `main` builds do not contain this feature stack.
+
+```powershell
+git fetch origin
+git switch feat/first-play-diagnostics-v0115
+.\scripts\validate-local.ps1 -Format
+.\scripts\validate-local.ps1 -BuildClient
+```
+
+Do **not** run GitHub Actions. `-Format` changes formatting only in the local
+checkout; inspect the diff and do not auto-push it. On success, use the exact
+new client binary printed by the native builder with the official Horizon
+Launcher. Source-only `.hnmod` files are **not** Windows executables.
+
+In Minecraft creative (fresh disposable world), run:
+
+```text
+/civ found Ashford
+/civ diagnose Ashford
+/civ roster Ashford
+/civ hall Ashford
+/civ warehouse Ashford
+/civ bakery Ashford
+```
+
+Keep the area loaded. Do **not** run `/civ actors`, `/civ construct` or
+`/civ farm` when verifying default-on autonomy. Diagnose shows a single
+read-only snapshot; NPC movement and production still require visual checks.
+If the build or launcher fails, capture exact command, source SHA, error log
+and the first failing test rather than assuming the game code worked.
+
+## Physical bakery stock control (not yet game-verified)
+
+A completed bakery no longer attempts infinite bread production in source:
+it stops at two loaves per living resident, capped at 64, counting native
+barrel bread plus confirmed incoming bread and bread already carried by
+the baker. Player bread purchases can reopen demand. If the actual native
+barrel state is unavailable, wheat extraction and crafting pause. This
+does not count abstract day-simulation food. Test cases: 182–188.

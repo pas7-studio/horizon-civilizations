@@ -1,3 +1,31 @@
+# Current unreleased source: first-play settlement diagnostics
+
+Branch `feat/first-play-diagnostics-v0115`, stacked on Draft PR #24 and all earlier
+physical hall/bakery/warehouse work. The package remains **0.1.14 source-only**:
+there is no successful native build or real gameplay proof for this branch.
+GitHub Actions remain deliberately disabled.
+
+- [x] New read-only `/civ diagnose NAME` for ordinary citizens/OPs, with
+  live UUID-bound actor count and loaded jobs, actual native hall barrel
+  availability, workshop status, current worker shift and ordered potential
+  blockers. Includes aggregate bakery + hut real-resource requirements.
+- [x] No new world mutation path, saved state, external item transfer or
+  worldgen side effects introduced by this diagnostic.
+- [x] Bounded real-bread restocking: baker stops requesting wheat or crafting
+  once native barrel bread plus confirmed pending delivery reaches two loaves
+  per living resident (max 64). Unavailable barrels pause production; full
+  bread buffer does not block unrelated warehouse deposits.
+- [x] Three Rust domain tests and eleven Python source contracts written;
+  executable and native gameplay verification still pending.
+- [ ] Local Rust/Python suites, pinned native Horizon compilation, Windows
+  executable and disposable game E2E required. Use latest branch; an old
+  `main` executable does NOT include this diagnostic or warehouse changes.
+- [ ] Physical lumberyard/quarry and courier transport remain future work,
+  not implemented by this PR.
+
+See TEST_PLAN 175–181 and PLAYTEST quickstart.
+
+---
 # Unreleased source: operator-assisted warehouse recovery and accurate hall signs
 
 Branch `feat/operator-warehouse-recovery-v0115` (stacked on PR #23).

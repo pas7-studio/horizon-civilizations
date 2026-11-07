@@ -997,6 +997,23 @@ pub fn physical_construction_shortfall(
      unpaid(Good::Stone).saturating_sub(available(Good::Stone)))
 }
 
+/// Bounded village bread buffer, backed only by actual native hall barrels,
+/// confirmed inbound receipts and the baker's already-crafted delivery.
+pub fn physical_bread_target(village: &Settlement) -> u32 {
+    village.population().saturating_mul(2).min(64)
+}
+
+/// Prevent infinite physical baking and storage-filling after a settlement
+/// has enough real bread. The observer MUST read both native hall barrels;
+/// an unavailable block entity pauses production instead of treating it as
+/// an empty container. This pure function never credits abstract stock.
+pub fn needs_real_bread(village: &Settlement, observed_barrel_bread: u32) -> bool {
+    let pending = village.warehouse_quantity(Good::Bread)
+        .saturating_add(village.bakery.as_ref()
+            .map(|b| b.bread_in_transit).unwrap_or(0));
+    observed_barrel_bread.saturating_add(pending) < physical_bread_target(village)
+}
+
 impl Settlement {
     pub fn count(&self, job: Job) -> u32 {
         self.residents.iter().filter(|r| r.alive && r.job == job).count() as u32
@@ -4841,5 +4858,47 @@ mod manual_warehouse_recovery_tests {
         assert_eq!(serde_json::to_value(&world).unwrap(), prior);
         assert_eq!(world.settlements[&id].barrel_transfer.as_ref().unwrap().phase,
             BarrelPhase::Blocked);
+    }
+}
+
+#[cfg(test)]
+mod physical_bakery_stock_control_tests {
+    use super::*;
+
+    #[test]
+    fn physical_bread_buffer_is_bounded_by_actual_residents() {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0, 70, 0], "owner").unwrap();
+        let village = &world.settlements[&id];
+        assert_eq!(physical_bread_target(village), village.population() * 2);
+        assert!(needs_real_bread(village, 0));
+        assert!(!needs_real_bread(village, physical_bread_target(village)));
+    }
+
+    #[test]
+    fn physical_bread_stock_and_incoming_delivery_are_not_counted_twice() {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0, 70, 0], "owner").unwrap();
+        let village = world.settlements.get_mut(&id).unwrap();
+        let target = physical_bread_target(village);
+        village.warehouse_credit(Good::Bread, 4).unwrap();
+        assert!(needs_real_bread(village, target - 5));
+        assert!(!needs_real_bread(village, target - 4));
+        assert!(needs_real_bread(village, 0));
+    }
+
+    #[test]
+    fn baker_in_transit_bread_counts_before_restocking() {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0, 70, 0], "owner").unwrap();
+        let village = world.settlements.get_mut(&id).unwrap();
+        village.bakery = Some(BakeryWorkshop {
+            origin: [24, 70, 0], building: None, complete: true,
+            supplies_reserved: true, construction_escrow: BTreeMap::new(),
+            wheat_escrow: 0, bread_in_transit: 2, batches: 2,
+        });
+        let target = physical_bread_target(village);
+        assert!(!needs_real_bread(village, target - 2));
+        assert!(needs_real_bread(village, target - 3));
     }
 }

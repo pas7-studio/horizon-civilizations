@@ -322,3 +322,30 @@
 - Added four Rust domain and six Python source tests; no Rust/Python suites
   or live Horizon/Minecraft E2E were executed. Do not use on real worlds
   until compile, migration, operator recovery and crash fault tests pass.
+
+## 2026-11-08 — First-play diagnostic milestone (unreleased source)
+
+- Added `/civ diagnose NAME` (ordinary users, read-only) to report actual
+  loaded UUID-linked roles, current daytime shift, civic hall construction,
+  native warehouse availability, bakery escrow/batches, planned gathering
+  and the first saved-state blocker. No native item transfer, block mutation
+  or persistent world change from the command.
+- Combined supply deficit in this command uses the same native barrel
+  snapshot and dual-project helper as warehouse planning, rather than the
+  abstract economy. Missing/unloaded vanilla block entities are reported
+  as unavailable, not as empty.
+- Fixed PLAYTEST quickstart guidance to use the newest stacked branch instead
+  of obsolete v0.1.9 checkout and to distinguish old native CI from this
+  unbuilt v0.1.14 source stack.
+- Added six Python source contracts and first-play acceptance tests 175–181.
+  Local executable Rust/Python tests, native compile and in-game verification
+  remain unperformed here. No GitHub Actions or merge.
+
+- Added physical bread-restocking backpressure at both native wheat pickup
+  and baking workbench. The pure helper uses 2 bread per living resident
+  (maximum 64), counts verified native barrel items + confirmed inbound
+  receipts + bakery bread-in-transit, not abstract daily stock.
+  Missing/unloaded barrel inventories pause bread production. Full bread
+  reserves do NOT starve the steward's other goods deliveries.
+- Three Rust domain cases and five Python source contracts authored for the
+  food buffer. No native build or game execution performed here.
