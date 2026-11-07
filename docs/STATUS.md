@@ -1,3 +1,34 @@
+# Current feature-branch status — v0.1.11 (2026-11-07)
+
+**Correction to the original prototype:** the initial and main implementations
+did not create a living civilization automatically. The **latest stacked
+source-only feature branch** is
+`feat/autonomous-physical-village-v0111`; it has not been compiled or
+playtested, so it cannot yet be described as working in an actual game.
+
+- Source authored: villages default to autonomy ON, physically spawn and
+  UUID-bind their own residents when safe chunks are loaded, convert
+  previously paid abstract houses to real work projects, and select safe
+  physical wheat fields and starter huts without OP site commands.
+- Source authored: 5x5 purchased player parcels, commissionable private huts,
+  sale of existing fully verified public huts, civic treasury and public
+  housing-demand recalculation. These are **mod-level** protection rules,
+  not vanilla multiplayer land protection.
+- Native Rust executable, built-world activity, pathfinding, block edits,
+  farm maturity, nighttime behavior, restart and crash recovery:
+  **ALL UNVERIFIED for v0.1.11**.
+- GitHub Actions are intentionally disabled by user request. No runs have
+  been scheduled for this release.
+- The default `main` branch is an older version, and source changes in
+  the stacked Draft PRs are not visible in its existing Windows artifact.
+
+Go to [PLAYTEST](PLAYTEST.md) for the
+`feat/autonomous-physical-village-v0111` local Windows build, then
+cases 85–102 in [TEST_PLAN](TEST_PLAN.md). Never use an irreplaceable save
+for an unverified native mod.
+
+---
+
 # Verification status (2026-11-07)
 
 The sources were authored here from documented Horizon APIs and the publicly

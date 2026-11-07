@@ -25,6 +25,31 @@ pub const MAX_HOUSING_SURVEY_RESULTS: usize = 5;
 /// The board forecasts a few abstract days, not simulated physical work.
 pub const COUNCIL_FORECAST_DAYS: u8 = 3;
 pub const MAX_COUNCIL_FORECAST_DAYS: u8 = 7;
+pub const LAND_PRICE_COINS: u64 = 10;
+pub const COMMISSION_PRICE_COINS: u64 = 15;
+pub const FINISHED_HUT_PRICE_COINS: u64 = 35;
+pub const MAX_PLAYER_PARCELS: usize = 32;
+
+fn autonomous_by_default() -> bool { true }
+
+/// Mod-level ownership of a 5x5 plot; not a vanilla/other-mod block-protection
+/// system. Minecraft block preflight still checks for player structures.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlayerParcel {
+    pub origin: [i32; 3],
+    pub owner: String, // authenticated acting player's UUID in hex
+    /// True for a private house ordered on a bought plot OR an existing
+    /// village hut purchased with its completed title.
+    #[serde(default)]
+    pub commissioned: bool,
+}
+
+pub fn near_plot(a: [i32; 3], b: [i32; 3]) -> bool {
+    let dx = i128::from(a[0]) - i128::from(b[0]);
+    let dz = i128::from(a[2]) - i128::from(b[2]);
+    dx * dx + dz * dz < 9_i128 * 9
+}
+
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -645,6 +670,9 @@ pub struct Settlement {
     pub founder: String,
     pub residents: Vec<Resident>,
     pub stock: BTreeMap<Good, u32>,
+    /// Player civic coin payments are transferred here, not silently burned.
+    #[serde(default)]
+    pub treasury_coins: u64,
     pub houses: u32,
     pub building_progress: u32,
     pub starving_days: u32,
@@ -653,6 +681,13 @@ pub struct Settlement {
     pub active_wars: BTreeSet<u64>,
     pub pending_visual_buildings: u32,
     pub actors_spawned: bool,
+    /// Villages develop by default. OP can pause selected settlements.
+    #[serde(default = "autonomous_by_default")]
+    pub autonomy_enabled: bool,
+    /// Land purchased by players; no village physical job may use these
+    /// parcels unless its owner explicitly commissions a building.
+    #[serde(default)]
+    pub player_parcels: Vec<PlayerParcel>,
     /// Empty for existing v0.1.1 saves; these are *physical* build sites only.
     #[serde(default)]
     pub visual_sites: Vec<[i32; 3]>,
@@ -675,8 +710,15 @@ impl Settlement {
     /// Derived physical housing capacity. Abstract houses are NOT included.
     /// Allocations are recalculated from the current living roster and ordered
     /// completed sites; no new data is serialized to legacy world saves.
+    /// The player's commissioned houses are not public NPC lodging. The
+    /// physical_housing and home_slot computations share this same filter.
+    pub fn public_huts(&self) -> usize {
+        self.visual_sites.iter().filter(|site| !self.player_parcels.iter()
+            .any(|plot| plot.commissioned && plot.origin == **site)).count()
+    }
+
     pub fn physical_housing(&self) -> (usize, usize, usize) {
-        let capacity = self.visual_sites.len() * PHYSICAL_HOME_CAPACITY;
+        let capacity = self.public_huts() * PHYSICAL_HOME_CAPACITY;
         let residents = self.residents.iter().filter(|resident| resident.alive).count();
         (capacity, residents.min(capacity), residents.saturating_sub(capacity))
     }
@@ -689,7 +731,9 @@ impl Settlement {
             .filter(|resident| resident.alive).map(|resident| resident.id).collect();
         ids.sort_unstable();
         let position = ids.binary_search(&resident_id).ok()?;
-        let site = *self.visual_sites.get(position / PHYSICAL_HOME_CAPACITY)?;
+        let site = self.visual_sites.iter()
+            .filter(|site| !self.player_parcels.iter().any(|plot| plot.commissioned && plot.origin == **site))
+            .nth(position / PHYSICAL_HOME_CAPACITY).copied()?;
         let lane = (position % PHYSICAL_HOME_CAPACITY) as u8;
         Some(HomeSlot { site, lane })
     }
@@ -892,7 +936,13 @@ impl Settlement {
         }
         // Avoid growing infinitely many abstract houses with a fixed population.
         let desired_houses = self.population().div_ceil(3).saturating_add(1);
-        if self.count(Job::Builder) > 0 && self.population() > 0 && self.houses < desired_houses {
+        // Homes sold to players or commissioned privately are no longer
+        // public stock. The abstract economy must eventually replace them
+        // using its normal wood/stone costs rather than mint free houses.
+        let private_houses = self.player_parcels.iter()
+            .filter(|plot| plot.commissioned).count() as u32;
+        let public_houses = self.houses.saturating_sub(private_houses);
+        if self.count(Job::Builder) > 0 && self.population() > 0 && public_houses < desired_houses {
             // Buildings are simulated here. Physical blocks are not placed until a
             // construction adapter explicitly commits a structure in the level.
             if self.take(Good::Wood, 8) {
@@ -949,10 +999,33 @@ impl World {
         }
         let mut seen = BTreeSet::new();
         let mut all_entity_uuids = BTreeSet::new();
+        let mut all_parcels: Vec<(String, [i32; 3])> = Vec::new();
         for (&id, village) in &self.settlements {
             if village.id != id { return Err("settlement id/key mismatch".into()); }
             let normalized = village.name.to_ascii_lowercase();
             if !seen.insert(normalized) { return Err("duplicate settlement names".into()); }
+            if village.player_parcels.len() > MAX_PLAYER_PARCELS { return Err("too many player parcels".into()); }
+            for parcel in &village.player_parcels {
+                if parcel.owner.is_empty() || !self.players.contains_key(&parcel.owner) {
+                    return Err("parcel owner has no player record".into());
+                }
+                let [x, y, z] = parcel.origin;
+                if i64::from(x).abs() > 29_999_990 || i64::from(z).abs() > 29_999_990
+                    || !(-2048..=2048).contains(&y) {
+                    return Err("parcel outside world bounds".into());
+                }
+                if all_parcels.iter().any(|(dimension, point)| {
+                    dimension == &village.dimension && near_plot(*point, parcel.origin)
+                }) {
+                    return Err("overlapping player land parcels".into());
+                }
+                if parcel.commissioned
+                    && !village.visual_sites.contains(&parcel.origin)
+                    && !village.visual_job.as_ref().is_some_and(|job| job.origin == parcel.origin) {
+                    return Err("commissioned parcel has no recorded house job or completed hut".into());
+                }
+                all_parcels.push((village.dimension.clone(), parcel.origin));
+            }
             if village.residents.len() > 128 { return Err("resident cap exceeded".into()); }
             let mut resident_ids = BTreeSet::new();
             for resident in &village.residents {
@@ -1100,6 +1173,7 @@ impl World {
                 (Good::Wheat, 20), (Good::Bread, 12), (Good::Wood, 12),
                 (Good::Stone, 8), (Good::Iron, 2),
             ]),
+            treasury_coins: 0,
             houses: 2,
             building_progress: 0,
             starving_days: 0,
@@ -1108,6 +1182,8 @@ impl World {
             active_wars: BTreeSet::new(),
             pending_visual_buildings: 0,
             actors_spawned: false,
+            autonomy_enabled: true,
+            player_parcels: Vec::new(),
             visual_sites: Vec::new(),
             visual_job: None,
             farm: None,
@@ -1122,13 +1198,20 @@ impl World {
         Ok(id)
     }
 
-    /// Domain-only collision policy: a house must not intersect any other
-    /// settlement's *recorded* building, active construction or farm in the
-    /// same dimension. Real blocks and player claims need a separate live
-    /// adapter preflight and explicit operator approval.
+    /// Domain-only collision policy; physical construction still separately
+    /// requires clear loaded terrain. Player parcels are hard exclusions.
     pub fn check_visual_house_site(&self, village_id: u64, origin: [i32; 3]) -> Result<(), String> {
+        self.check_visual_house_site_for(village_id, origin, None, true)
+    }
+
+    /// A commission may use *only its authenticated owner's* bought lot.
+    /// All other protections and structure separation remain in force.
+    fn check_visual_house_site_for(
+        &self, village_id: u64, origin: [i32; 3],
+        owner: Option<&str>, require_budget: bool
+    ) -> Result<(), String> {
         let village = self.settlements.get(&village_id).ok_or("unknown settlement")?;
-        if village.pending_visual_buildings == 0 {
+        if require_budget && village.pending_visual_buildings == 0 {
             return Err("no completed abstract house awaits visualization".into());
         }
         if village.visual_job.is_some() {
@@ -1152,6 +1235,11 @@ impl World {
             return Err("build 12..80 blocks from village center".into());
         }
         for other in self.settlements.values().filter(|s| s.dimension == village.dimension) {
+            if other.player_parcels.iter().any(|plot| {
+                near_plot(plot.origin, origin) && owner != Some(plot.owner.as_str())
+            }) {
+                return Err("plot is owned by a player; construction requires its owner's commission".into());
+            }
             if other.visual_sites.iter().any(|&site| distance(site, origin) < 9_i128 * 9)
                 || other.visual_job.as_ref().is_some_and(|job| distance(job.origin, origin) < 9_i128 * 9)
                 || other.farm.as_ref().is_some_and(|farm| distance(farm.origin, origin) < 9_i128 * 9) {
@@ -1180,6 +1268,143 @@ impl World {
         Ok(origin)
     }
 
+    /// Already-paid abstract houses become physical jobs automatically. This
+    /// never changes the abstract number of houses or manufactures resources.
+    /// Player-commissioned homes are separately counted in visual_sites.
+    pub fn prepare_village_housing(&mut self, village_id: u64) -> Result<bool, String> {
+        let v = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?;
+        if !v.autonomy_enabled { return Ok(false); }
+        let completed = v.visual_sites.len() as u32;
+        let covered = completed.saturating_add(v.pending_visual_buildings);
+        let physical_needed = v.population().div_ceil(PHYSICAL_HOME_CAPACITY as u32);
+        let missing = physical_needed.saturating_sub(v.public_huts() as u32)
+            .saturating_sub(v.pending_visual_buildings);
+        let already_paid = v.houses.saturating_sub(covered);
+        let queue = missing.min(already_paid);
+        if queue == 0 { return Ok(false); }
+        v.pending_visual_buildings = v.pending_visual_buildings
+            .checked_add(queue).ok_or("visual backlog overflow")?;
+        Ok(true)
+    }
+
+    /// Simple authorization control. Autonomy is ON by default even in old
+    /// saves. Off pauses new site selection, but preserves existing jobs.
+    pub fn set_autonomy(&mut self, village_id: u64, enabled: bool) -> Result<(), String> {
+        let village = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?;
+        village.autonomy_enabled = enabled;
+        let name = village.name.clone();
+        self.event(format!("{name}: autonomous construction {}", if enabled { "enabled" } else { "paused" }));
+        Ok(())
+    }
+
+    /// A purchased 5x5 parcel is the player's local build right in this mod.
+    /// Terrain and the actor UUID are checked by the native command adapter.
+    pub fn buy_plot(&mut self, player_id: &str, village_id: u64, origin: [i32; 3]) -> Result<u64, String> {
+        let v = self.settlements.get(&village_id).ok_or("unknown settlement")?;
+        let p = self.players.get(player_id).ok_or("join the village first")?;
+        if p.settlement != Some(village_id) { return Err("join this village before buying land".into()); }
+        if p.coins < LAND_PRICE_COINS { return Err("not enough coins to buy a parcel".into()); }
+        if v.player_parcels.len() >= MAX_PLAYER_PARCELS { return Err("plot registry is full".into()); }
+        let treasury_after = v.treasury_coins.checked_add(LAND_PRICE_COINS)
+            .ok_or("village treasury overflow")?;
+        if i64::from(origin[0]).abs() > 29_999_990 || i64::from(origin[2]).abs() > 29_999_990
+            || !(-2048..=2048).contains(&origin[1]) {
+            return Err("land outside safe world bounds".into());
+        }
+        let dx = i128::from(origin[0]) - i128::from(v.center[0]);
+        let dz = i128::from(origin[2]) - i128::from(v.center[2]);
+        if !(12_i128 * 12..=80_i128 * 80).contains(&(dx * dx + dz * dz)) {
+            return Err("buy land 12..80 blocks from village center".into());
+        }
+        for other in self.settlements.values().filter(|s| s.dimension == v.dimension) {
+            if other.player_parcels.iter().any(|plot| near_plot(plot.origin, origin))
+                || other.visual_sites.iter().any(|site| near_plot(*site, origin))
+                || other.visual_job.as_ref().is_some_and(|job| near_plot(job.origin, origin))
+                || other.farm.as_ref().is_some_and(|farm| near_plot(farm.origin, origin)) {
+                return Err("land overlaps a registered building, field or another player's parcel".into());
+            }
+        }
+        self.players.get_mut(player_id).unwrap().coins -= LAND_PRICE_COINS;
+        let v = self.settlements.get_mut(&village_id).unwrap();
+        v.player_parcels.push(PlayerParcel {
+            origin, owner: player_id.to_owned(), commissioned: false
+        });
+        v.treasury_coins = treasury_after;
+        let name = self.settlements[&village_id].name.clone();
+        self.event(format!("{name}: player-owned 5x5 parcel sold at {},{},{}", origin[0], origin[1], origin[2]));
+        Ok(LAND_PRICE_COINS)
+    }
+
+    /// Buy a finished, genuinely recorded public hut, not an abstract house.
+    /// Native command verifies its real loaded Minecraft blocks first.
+    /// Residents leave the sold building; future daily economy may pay for
+    /// replacement public housing using normal material consumption.
+    pub fn buy_finished_house(
+        &mut self, player_id: &str, village_id: u64, origin: [i32; 3]
+    ) -> Result<u64, String> {
+        let v = self.settlements.get(&village_id).ok_or("unknown settlement")?;
+        if !v.visual_sites.contains(&origin) {
+            return Err("no completed physical village hut at this site".into());
+        }
+        let p = self.players.get(player_id).ok_or("join the village first")?;
+        if p.settlement != Some(village_id) { return Err("join the village first".into()); }
+        if p.coins < FINISHED_HUT_PRICE_COINS { return Err("not enough civic coins for this hut".into()); }
+        if v.player_parcels.len() >= MAX_PLAYER_PARCELS { return Err("plot registry is full".into()); }
+        let treasury_after = v.treasury_coins.checked_add(FINISHED_HUT_PRICE_COINS)
+            .ok_or("village treasury overflow")?;
+        if self.settlements.values().filter(|s| s.dimension == v.dimension).any(|s| {
+            s.player_parcels.iter().any(|plot| near_plot(plot.origin, origin))
+        }) {
+            return Err("this physical hut is already privately owned".into());
+        }
+        self.players.get_mut(player_id).unwrap().coins -= FINISHED_HUT_PRICE_COINS;
+        let v = self.settlements.get_mut(&village_id).unwrap();
+        v.player_parcels.push(PlayerParcel {
+            origin, owner: player_id.to_owned(), commissioned: true
+        });
+        v.treasury_coins = treasury_after;
+        let name = v.name.clone();
+        self.event(format!(
+            "{name}: finished hut sold into private ownership at {},{},{}",
+            origin[0], origin[1], origin[2]
+        ));
+        Ok(FINISHED_HUT_PRICE_COINS)
+    }
+
+    /// Commission a physical hut on a bought plot. This is a WORLD-JSON
+    /// transaction: coin labor fee and abstract stock materials are consumed
+    /// together with the construction job. Block writes occur later.
+    pub fn commission_house(&mut self, player_id: &str, village_id: u64, origin: [i32; 3]) -> Result<u64, String> {
+        let village = self.settlements.get(&village_id).ok_or("unknown settlement")?;
+        let parcel_index = village.player_parcels.iter()
+            .position(|plot| plot.origin == origin && plot.owner == player_id && !plot.commissioned)
+            .ok_or("buy this empty plot first; already commissioned lots cannot be reused")?;
+        let p = self.players.get(player_id).ok_or("join the village first")?;
+        if p.settlement != Some(village_id) { return Err("join this village before commissioning".into()); }
+        if p.coins < COMMISSION_PRICE_COINS { return Err("not enough coins for a building commission".into()); }
+        if village.quantity(Good::Wood) < 8 || village.quantity(Good::Stone) < 6 {
+            return Err("village requires 8 wood and 6 stone for the commission".into());
+        }
+        let houses = village.houses.checked_add(1).ok_or("house count overflow")?;
+        let pending = village.pending_visual_buildings.checked_add(1).ok_or("pending job overflow")?;
+        let treasury_after = village.treasury_coins.checked_add(COMMISSION_PRICE_COINS)
+            .ok_or("village treasury overflow")?;
+        self.check_visual_house_site_for(village_id, origin, Some(player_id), false)?;
+        // All validations above are read-only; all mutations below are in
+        // the same save object. The command adapter rolls back on save error.
+        self.players.get_mut(player_id).unwrap().coins -= COMMISSION_PRICE_COINS;
+        let village = self.settlements.get_mut(&village_id).unwrap();
+        assert!(village.take(Good::Wood, 8) && village.take(Good::Stone, 6));
+        village.houses = houses;
+        village.pending_visual_buildings = pending;
+        village.treasury_coins = treasury_after;
+        village.player_parcels[parcel_index].commissioned = true;
+        village.visual_job = Some(VisualBuildJob { origin, cursor: 0, blocked: false });
+        let name = village.name.clone();
+        self.event(format!("{name}: commissioned player-owned hut at {},{},{}",origin[0],origin[1],origin[2]));
+        Ok(COMMISSION_PRICE_COINS)
+    }
+
     /// Reserve one operator-approved house; a later native level tick performs
     /// one conditional placement at a time after checking live world blocks.
     pub fn start_visual_house(&mut self, village_id: u64, origin: [i32; 3]) -> Result<(), String> {
@@ -1188,7 +1413,7 @@ impl World {
         let name = village.name.clone();
         village.visual_job = Some(VisualBuildJob { origin, cursor: 0, blocked: false });
         self.event(format!(
-            "{name}: operator approved construction at {},{},{}",
+            "{name}: physical construction project reserved at {},{},{}",
             origin[0], origin[1], origin[2]
         ));
         Ok(())
@@ -1229,14 +1454,17 @@ impl World {
             return Err("farm outside safe build coordinates".into());
         }
         let distance = |a: [i32; 3], b: [i32; 3]| {
-            let dx = i64::from(a[0]) - i64::from(b[0]);
-            let dz = i64::from(a[2]) - i64::from(b[2]);
+            let dx = i128::from(a[0]) - i128::from(b[0]);
+            let dz = i128::from(a[2]) - i128::from(b[2]);
             dx * dx + dz * dz
         };
-        if !(12 * 12..=80 * 80).contains(&distance(village.center, origin)) {
+        if !(12_i128 * 12..=80_i128 * 80).contains(&distance(village.center, origin)) {
             return Err("farm must be 12..80 blocks from the village center".into());
         }
         for s in self.settlements.values().filter(|s| s.dimension == village.dimension) {
+            if s.player_parcels.iter().any(|plot| near_plot(plot.origin, origin)) {
+                return Err("farm site is owned by a player".into());
+            }
             if s.farm.as_ref().is_some_and(|p| distance(p.origin, origin) < 9 * 9)
                 || s.visual_job.as_ref().is_some_and(|p| distance(p.origin, origin) < 9 * 9)
                 || s.visual_sites.iter().any(|&site| distance(site, origin) < 9 * 9) {
@@ -2668,5 +2896,173 @@ mod civic_council_tests {
         assert_eq!(serde_json::to_string(&world).unwrap(), original);
         let recovered: World = serde_json::from_str(&original).unwrap();
         assert!(recovered.settlements[&id].council_priorities().is_empty());
+    }
+}
+
+#[cfg(test)]
+mod village_land_and_autonomy_tests {
+    use super::*;
+
+    fn founded() -> (World, u64) {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0, 70, 0], "owner").unwrap();
+        (world, id)
+    }
+
+    #[test]
+    fn town_autonomy_is_on_in_new_and_legacy_saves() {
+        let (world, id) = founded();
+        assert!(world.settlements[&id].autonomy_enabled);
+        let mut legacy = serde_json::to_value(&world).unwrap();
+        let village = legacy["settlements"].as_object_mut().unwrap()
+            .get_mut(&id.to_string()).unwrap().as_object_mut().unwrap();
+        village.remove("autonomy_enabled");
+        village.remove("player_parcels");
+        village.remove("treasury_coins");
+        let loaded: World = serde_json::from_value(legacy).unwrap();
+        loaded.validate().unwrap();
+        assert!(loaded.settlements[&id].autonomy_enabled);
+        assert!(loaded.settlements[&id].player_parcels.is_empty());
+    }
+
+    #[test]
+    fn already_paid_abstract_houses_become_real_work_backlog_once() {
+        let (mut world, id) = founded();
+        assert_eq!(world.settlements[&id].houses, 2);
+        assert_eq!(world.settlements[&id].pending_visual_buildings, 0);
+        assert!(world.prepare_village_housing(id).unwrap());
+        assert_eq!(world.settlements[&id].pending_visual_buildings, 2);
+        assert!(!world.prepare_village_housing(id).unwrap());
+        assert_eq!(world.settlements[&id].houses, 2);
+        world.validate().unwrap();
+        world.set_autonomy(id, false).unwrap();
+        assert!(!world.settlements[&id].autonomy_enabled);
+        assert!(!world.prepare_village_housing(id).unwrap());
+        world.set_autonomy(id, true).unwrap();
+        assert!(!world.prepare_village_housing(id).unwrap());
+    }
+
+    #[test]
+    fn land_purchase_is_paid_and_blocks_ordinary_village_construction() {
+        let (mut world, id) = founded();
+        let before = world.players["owner"].coins;
+        assert_eq!(world.buy_plot("owner", id, [20, 70, 0]), Ok(LAND_PRICE_COINS));
+        assert_eq!(world.players["owner"].coins, before - LAND_PRICE_COINS);
+        assert_eq!(world.settlements[&id].treasury_coins, LAND_PRICE_COINS);
+        assert_eq!(world.settlements[&id].player_parcels.len(), 1);
+        assert!(world.buy_plot("owner", id, [20, 70, 0]).is_err());
+        assert!(world.buy_plot("owner", id, [24, 70, 0]).is_err());
+        assert_eq!(world.players["owner"].coins, before - LAND_PRICE_COINS);
+        world.prepare_village_housing(id).unwrap();
+        assert!(world.start_visual_house(id, [20, 70, 0]).is_err());
+        assert!(world.start_farm(id, [20, 70, 0]).is_err());
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn commission_is_paid_once_built_in_player_parcel_and_not_public_housing() {
+        let (mut world, id) = founded();
+        world.buy_plot("owner", id, [20, 70, 0]).unwrap();
+        assert_eq!(world.players["owner"].coins, 15);
+        assert_eq!(world.commission_house("owner", id, [20, 70, 0]), Ok(COMMISSION_PRICE_COINS));
+        assert_eq!(world.players["owner"].coins, 0);
+        assert_eq!(world.settlements[&id].treasury_coins, LAND_PRICE_COINS + COMMISSION_PRICE_COINS);
+        assert_eq!(world.settlements[&id].quantity(Good::Wood), 4);
+        assert_eq!(world.settlements[&id].quantity(Good::Stone), 2);
+        assert!(world.commission_house("owner", id, [20, 70, 0]).is_err());
+        assert_eq!(world.settlements[&id].houses, 3);
+        assert_eq!(world.settlements[&id].pending_visual_buildings, 1);
+        world.validate().unwrap();
+        world.settlements.get_mut(&id).unwrap().visual_job.as_mut().unwrap().cursor =
+            hut_plan([20, 70, 0]).len();
+        world.finish_visual_house(id).unwrap();
+        assert_eq!(world.settlements[&id].public_huts(), 0);
+        assert_eq!(world.settlements[&id].physical_housing(), (0, 0, 10));
+        let saved = serde_json::to_string(&world).unwrap();
+        let recovered: World = serde_json::from_str(&saved).unwrap();
+        recovered.validate().unwrap();
+        assert_eq!(recovered.settlements[&id].public_huts(), 0);
+    }
+
+    #[test]
+    fn another_player_cannot_commission_on_owned_plot() {
+        let (mut world, id) = founded();
+        world.join("other", id).unwrap();
+        world.buy_plot("owner", id, [20, 70, 0]).unwrap();
+        let before = world.players["other"].coins;
+        assert!(world.commission_house("other", id, [20, 70, 0]).is_err());
+        assert_eq!(world.players["other"].coins, before);
+        assert!(!world.settlements[&id].player_parcels[0].commissioned);
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn no_implicit_claims_and_no_buildings_in_other_registered_land() {
+        let (mut world, id) = founded();
+        world.join("other", id).unwrap();
+        world.buy_plot("other", id, [20, 70, 0]).unwrap();
+        let before = serde_json::to_string(&world).unwrap();
+        assert!(world.check_visual_house_site(id, [20, 70, 0]).is_err());
+        assert!(world.start_farm(id, [20, 70, 0]).is_err());
+        assert!(world.commission_house("owner", id, [20, 70, 0]).is_err());
+        assert_eq!(serde_json::to_string(&world).unwrap(), before);
+    }
+
+    #[test]
+    fn commission_without_materials_never_takes_player_coins() {
+        let (mut world, id) = founded();
+        world.buy_plot("owner", id, [20, 70, 0]).unwrap();
+        world.settlements.get_mut(&id).unwrap().stock.insert(Good::Wood, 0);
+        let before = serde_json::to_string(&world).unwrap();
+        assert!(world.commission_house("owner", id, [20, 70, 0]).is_err());
+        assert_eq!(serde_json::to_string(&world).unwrap(), before);
+    }
+
+    #[test]
+    fn buying_finished_hut_transfers_title_and_funds_replacement() {
+        let (mut world, id) = founded();
+        world.players.get_mut("owner").unwrap().coins += 20;
+        world.settlements.get_mut(&id).unwrap().visual_sites.push([20, 70, 0]);
+        assert_eq!(world.settlements[&id].public_huts(), 1);
+        assert_eq!(world.buy_finished_house("owner", id, [20,70,0]),
+                   Ok(FINISHED_HUT_PRICE_COINS));
+        assert_eq!(world.players["owner"].coins, 10);
+        assert_eq!(world.settlements[&id].treasury_coins, FINISHED_HUT_PRICE_COINS);
+        assert_eq!(world.settlements[&id].public_huts(), 0);
+        assert_eq!(world.settlements[&id].physical_housing(), (0, 0, 10));
+        assert_eq!(world.settlements[&id].player_parcels[0].owner, "owner");
+        assert!(world.settlements[&id].player_parcels[0].commissioned);
+        let saved = serde_json::to_string(&world).unwrap();
+        assert!(world.buy_finished_house("owner", id, [20,70,0]).is_err());
+        assert_eq!(world.players["owner"].coins, 10);
+        assert_eq!(world.settlements[&id].treasury_coins, FINISHED_HUT_PRICE_COINS);
+        world.validate().unwrap();
+        let loaded: World = serde_json::from_str(&saved).unwrap();
+        loaded.validate().unwrap();
+
+        // A sold hut is NOT a public house. Existing abstract day() must
+        // replenish civic housing via normal resource consumption.
+        world.advance(1).unwrap();
+        assert_eq!(world.settlements[&id].houses, 3);
+        assert_eq!(world.settlements[&id].pending_visual_buildings, 1);
+        assert_eq!(world.settlements[&id].quantity(Good::Wood), 7);
+        assert_eq!(world.settlements[&id].quantity(Good::Stone), 4);
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn physical_housing_counts_only_public_huts() {
+        let (mut world, id) = founded();
+        let v = world.settlements.get_mut(&id).unwrap();
+        v.houses = 2;
+        v.player_parcels.push(PlayerParcel { origin: [20,70,0], owner: "owner".into(), commissioned: true });
+        v.visual_sites.push([20,70,0]);
+        v.visual_sites.push([40,70,0]);
+        assert_eq!(v.public_huts(), 1);
+        assert_eq!(v.physical_housing(), (3, 3, 7));
+        let mut ids: Vec<u64> = v.residents.iter().map(|r| r.id).collect();
+        ids.sort_unstable();
+        assert_eq!(v.home_slot(ids[0]).unwrap().site, [40,70,0]);
+        world.validate().unwrap();
     }
 }

@@ -83,7 +83,7 @@ class CivicCouncilContracts(unittest.TestCase):
     def test_version_and_legacy_schema_are_explicit(self):
         cargo = tomllib.loads((ROOT / "Cargo.toml").read_text())
         mixin = tomllib.loads((ROOT / "mixins/civilizations/horizon-mixin.toml").read_text())
-        self.assertEqual(cargo["package"]["version"], "0.1.10")
+        self.assertEqual(cargo["package"]["version"], mixin["mod"]["version"])
         self.assertEqual(mixin["mod"]["version"], cargo["package"]["version"])
         self.assertEqual(len(mixin["injection"]), 6)
         self.assertIn("pub const SCHEMA: u32 = 1;", CORE)

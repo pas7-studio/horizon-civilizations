@@ -178,3 +178,41 @@ them playable until the local Horizon client E2E proves the actual world state.
   native compile and first game E2E (GitHub Actions intentionally disabled).
 - [ ] Real autonomous follow-through with veto/consent and persistent
   civic decision history, after safety/ownership and local E2E.
+
+## P0 correction — actual autonomous settlements (v0.1.11, source-only)
+
+The former design required manual commands to spawn villagers and choose
+every hut/field, so it could never deliver Millénaire-style autonomous
+play. That was a **product gap**, not cosmetic polish.
+
+- [x] **Autonomy ON by default**, including legacy saves; no mandatory OP
+  permission for clear, unclaimed village-owned natural land.
+- [x] Automatically reserve and spawn 10 UUID-bound native villagers once
+  after safe loaded spawn locations are identified.
+- [x] Stage already-paid starter houses for actual construction and schedule
+  physical huts/irrigated farm on loaded, clear, collision-free sites.
+- [x] Existing linked builders/farmers act in daytime; physical writes remain
+  conditional on observed world blocks and saved cursors.
+- [x] Purchase private 5x5 land using actual player civic coins; transfer
+  proceeds to the village treasury; prevent NPC build/farm on owned land.
+- [x] Commission an NPC-built private hut with an explicit owner-only
+  contract (coin fee and consumed existing wood/stone).
+- [x] Separate public resident beds from private commissioned homes.
+- [x] Expose `/civ development NAME` state for in-game debugging.
+- [ ] Run local rustfmt, cargo, Python tests, pinned native compile and
+  disposable-world E2E; these are **NOT EXECUTED** with Actions disabled.
+- [ ] Auto-found villages through safe world generation/discovery, not just
+  automatic development of an existing village.
+- [ ] Functional bakery, woodcutting yard, stone quarry, trading post,
+  real resources and delivery/stock transactions. Physical wheat receipts
+  are currently observation-only.
+- [ ] Player parcel protections against vanilla multiplayer block edits
+  require a dedicated supported engine hook or interoperable claim system.
+- [ ] More home archetypes, blueprints, roads, expansions and town planning.
+
+- [x] Transfer title of already completed, **block-verified** village huts
+  to a player for 35 civic coins, credit village treasury, and free the
+  property from NPC public housing use.
+- [x] Restock public abstract housing via existing material-consuming
+  economic simulation after a private sale instead of minting free
+  replacement huts.

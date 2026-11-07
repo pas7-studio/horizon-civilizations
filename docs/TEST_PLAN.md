@@ -155,3 +155,78 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
 84. Visit the other dimension, relaunch, move the Horizon clock, and check
     that advisory commands remain read-only, stable on the same snapshot and
     do not trigger server actions or extra daily economy ticks.
+
+## P0 autonomous village & player land ownership (v0.1.11, local E2E)
+
+85. In a disposable natural-grass world, issue `/civ found Ashford`
+    **only**, then remain near the village with the relevant chunks loaded.
+    Do not run `/civ actors`, `/civ farm`, `/civ construct` or
+    `/civ approvehouse`. Within several native planning ticks, the town
+    should attempt to spawn ten linked villagers on natural empty ground.
+    Verify UUIDs using `/civ roster Ashford` and save/reload.
+86. `/civ development Ashford` must show `autonomy=ON` on a new and on a
+    legacy save missing the autonomy field, and identify current physical
+    work instead of showing only abstract house counters.
+87. Farmers should automatically reserve and cultivate a real 3x3 irrigated
+    wheat field during the daytime. Verify actual farmland, central water,
+    growing wheat and that harvesting stays observation-only; no duplicated
+    stock or player items are allowed.
+88. A builder with a linked UUID must walk to a naturally selected 5x5
+    plot and gradually build a cobble/oak hut through the existing
+    conditional block pathway. At night physical edits must pause; they
+    resume next shift without restarting the build.
+89. Repeat after restarting during NPC spawning, partial hut work and
+    farmer planting. UUIDs must never be blindly respawned; cursors and
+    observed blocks must recover without overwriting foreign blocks.
+90. Before automatic site selection, place foreign blocks at likely ring
+    plot locations. The village must reject them and choose another safe
+    site or keep trying later, **never** clear those blocks automatically.
+91. Earn or use starting civic coins, join the village, stand at the center
+    of a clear flat 5x5 site, and run `/civ buyplot Ashford`. A valid purchase
+    costs 10 coins and increases village treasury by exactly 10; repeat
+    purchase/overlapping plots and insufficient coin attempts must fail.
+92. After buying the parcel, let the autonomous planner run. It must
+    choose other sites for both farm and hut, while the purchased square
+    remains clear and reserved for the player. Verify /civ plots Ashford.
+93. On a bought **empty** parcel, run `/civ commission Ashford` with
+    15 more coins available and 8 wood/6 stone available in village
+    simulation. Both coin fee and materials are consumed once and
+    a single private hut job is recorded. A second commission, foreign
+    player's commission or unaffordable commission must fail without side
+    effects.
+94. Let the private hut complete; it must remain private (no assigned NPC
+    beds), survive save/reload, and still be excluded from automatic
+    construction on its owner's parcel. Player can also build their
+    own vanilla structure instead of ordering a hut.
+95. In a disposable claimed plot, replace a natural block with a foreign
+    structure before commission. The mod must reject/stop its physical
+    build rather than overwrite the player's materials.
+96. Validate split dimensions, far world coordinates, chunk unloading,
+    player plot ownership by UUID, multiple settlements, and paid treasury
+    transfers after world restart. No cross-dimensional claim leakage.
+97. In a disposable world only, toggle `/civ autonomy Ashford off` and
+    verify no **new** plots are scheduled; on must restore scheduling.
+    Existing saved construction is not silently deleted or refunded.
+98. Run the same source on the pinned native Horizon client, collect logs
+    and gameplay screenshots: successful Rust/Python tests alone do not
+    demonstrate live civilization behavior.
+
+## Completed village property sales (v0.1.11)
+
+99. With a genuine completed public hut and at least 35 civic coins,
+    stand within 12 blocks of it and run `/civ buyhouse Ashford`.
+    The loaded hut must match its full native cobble/oak blueprint.
+    A successful purchase transfers 35 player coins to the village
+    treasury and persists a private player plot at the hut origin.
+100. Run the command a second time, from another player's identity,
+     or while the hut is damaged or unloaded. All failed operations
+     must leave both player balance and civic treasury unchanged.
+101. After purchase, /civ homes Ashford must exclude the sold hut
+     and the owner's land must be protected against subsequent village
+     construction/farming. NPCs with lost housing should return to
+     available public beds or commons, not remain assigned to the
+     sold house.
+102. Advance one ordinary simulated economic day in a disposable
+     world with available wood and stone. The city should work toward
+     replacing private housing with a **material-paid** public house,
+     rather than counting the sold structure as available village beds.

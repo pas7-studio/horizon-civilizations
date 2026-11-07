@@ -25,8 +25,10 @@ Millenaire code or Minecraft assets. Original project code is MIT-licensed.
 Not available yet: warehouse credit from physical harvests, physical mining, generalized building templates,
 full trade UI, courts/dynasties, physical war, crash-safe item ledger. The real wheat plot
 and harvest receipts are observation-only, with no item drops or stock credit.
-Only **operator-approved** starter huts are physically constructed; normal housing and all warfare
-remain abstract. Do not use this build on an important world until native build and E2E pass.
+The newest stacked branch **automatically** starts native villager spawning,
+physical wheat-field construction and starter-hut builds after a settlement
+exists; the older main branch does not contain this. Player-owned lots are
+excluded from all NPC-initiated plot selection. Do not use this build on an important world until native build and E2E pass.
 
 ## Required environment
 
@@ -45,7 +47,7 @@ python3 tools/package.py
 python3 tools/verify_static.py
 ```
 
-Packaging produces `target/civilizations-0.1.10.hnmod` (source-only; the
+Packaging produces `target/civilizations-0.1.11.hnmod` (source-only; the
 launcher compiles it). The template is based on the **native hook-point**
 pattern used by the official Horizon SMP mod. The compatibility pin is in
 `compatibility.json`; the source was inspected but not compiled in this workspace.
@@ -76,7 +78,7 @@ to compile/trust the native mod before the game can run.
 
 1. Install the official Horizon launcher from <https://playhorizon.dev/>.
 2. Create a separate test instance and back up the world.
-3. Put `civilizations-0.1.10.hnmod` in that instance's `horizon-native-mods/`
+3. Put `civilizations-0.1.11.hnmod` in that instance's `horizon-native-mods/`
    directory. The native build requires the launcher's explicit trust action.
 4. Let the launcher **build** the modded game and review build logs. If you see
    `target not found`, hook schema incompatibility, or Rust errors, stop: the
@@ -112,6 +114,11 @@ to compile/trust the native mod before the game can run.
 | `/civ schedule NAME`, `/civ homes NAME` | All | Day/night shift and completed-hut physical allocations |
 | `/civ council NAME`, `/civ forecast NAME` | All | Read-only needs and three-day abstract economic outlook |
 | `/civ survey NAME` | All | Propose up to five loaded, unoccupied building sites; never reserves land |
+| `/civ development NAME` | All | Inspect default-on NPC population, real farm/building activity and blockers |
+| `/civ plots NAME` | All | See your bought land and privately owned structures |
+| `/civ buyplot NAME` | Joined players | Purchase a clear 5x5 village parcel for 10 civic coins |
+| `/civ buyhouse NAME` | Joined players | Purchase an intact finished public hut for 35 civic coins |
+| `/civ commission NAME` | Joined plot owners | Pay 15 civic coins + village materials for an NPC-built private hut |
 | `/civ construction NAME`, `/civ farming NAME`, `/civ harvests NAME` | All | Inspect physical build/farm progress and visual-only harvest receipts |
 | `/civ join NAME` | All | Join a settlement |
 | `/civ title`, `/civ promote` | All | View rank/coins; promote if eligible |
@@ -121,6 +128,7 @@ to compile/trust the native mod before the game can run.
 | `/civ actors NAME` | Operators lvl 2 | Spawn named vanilla villager actors once |
 | `/civ construct NAME` | Operators lvl 2 | Approve a safe natural site at your feet for a physical 5x5 hut; requires a pending simulated house |
 | `/civ approvehouse NAME SLOT Y` | Operators lvl 2 | Confirm one numbered housing proposal near the selected plot; real blocks rechecked |
+| `/civ autonomy NAME on/off` | Operators lvl 2 | Optional pause/resume for new NPC site planning (ON by default) |
 | `/civ farm NAME`, `/civ recoverfarm NAME` | Operators lvl 2 | Approve visual crop patch or preflight recovery |
 | `/civ day [1..30]` | Operators lvl 2 | Advance abstract simulation manually |
 | `/civ war A B`, `/civ peace A B` | Operators lvl 2 | Strategic-only conflict state |
@@ -334,3 +342,96 @@ Run these from the **v0.1.10 stacked feature branch** when ready. A normal
 all variants may write generated files under `target/`. None trigger or
 reenable GitHub Actions. Even a successful local executable build does **not**
 prove in-world gameplay safety.
+
+## v0.1.11 — autonomous towns and player-owned land (source milestone)
+
+The foundation of this mod is **villages developing independently**. Every
+new village, and every older saved village without an explicit setting,
+starts with `autonomy_enabled=true`. There is no mandatory OP construction
+approval for building on **free, unclaimed, empty natural terrain**.
+
+After an initial settlement is founded, the native level tick automatically:
+
+1. Locates ten safe loaded, air-filled spawn points on natural ground near
+   its center and **one-shot summons UUID-linked villager actors**, saving the
+   spawn reservation before the first entity. Partial/failed spawning never
+   retriggers a duplicate batch; inspect `/civ roster NAME`.
+2. Converts already-paid abstract starter houses into a bounded physical
+   build backlog **without minting new houses or materials**.
+3. Starts a real 3×3 irrigated wheat field when linked farmers exist, and
+   a real 5×5 cobblestone/oak hut whenever a linked builder, building budget
+   and missing public housing exist. Each candidate is checked against
+   loaded natural ground, air, *other village plots*, and purchased player
+   parcels. It never force-loads chunks, clears a player's obstacles or
+   teleports workers.
+4. Uses the existing native worker/loaded-world day-shift tick to place
+   expected Minecraft blocks one at a time. Farmers tend real mature crops;
+   physical wheat **still does not credit the abstract warehouse**.
+
+This is *not yet* automatic worldgen of entirely new towns or advanced
+crafting industries. Current physical structures are starter huts plus
+working wheat fields; mining, bakeries, markets, roads and hauling still need
+actual native gameplay implementation.
+
+### Player property and construction commissions
+
+A joined player can buy a clear **5×5** parcel 12–80 blocks from a
+village center. From the plot's center, while the natural land is still
+clear, run:
+
+```
+/civ buyplot Ashford
+/civ plots Ashford
+/civ commission Ashford
+/civ development Ashford
+```
+
+- A parcel costs **10 civic coins** and is permanently recorded by the
+  authenticated player's UUID in the same world JSON. NPC auto-building,
+  auto-farming and ordinary village-approved structures cannot overlap it.
+- After buying, the player may build **their own** vanilla structures on
+  the lot. No NPC construction is required.
+- If the player instead wants an NPC-built starter hut, stand on their
+  *empty* parcel and use `/civ commission Ashford`. The job costs
+  **15 additional civic coins** and consumes **8 village wood + 6 stone**
+  from the existing abstract stock. The coin payments move into the
+  village's persisted civic treasury, not a phantom free balance.
+- Commissioned player huts stay **private**, never counted as available
+  bedrooms for village NPCs. The player can inspect the project with
+  `/civ construction Ashford`.
+- `/civ development Ashford` shows autonomy, loaded actors, current
+  physical hut/field jobs, unbuilt housing demand, player parcels and
+  treasury. OPs can optionally pause *new* planning with
+  `/civ autonomy Ashford off` and resume with `... on`, but **ON is default**.
+
+**Important boundaries:** purchased plots protect against construction
+attempted **by this mod**; they are not vanilla multiplayer land claims or
+a global anti-grief plugin. Another player or mod may still edit blocks unless
+an independent protection mechanism is installed. The native block preflight
+and conditional edits refuse replacing unfamiliar player-built blocks.
+Parcels and commissions survive a normal save/restart, but the game still
+needs actual local Horizon E2E to prove spawning, navigation, building,
+growth, blocked construction and reload. Test only in disposable worlds.
+
+### Buy an existing real building
+
+To buy a **completed village-built hut**, first accumulate at least **35
+civic coins** (e.g. trade with the village). Stand within 12 blocks of
+that actual building and run:
+
+```
+/civ buyhouse Ashford
+/civ plots Ashford
+```
+
+The native adapter verifies *every* real loaded block of the
+cobblestone-and-oak hut before processing payment. The authenticated
+buyer becomes its private owner, receives the 5x5 plot, and the village
+treasury receives 35 coins. That hut stops being public NPC housing;
+residents return to other public huts or their commons. The next
+ordinary simulated economic days can replenish public housing using
+normal wood/stone consumption, not free stock generation.
+
+This purchases only a completed physical hut created by the mod. It
+does not purchase arbitrary vanilla or third-party player structures.
+Owners can build on their parcels using the usual game controls.

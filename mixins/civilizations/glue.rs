@@ -2,7 +2,7 @@
 // translates server hooks, commands, inventory changes, and native NPC spawns.
 use crate::game::{
     civilizations_core::{farm_plan, hut_plan, inspect_farm, inspect_hut, is_ground,
-        BuildInspection, DailyPhase, FarmBlock, FarmDecision, FarmStage, Good, HomeSlot, Job,
+        BuildInspection, DailyPhase, FarmBlock, FarmDecision, FarmStage, Good, HomeSlot, Job, VisualBuildJob,
         World, inspect_home, HOUSING_PLOT_OFFSETS, MAX_HOUSING_SURVEY_RESULTS,
         MAX_SIM_DAYS},
     native_mobs::NativeSpawn,
@@ -149,6 +149,7 @@ pub fn register(commands: &mut Vec<NativeCommand>) {
         "civ roster <name:word>", "civ schedule <name:word>",
         "civ homes <name:word>", "civ survey <name:word>",
         "civ council <name:word>", "civ forecast <name:word>",
+        "civ plots <name:word>", "civ development <name:word>",
         "civ construction <name:word>", "civ farming <name:word>",
         "civ harvests <name:word>",
         "civ join <name:word>", "civ title", "civ promote", "civ history",
@@ -161,7 +162,9 @@ pub fn register(commands: &mut Vec<NativeCommand>) {
         "civ reconcile <name:word>",
         "civ day [days:integer]", "civ construct <name:word>",
         "civ approvehouse <name:word> <slot:integer> <y:integer>",
+        "civ autonomy <name:word> <mode:word>",
         "civ farm <name:word>", "civ recoverfarm <name:word>",
+        "civ buyplot <name:word>", "civ buyhouse <name:word>", "civ commission <name:word>",
         "civ war <from:word> <to:word>",
         "civ peace <from:word> <to:word>",
     ] {
@@ -556,7 +559,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
     let actor = format!("{:032x}", player.uuid);
     let action = args.next().unwrap_or("help");
     if action == "help" {
-        reply(game, "Civilizations: /civ list | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, day [days], construct <name>, approvehouse <name> <slot> <y>, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
+        reply(game, "Civilizations: /civ list | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | buyplot <name> | buyhouse <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, day [days], construct <name>, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
         return;
     }
     if action == "list" {
@@ -565,6 +568,61 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             items.push(format!("#{} {} [{}] pop={} houses={}", s.id, s.name, s.culture, s.population(), s.houses));
         }
         reply(game, if items.is_empty() { "No settlements yet. OP: /civ found Ashford".into() } else { items.join(" | ") });
+        return;
+    }
+    if action == "development" {
+        let name = args.next().unwrap_or("");
+        let Some(village) = world.by_name(name) else {
+            error(game, "unknown settlement: /civ development <village>");
+            return;
+        };
+        let linked = loaded_actors(game, world, village.id);
+        let (_, _, homeless) = village.physical_housing();
+        let note = if !village.actors_spawned {
+            "waiting for ten safe loaded natural-ground villager spawn sites"
+        } else if linked.is_empty() {
+            "no UUID-linked villagers loaded; return to village or inspect /civ roster, never blindly respawn"
+        } else if village.farm.is_none() {
+            "field not yet reserved; the loaded farmer and a clear natural 3x3 plot are required"
+        } else if village.visual_job.is_none() && village.pending_visual_buildings == 0 && homeless > 0 {
+            "waiting for paid abstract housing inventory; future economic days may prepare houses"
+        } else {
+            "workers act during daylight on loaded clear plots; follow construction/farming progress"
+        };
+        let job = village.visual_job.as_ref().map(|j| format!(
+            "building at {:?}: {}/{} blocks, blocked={}", j.origin,
+            j.cursor, hut_plan(j.origin).len(), j.blocked
+        )).unwrap_or_else(|| "no current build site".to_owned());
+        let field = village.farm.as_ref().map(|farm| format!(
+            "field at {:?}: {:?}, blocked={}, cycles={}", farm.origin,
+            farm.stage, farm.blocked, farm.completed_cycles
+        )).unwrap_or_else(|| "no physical crop field".to_owned());
+        reply(game, format!(
+            "{} development: autonomy={} | spawn reserved={} | UUID-linked actors loaded {}/{} | {} finished PUBLIC huts, {} still without housing, {} abstract huts ready | {} | {} | {} player-owned parcels | treasury {} civic coins. Diagnostic: {}.",
+            village.name,
+            if village.autonomy_enabled { "ON" } else { "OFF" },
+            village.actors_spawned, linked.len(), village.population(), village.public_huts(), homeless,
+            village.pending_visual_buildings, job, field, village.player_parcels.len(),
+            village.treasury_coins, note
+        ));
+        return;
+    }
+    if action == "plots" {
+        let name = args.next().unwrap_or("");
+        let Some(village) = world.by_name(name) else {
+            error(game, "unknown settlement: /civ plots <name>");
+            return;
+        };
+        let plots: Vec<String> = village.player_parcels.iter()
+            .filter(|plot| plot.owner == actor).take(32)
+            .map(|plot| format!(
+                "{:?} ({})", plot.origin, if plot.commissioned { "private hut owned or commissioned" } else { "empty private parcel; build freely" }
+            )).collect();
+        reply(game, format!(
+            "{} owns {} purchased plots; {} parcels registered in {}. {}. These protect against CIVILIZATIONS NPC edits only, not external players or mods.",
+            actor, plots.len(), village.player_parcels.len(), village.name,
+            if plots.is_empty() { "No purchased parcels".to_owned() } else { plots.join(" | ") }
+        ));
         return;
     }
     if action == "council" {
@@ -804,6 +862,106 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
     let previous = world.clone();
     let mut already_saved = false;
     let result: Result<String, String> = match action {
+        "autonomy" if player.permission >= 2 => (|| {
+            let name = args.next().ok_or("usage: /civ autonomy <village> on|off")?;
+            let mode = args.next().ok_or("specify on or off")?;
+            let enabled = match mode {
+                "on" => true, "off" => false,
+                _ => return Err("use on or off".into()),
+            };
+            let v = previous.by_name(name).ok_or("unknown settlement")?;
+            state.world.as_mut().unwrap().set_autonomy(v.id, enabled)?;
+            Ok(format!(
+                "{} autonomous physical development: {}. All villages start ON by default; off pauses new plans but not previously committed jobs.",
+                v.name, if enabled { "ON" } else { "OFF" }
+            ))
+        })(),
+        "buyplot" => (|| {
+            let name = args.next().ok_or("usage: /civ buyplot <village>")?;
+            let village = previous.by_name(name).ok_or("unknown settlement")?;
+            if village.dimension != player.dimension {
+                return Err("purchase the plot from within its settlement dimension".into());
+            }
+            if !player.position.iter().all(|x| x.is_finite()) {
+                return Err("invalid player position".into());
+            }
+            let origin = player.position.map(|x| x.floor() as i32);
+            // A land purchase is committed as a real persistent parcel; the
+            // world must have a clear loaded 5x5 footprint at purchase time.
+            check_empty_hut_site(game, &village.dimension, origin)?;
+            let price = state.world.as_mut().unwrap().buy_plot(&actor, village.id, origin)?;
+            Ok(format!(
+                "Bought a protected 5x5 plot at {:?} in {} for {} civic coins. Build your own blocks there or use /civ commission {} while standing on this lot. /civ plots {}",
+                origin, village.name, price, village.name, village.name
+            ))
+        })(),
+        "buyhouse" => (|| {
+            let name = args.next().ok_or("usage: /civ buyhouse <village>")?;
+            let village = previous.by_name(name).ok_or("unknown settlement")?;
+            if village.dimension != player.dimension {
+                return Err("buy a house from its settlement dimension".into());
+            }
+            if !player.position.iter().all(|x| x.is_finite()) {
+                return Err("invalid player position".into());
+            }
+            let mut available: Vec<_> = village.visual_sites.iter()
+                .filter(|site| !village.player_parcels.iter().any(|plot| {
+                    crate::game::civilizations_core::near_plot(plot.origin, **site)
+                }))
+                .filter_map(|site| {
+                    let dx = f64::from(site[0]) + 0.5 - player.position[0];
+                    let dz = f64::from(site[2]) + 0.5 - player.position[2];
+                    let dy = (f64::from(site[1]) - player.position[1]).abs();
+                    (dx * dx + dz * dz <= 12.0 * 12.0 && dy <= 8.0)
+                        .then_some((dx * dx + dz * dz, *site))
+                }).collect();
+            available.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let (_, origin) = available.first().copied().ok_or(
+                "stand beside an available, completed village hut within 12 blocks"
+            )?;
+            // A JSON registry alone does not prove a real structure exists.
+            // Confirm EVERY hut block in the loaded world, no substitutions.
+            let inspection = inspect_hut(&VisualBuildJob {
+                origin, cursor: hut_plan(origin).len(), blocked: false
+            }, |pos| world_block(game, &village.dimension, pos));
+            if inspection != BuildInspection::Complete {
+                return Err("hut has missing/unloaded/modified blocks; no payment taken".into());
+            }
+            let price = state.world.as_mut().unwrap().buy_finished_house(&actor, village.id, origin)?;
+            Ok(format!(
+                "Purchased the physical hut at {:?} from {} for {} civic coins. It is now YOUR property and no longer public NPC housing. /civ plots {}",
+                origin, village.name, price, village.name
+            ))
+        })(),
+        "commission" => (|| {
+            let name = args.next().ok_or("usage: /civ commission <village>")?;
+            let village = previous.by_name(name).ok_or("unknown settlement")?;
+            if village.dimension != player.dimension {
+                return Err("commission construction in the settlement's own dimension".into());
+            }
+            if !player.position.iter().all(|x| x.is_finite()) {
+                return Err("invalid player position".into());
+            }
+            let mut eligible = village.player_parcels.iter()
+                .filter(|plot| plot.owner == actor && !plot.commissioned)
+                .filter_map(|plot| {
+                    let dx = f64::from(plot.origin[0]) + 0.5 - player.position[0];
+                    let dz = f64::from(plot.origin[2]) + 0.5 - player.position[2];
+                    let dy = (f64::from(plot.origin[1]) - player.position[1]).abs();
+                    (dx * dx + dz * dz <= 6.0 * 6.0 && dy <= 6.0)
+                        .then_some((dx * dx + dz * dz, plot.origin))
+                }).collect::<Vec<_>>();
+            eligible.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let (_, site) = eligible.first().copied().ok_or(
+                "stand on a bought, uncommissioned plot; use /civ plots <village>"
+            )?;
+            check_empty_hut_site(game, &village.dimension, site)?;
+            let price = state.world.as_mut().unwrap().commission_house(&actor, village.id, site)?;
+            Ok(format!(
+                "Commissioned your own 5x5 hut at {:?} for {} civic coins, 8 village wood and 6 stone. A UUID-linked builder will physically build during work hours. /civ construction {}",
+                site, price, village.name
+            ))
+        })(),
         "recoverfarm" if player.permission >= 2 => (|| {
             let name = args.next().ok_or("usage: /civ recoverfarm <name>")?;
             let settlement = previous.by_name(name).ok_or("unknown settlement")?;
@@ -1052,7 +1210,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
                 Ok(format!("Spawned and UUID-linked {spawned} villagers. Reopen world and verify /civ roster {name}."))
             }
         })(),
-        "found" | "day" | "war" | "peace" | "actors" | "construct" | "approvehouse" | "farm" | "recoverfarm" | "reconcile" => Err("requires server operator level 2".into()),
+        "found" | "day" | "war" | "peace" | "actors" | "construct" | "approvehouse" | "autonomy" | "farm" | "recoverfarm" | "reconcile" => Err("requires server operator level 2".into()),
         _ => Err("unknown subcommand. Use /civ help".into()),
     };
     match result {
@@ -1071,6 +1229,141 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
     }
 }
 
+/// World-JSON operations commit before any external physical side effect.
+fn save_autonomous(state: &mut ActiveWorld, prior: World) -> Result<(), String> {
+    if let Err(error) = save(state) {
+        state.world = Some(prior);
+        return Err(format!("persistence: {error}"));
+    }
+    Ok(())
+}
+
+/// Try a bounded list of already-loaded, open, natural-ground positions.
+/// Never summons a villager if even one of the ten positions is unsafe.
+fn safe_actor_spawn_points(
+    game: &Game<'_>, village: &crate::game::civilizations_core::Settlement
+) -> Vec<[f64; 3]> {
+    let mut spots = Vec::new();
+    for dz in [-6_i32, -4, -2, 0, 2, 4, 6] {
+        for dx in [-6_i32, -4, -2, 0, 2, 4, 6] {
+            let Some(x) = village.center[0].checked_add(dx) else { continue; };
+            let Some(z) = village.center[2].checked_add(dz) else { continue; };
+            for dy in [0_i32, 1, -1, 2, -2] {
+                let Some(y) = village.center[1].checked_add(dy) else { continue; };
+                let Some(ground_y) = y.checked_sub(1) else { continue; };
+                let Some(head_y) = y.checked_add(1) else { continue; };
+                if world_block(game, &village.dimension, [x, ground_y, z])
+                        .is_some_and(|block| is_ground(&block))
+                    && world_block(game, &village.dimension, [x, y, z]).as_deref() == Some("minecraft:air")
+                    && world_block(game, &village.dimension, [x, head_y, z]).as_deref() == Some("minecraft:air") {
+                    spots.push([f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5]);
+                    break;
+                }
+            }
+            if spots.len() == 10 { return spots; }
+        }
+    }
+    Vec::new()
+}
+
+/// Vanilla villagers are UUID-bound, once, after a persistent one-shot
+/// reservation. A partial spawn NEVER triggers an automatic second batch.
+fn auto_spawn_villagers(
+    game: &mut Game<'_>, state: &mut ActiveWorld, village_id: u64
+) -> Result<(), String> {
+    let village = state.world.as_ref().unwrap().settlements
+        .get(&village_id).ok_or("unknown settlement")?.clone();
+    if village.actors_spawned || !village.autonomy_enabled { return Ok(()); }
+    let positions = safe_actor_spawn_points(game, &village);
+    if positions.len() != 10 { return Ok(()); } // unloaded / obstructed: retry later
+    let prior = state.world.as_ref().unwrap().clone();
+    state.world.as_mut().unwrap().settlements
+        .get_mut(&village_id).unwrap().actors_spawned = true;
+    save_autonomous(state, prior)?; // mandatory before first entity is created
+    for (resident, position) in village.residents.iter().take(10).zip(positions) {
+        let options = NativeSpawn {
+            name: Some(village.actor_name(resident)),
+            ..NativeSpawn::default()
+        };
+        let entity = game.native_spawn_mob(
+            &village.dimension, "minecraft:villager", position, &options
+        ).ok_or_else(|| "automatic villager spawn refused; reserved, no blind respawn".to_owned())?;
+        let uuid = game.native_entity(entity)
+            .and_then(|handle| game.native_entity_uuid(handle))
+            .ok_or("automatic spawn UUID unavailable; inspect/reconcile manually")?;
+        state.world.as_mut().unwrap().bind_actor(village.id, resident.id, uuid)?;
+        // If persistence fails, halt all future mutations rather than
+        // creating another NPC with a new UUID after restart.
+        save(state).map_err(|e| format!("persistence: {e}"))?;
+    }
+    log::info!("[civilizations] auto-spawned 10 persistent villagers for {}", village.name);
+    Ok(())
+}
+
+/// One bounded planning step per 100 loaded level ticks. NPCs choose free
+/// natural plots *inside their settlement radius* and start actual physical
+/// jobs. Paid player parcels are hard exclusions in BOTH domain paths.
+fn autonomous_village_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), String> {
+    let dimension = game.dim.id().to_owned();
+    let enabled: Vec<u64> = state.world.as_ref().unwrap().settlements.values()
+        .filter(|v| v.dimension == dimension && v.autonomy_enabled)
+        .map(|v| v.id).collect();
+    if enabled.is_empty() { return Ok(()); }
+    let index = (state.physical_ticks / 100) as usize % enabled.len();
+    let id = enabled[index];
+    if !state.world.as_ref().unwrap().settlements[&id].actors_spawned {
+        return auto_spawn_villagers(game, state, id);
+    }
+    let prior = state.world.as_ref().unwrap().clone();
+    if state.world.as_mut().unwrap().prepare_village_housing(id)? {
+        save_autonomous(state, prior)?;
+    }
+    let village = state.world.as_ref().unwrap().settlements[&id].clone();
+    let actors = loaded_actors(game, state.world.as_ref().unwrap(), id);
+    let has_farmer = village.residents.iter().any(|r| r.alive && r.job == Job::Farmer
+        && actors.iter().any(|(known, _)| *known == r.id));
+    let has_builder = village.residents.iter().any(|r| r.alive && r.job == Job::Builder
+        && actors.iter().any(|(known, _)| *known == r.id));
+    let need_field = has_farmer && village.farm.is_none();
+    let need_hut = has_builder && village.visual_job.is_none()
+        && village.pending_visual_buildings > 0 && village.physical_housing().2 > 0;
+    if !need_field && !need_hut { return Ok(()); }
+
+    for [dx, dz] in crate::game::civilizations_core::HOUSING_PLOT_OFFSETS {
+        let Some(x) = village.center[0].checked_add(dx) else { continue; };
+        let Some(z) = village.center[2].checked_add(dz) else { continue; };
+        for dy in [0_i32, 1, -1, 2, -2] {
+            let Some(y) = village.center[1].checked_add(dy) else { continue; };
+            let site = [x, y, z];
+            // First establish a functional field. Farms must be harvested
+            // by a loaded nearby farmer; their cycles do NOT mint stock.
+            if need_field && check_empty_farm_site(game, &dimension, site).is_ok() {
+                let mut trial = state.world.as_ref().unwrap().clone();
+                if trial.start_farm(id, site).is_ok() {
+                    let prior = state.world.as_ref().unwrap().clone();
+                    state.world.as_mut().unwrap().start_farm(id, site)?;
+                    save_autonomous(state, prior)?;
+                    log::info!("[civilizations] {} autonomously reserved crop field at {:?}", village.name, site);
+                    return Ok(());
+                }
+            }
+            if need_hut && check_empty_hut_site(game, &dimension, site).is_ok() {
+                let can_build = state.world.as_ref().unwrap()
+                    .check_visual_house_site(id, site).is_ok();
+                if can_build {
+                    let prior = state.world.as_ref().unwrap().clone();
+                    state.world.as_mut().unwrap().start_visual_house(id, site)?;
+                    save_autonomous(state, prior)?;
+                    log::info!("[civilizations] {} autonomously reserved real hut at {:?}", village.name, site);
+                    return Ok(());
+                }
+            }
+        }
+    }
+    // No clear loaded plot; never clear players' trees, fences or walls.
+    Ok(())
+}
+
 /// Runs after an authoritative level tick: the selected dimension and its
 /// loaded chunks are guaranteed to be the ones inspected/modified here.
 pub fn level_tick(game: &mut Game<'_>, dimension: &str) {
@@ -1083,6 +1376,20 @@ pub fn level_tick(game: &mut Game<'_>, dimension: &str) {
     let state = guard.as_mut().expect("active initialized");
     if state.problem.is_some() || state.world.is_none() { return; }
     state.physical_ticks = state.physical_ticks.saturating_add(1);
+    // Villages start their own visible work by default, without needing
+    // OP construction/field/spawn commands. The planner is bounded and
+    // *never* edits a block without the existing worker-aware tick.
+    if state.physical_ticks % 100 == 0 {
+        if let Err(error) = autonomous_village_step(game, state) {
+            log::warn!("[civilizations] autonomous planning stopped: {error}");
+            // A failed identity or persistence step must never cause
+            // repeated spawning or untracked world mutations.
+            if error.starts_with("persistence:") || error.contains("UUID") {
+                state.problem = Some(format!("automatic village action halted: {error}"));
+                return;
+            }
+        }
+    }
     // Navigation is bounded and only touches loaded actors in the current
     // dimension; it is not an offscreen tick or a physical gathering action.
     if state.physical_ticks % 20 == 0 {

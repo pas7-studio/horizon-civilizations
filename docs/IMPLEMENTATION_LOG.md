@@ -164,3 +164,31 @@
   newer sibling test modules) to `civilizations_core::` (all nested core tests).
 - Exposed the top council concern in UUID-bound resident right-click text.
 - Extended Python contracts to guard the dialogue and local validation path.
+
+## 2026-11-07 — default-on autonomous village P0 correction (v0.1.11)
+
+- Identified manual-only actors, physical hut and farm commands as the
+  primary reason the mod did not feel like a living settlement.
+- Autonomy is ON on new villages and old saves (serde default true), with
+  a per-village operator pause for new site planning.
+- Added a bounded native level-tick starter pipeline: safe preflight of
+  ten natural/air spawn positions, one-shot persisted UUID-bound villager
+  spawn, already-paid abstract house backlog, and real 3x3 farm / 5x5
+  hut site scheduling using loaded-world inspections and existing worker AI.
+- Added 5x5 player land ownership in world JSON, overlapping-mod-construction
+  exclusions and paid private hut commissions on owned parcels.
+- Player civic coin purchases and commissions transfer to a persistent
+  village treasury. Private homes are excluded from public NPC housing.
+- Exposed read-only in-game /civ development NAME and /civ plots NAME.
+- Existing building and farm conditional writes continue to refuse foreign
+  blocks, so the planner does not get a terrain-clearing privilege.
+- Added Rust domain and Python structural contracts; local Rust/native
+  compilation and actual playable E2E remain pending, GitHub Actions OFF.
+
+- Added real completed-hut purchase: 35 civic coins to settlement
+  treasury, UUID-owned private land+building, native full-block
+  verification, and public NPC housing eviction/recalculation.
+- Fixed abstract public housing target to exclude sold/commissioned
+  private houses, permitting material-paid replacement over time.
+- Added additional Rust ownership/economy regression and Python source
+  assertions, plus manual gameplay cases 99–102.
