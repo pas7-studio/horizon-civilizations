@@ -900,3 +900,47 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
 271. With all real source stages passing, the previous strict native
      client executable, SHA-256 and manual game-world gates still apply.
      This ordering improvement is not native compilation evidence.
+
+## Partial village spawn, UUID ownership and guarded recovery (unreleased)
+
+272. Use the current stacked branch with real local `cargo test`,
+     full Python unittest, native Horizon build and a fresh
+     disposable world. Record commit SHA, binary hash and logs.
+273. Create a village on natural loaded ground. Confirm all ten
+     initial NPCs receive distinct saved UUIDs. Stop/restart;
+     no duplicate batch. `/civ roster NAME` displays resident IDs.
+274. Simulate native refusal halfway through the first ten actor
+     spawns. `actors_spawned` remains reserved, with only successfully
+     UUID-linked residents saved; no automatic duplicate respawn.
+275. OP: `/civ reconcile NAME` before any recovery. If an original
+     tagged or legacy villager still exists, bind it once by UUID.
+     The existing NPC should remain intact and no new entity spawn.
+276. On an actually missing resident, use `/civ roster NAME` to
+     identify its numeric ID. Ensure the 96-block native neighborhood
+     is fully loaded and no matching entity exists. Run
+     `/civ recoveractor NAME RESIDENT_ID attempt` within 32 blocks
+     of the center, as OP level 2, in the correct dimension.
+277. The recovery command first persists `actor_recovery_issued`,
+     then issues a SINGLE native villager spawn at a genuinely clear
+     natural ground position, reads the real UUID, persists binding
+     and removes pending marker. Verify no other resident changes.
+278. Crash AFTER reservation but BEFORE native spawn. Reload
+     and verify a repeated recovery call is refused, no native
+     duplicate appears and original linked NPCs still work.
+279. Crash AFTER entity creation but BEFORE UUID save.
+     Do NOT respawn. Load the same chunk, run OP reconcile;
+     the unique original named villager binds to its real UUID
+     and clears the pending marker without creating another NPC.
+280. Block chunks in the 96-block scan, wrong dimension,
+     non-OP player, >32-block operator distance, missing
+     'attempt' confirmation or occupied site. Each refusal must
+     occur BEFORE saving recovery reservation or native spawning.
+281. Attempt recovery on already linked, dead, unknown or
+     previously reserved resident ID. No second native entity is
+     created. A saved invalid pending ID must fail world validation.
+282. Confirm ordinary village autonomy still starts with ten safe
+     surveyed positions, and 1–9 safe positions never starts a
+     new full batch. Single-target recovery can use one safe
+     unoccupied natural spot after explicit OP confirmation.
+     Re-run NPC builder, farm, warehouse and restarts. No game
+     readiness claim from source-contract checks alone.
