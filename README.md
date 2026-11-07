@@ -1,3 +1,29 @@
+## Latest stacked Draft: partial NPC spawn recovery (source-only)
+
+Branch: `feat/guarded-partial-villager-recovery-v0115`, based on
+PR #33. **Not yet compiled or gameplay-verified.** `main`
+unchanged and GitHub Actions disabled.
+
+The first village NPC batch is persisted before spawning; if native
+creation crashes halfway, never rerun all ten. A new OP-only
+`/civ recoveractor NAME ID attempt` can attempt **one** missing
+resident after `/civ reconcile NAME`, inspection of loaded
+original villagers, a fully loaded 96-block scan and a safe
+natural spot. A durable per-resident one-shot reservation is saved
+before native spawning, with exact UUID binding and no blind retry.
+`/civ roster NAME` shows IDs and pending recovery status.
+
+On Windows with Rust 1.95, Python 3.11+ and Horizon prerequisites:
+
+```powershell
+git fetch origin
+git switch feat/guarded-partial-villager-recovery-v0115
+py -3 tools/first_play_gate.py --expected-branch feat/guarded-partial-villager-recovery-v0115 --build-client
+```
+
+This is NOT gameplay E2E. See [PLAYTEST](docs/PLAYTEST.md)
+and [TEST_PLAN](docs/TEST_PLAN.md) for the native recovery scenario.
+
 ## Current Draft — release gate verifies the actual native client artifact
 
 Newest stacked branch: `fix/first-play-binary-evidence-v0115`.
