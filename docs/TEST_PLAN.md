@@ -945,3 +945,23 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
      Re-run NPC builder, farm, warehouse and restarts. No game
      readiness claim from source-contract checks alone.
 283. After reserving recovery, mark the resident dead before restart. The saved one-shot attempt must remain loadable and in the audit; the dead resident cannot be newly spawned or reserved again. The entire village must not fail validation.
+
+
+## Shared surveyed initial native spawning (unreleased PR #34)
+
+284. In a disposable world, obstruct the ten initial natural spawn spots
+     or unload surrounding chunks. Check that automatic initialization and
+     OP `/civ actors NAME` create **zero** entities and do **not** reserve
+     `actors_spawned`. Restore terrain/chunks and retry the pre-spawn survey.
+285. Place a living mob on an otherwise safe candidate position. Both
+     startup paths must skip occupied positions and only reserve/spawn if
+     ten other safe, loaded, natural-ground spots exist.
+286. Before first reservation, mark one of the first ten residents dead,
+     give one a UUID, or insert an already-loaded villager with its exact
+     tag or legacy name. The shared preflight must fail, with no reservation
+     and no duplicate or dead-resident spawn.
+287. On terrain with varying Y height, execute explicit OP
+     `/civ actors NAME`. All ten entities must appear at surveyed
+     positions, not the old hard-coded central Y. Verify ten unique UUIDs,
+     save/reload, and no repeated batch. Native tests and in-game evidence
+     are required; source assertions do not prove gameplay.
