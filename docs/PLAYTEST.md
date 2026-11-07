@@ -36,3 +36,7 @@ Windows binary, and it does not establish gameplay compatibility.
 The mod still has unresolved actor identity and crash-atomic inventory issues.
 Do not use it in an important survival world or a multiplayer production server.
 A passing Rust check is not permission to mark the gameplay E2E passed.
+
+## Windows local installer reliability
+
+`scripts/install-local.ps1` runs `cargo fmt --all` before `cargo fmt --all --check` so the source checkout can be installed without an avoidable formatting-only failure. It still runs Rust unit tests and only copies the source `.hnmod` into a deliberately selected test instance; the Horizon launcher must still build and trust native code.
