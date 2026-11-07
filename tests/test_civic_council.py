@@ -60,6 +60,26 @@ class CivicCouncilContracts(unittest.TestCase):
         self.assertIn("player trades, inventory, physical crops", GLUE)
         self.assertIn("Read-only advice; no items, land claims, orders or block edits.", GLUE)
 
+    def test_npc_dialogue_shows_the_actual_top_council_concern(self):
+        self.assertIn("village.council_priorities().first()", GLUE)
+        self.assertIn("Council: {} {}/100", GLUE)
+        self.assertIn("Council: stable", GLUE)
+        self.assertIn('resident.entity_uuid == Some(uuid)', GLUE)
+
+    def test_local_validator_does_not_enable_ci_or_run_gameplay(self):
+        validator = (ROOT / "scripts/validate-local.ps1").read_text()
+        self.assertIn("cargo", validator)
+        self.assertIn("rustfmt", validator)
+        self.assertIn("clippy", validator)
+        self.assertIn("unittest", validator)
+        self.assertIn("tools/package.py", validator)
+        self.assertIn("tools/verify_static.py", validator)
+        self.assertIn("tools/native_build.py", validator)
+        self.assertIn("BuildClient", validator)
+        self.assertNotIn("gh workflow run", validator)
+        self.assertNotIn("gh api", validator)
+        self.assertNotIn("actions/workflows", validator)
+
     def test_version_and_legacy_schema_are_explicit(self):
         cargo = tomllib.loads((ROOT / "Cargo.toml").read_text())
         mixin = tomllib.loads((ROOT / "mixins/civilizations/horizon-mixin.toml").read_text())
