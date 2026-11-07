@@ -349,3 +349,29 @@
   reserves do NOT starve the steward's other goods deliveries.
 - Three Rust domain cases and five Python source contracts authored for the
   food buffer. No native build or game execution performed here.
+
+## 2026-11-08 — natural oak and write-ahead gather safety (unreleased source)
+
+- Replaced single-adjacent-leaf matching with pure native oak rooted-tree
+  inspection: real soil, at least three contiguous logs, upper oak canopy,
+  loaded block checks and conservative bounded height. This selects an
+  actual first trunk block at ground level; whole-tree felling/replanting
+  remain a later feature. Other native/player-placed trees outside mod
+  claims cannot be distinguished from naturally grown trees by block
+  states alone. Avoid production worlds.
+- Added shared `World::gather_site_unclaimed` policy used both at plan
+  creation and at actual issue, preventing a new player-purchased plot or
+  pending structure from being mined after the original plan.
+- Changed native wood/stone resource sequence to persist `Issued` BEFORE
+  native `setblock`, with fail-closed no-command-on-save-error. A crash
+  after issue can block without credit; the same source is never blindly
+  retried. Unissued failed plans can be discarded automatically; issued
+  blocked receipts are quarantined.
+- Added OP-only `gathercheck` and `discardgather NAME intact|empty`
+  for manual, evidence-matched abandonment with ZERO stock credit, rather
+  than any unobserved grant or automatic replay. Other village planner
+  work continues while a source job remains quarantined.
+- Strengthened persisted gather bounds and worker stand checks on load.
+  Nine new Rust tests and nine new Python source contracts authored.
+- No Rust/Python suite, formatter, Clippy, native game compile or in-world
+  execution was possible here. GitHub Actions remain OFF, main unchanged.
