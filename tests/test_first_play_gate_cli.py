@@ -48,7 +48,11 @@ class LocalReleaseGateHarnessTests(unittest.TestCase):
             "    client.write_bytes(b'X' * 2048)\n"
             "revision = 'wrong' if os.environ.get('MOCK_WRONG_REVISION') else '" +
                 "a" * 40 + "'\n"
-            "print(json.dumps({'cargo_check': 'PASS', 'horizon_revision': revision, "
+            "suites = [{'filter': 'civilizations_core::', 'discovered': 8, 'status': 'PASS'},\n"
+            "          {'filter': 'civilizations_glue::', 'discovered': 3, 'status': 'PASS'}]\n"
+            "if os.environ.get('MOCK_EMPTY_GLUE'): suites[1]['discovered'] = 0\n"
+            "if os.environ.get('MOCK_MISSING_GLUE'): suites.pop()\n"
+            "print(json.dumps({'cargo_check': 'PASS', 'native_mod_tests': suites, 'horizon_revision': revision, "
             "'modded_horizon': str(repo / 'target' / 'native-check' / 'modded'), "
             "'native_client_binary': str(client) if build else 'NOT BUILT'}))\n"
         )
@@ -157,6 +161,8 @@ class LocalReleaseGateHarnessTests(unittest.TestCase):
         self.assertEqual(len(data["steps"]), 8)
         self.assertEqual(data["gameplay_e2e"], "NOT_TESTED")
         self.assertTrue(data["native_build_verified"])
+        self.assertEqual({suite["filter"] for suite in data["native_mod_tests"]},
+                         {"civilizations_core::", "civilizations_glue::"})
         self.assertGreater(data["native_client_bytes"], 1024)
         self.assertEqual(len(data["native_client_sha256"]), 64)
         self.assertTrue(Path(data["native_client_path"]).is_file())
@@ -177,6 +183,22 @@ class LocalReleaseGateHarnessTests(unittest.TestCase):
         data = self.latest_report()
         self.assertEqual(data["gate"], "BLOCKED")
         self.assertIn("wrong pinned Horizon revision", data["blocking_reason"])
+
+    def test_native_gate_rejects_missing_glue_suite_even_if_binary_exists(self):
+        result = self.run_gate("--build-client", extra_env={"MOCK_MISSING_GLUE": "yes"})
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        data = self.latest_report()
+        self.assertEqual(data["gate"], "BLOCKED")
+        self.assertIn("both core and glue Rust test suites", data["blocking_reason"])
+        self.assertEqual(data["steps"][-1]["status"], "FAIL")
+
+    def test_native_gate_rejects_zero_glue_tests_even_with_cargo_exit_zero(self):
+        result = self.run_gate("--build-client", extra_env={"MOCK_EMPTY_GLUE": "yes"})
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        data = self.latest_report()
+        self.assertEqual(data["gate"], "BLOCKED")
+        self.assertIn("matched zero tests: civilizations_glue::", data["blocking_reason"])
+        self.assertEqual(data["steps"][-1]["status"], "FAIL")
 
     def test_native_check_does_not_require_client_binary(self):
         result = self.run_gate("--native-check")
