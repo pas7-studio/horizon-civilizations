@@ -22,7 +22,14 @@ class HarvestReceiptContracts(unittest.TestCase):
         self.assertNotIn("stock.insert", CORE[start:end])
 
     def test_package_and_windows_installer_version_match(self):
-        self.assertIn('version = "0.1.5"',
-                      (ROOT / "mixins/civilizations/horizon-mixin.toml").read_text())
-        self.assertIn("civilizations-0.1.5.hnmod",
-                      (ROOT / "scripts/install-local.ps1").read_text())
+        import tomllib
+        cargo = tomllib.loads((ROOT / "Cargo.toml").read_text())
+        manifest = tomllib.loads(
+            (ROOT / "mixins/civilizations/horizon-mixin.toml").read_text()
+        )
+        version = cargo["package"]["version"]
+        self.assertEqual(version, manifest["mod"]["version"])
+        self.assertIn(
+            f"civilizations-{version}.hnmod",
+            (ROOT / "scripts/install-local.ps1").read_text(),
+        )

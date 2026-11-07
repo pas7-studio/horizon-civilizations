@@ -93,3 +93,11 @@ and either authoritative mob UUID ownership or a well-scoped identity registry.
 - [x] Read-only /civ harvests NAME for tracking observed physical work.
 - [ ] Cross-store atomicity between Minecraft chunks and mod JSON; no economic stock credits until verified.
 - [ ] In-game evidence: confirmed crop removal, audit persistence after restart, corruption detection and rollback.
+
+## Host clock synchronization (v0.1.6)
+
+- [x] Use actual Horizon `game.world.day_time` for automatic economic day progression.
+- [x] Save and validate an optional last observed host day; legacy worlds bootstrap safely without historical output.
+- [x] No double processing across relog/restart or when host clock moves backwards.
+- [x] Bound large time jumps to 30 simulated days and skip the rest without repeated catch-up.
+- [ ] Real-world E2E of sleep/skip-night, /time set, per-dimension behavior and pause/server lifetime.

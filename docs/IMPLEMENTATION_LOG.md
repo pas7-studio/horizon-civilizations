@@ -86,3 +86,11 @@
 - Shutdown now retains in-memory world on save failure instead of clearing the singleton.
 - Stale swap check moved before writes to backup/temp files.
 - Requires native CI and a disk-failure world-switch test with a disposable save; process crash cannot preserve volatile memory.
+
+## 2026-11-07 — world-authoritative time, v0.1.6
+
+- Removed artificial server_ticks % 24000 daily progression that reset each time the mod reloaded.
+- Observed Horizon's authoritative day_time and saved last_host_day for deterministic once-per-host-day economic progression.
+- First-time anchor yields no production, backwards clock cannot double pay, catch-up limited to 30 days on a huge forward jump.
+- Added four Rust tests for bootstrap/legacy saves, restarts, rewinds, bounded jumps and i64 extremes.
+- Pending pinned Horizon native compile and disposable-world time/sleep/relaunch E2E.
