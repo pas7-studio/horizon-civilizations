@@ -317,6 +317,61 @@ fn build_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), St
     }
 }
 
+/// Right-click dialogue for a UUID-bound civilization villager. Unbound or
+/// vanilla villagers keep their normal Minecraft interaction.
+pub fn interact_entity(game: &mut Game<'_>, entity: i32, kind: &str, claimed: &mut bool) {
+    if *claimed || kind != "minecraft:villager" || !game.native_on(MOD_ID) {
+        return;
+    }
+    let Some(player) = game.native_acting_player() else {
+        return;
+    };
+    let Some(handle) = u32::try_from(entity).ok().and_then(|id| game.native_entity(id)) else {
+        return;
+    };
+    let Some(uuid) = game.native_entity_uuid(handle) else {
+        return;
+    };
+    let Some(dir) = game.native_world_dir() else {
+        return;
+    };
+    let guard = active(dir.join(DIR));
+    let Some(world) = guard.as_ref()
+        .filter(|state| state.problem.is_none())
+        .and_then(|state| state.world.as_ref())
+    else {
+        return;
+    };
+    let Some((village, resident)) = world.settlements.values()
+        .filter(|village| village.dimension == player.dimension)
+        .find_map(|village| {
+            village.residents.iter()
+                .find(|resident| resident.alive && resident.entity_uuid == Some(uuid))
+                .map(|resident| (village, resident))
+        })
+    else {
+        return;
+    };
+    let membership = world.players
+        .get(&format!("{:032x}", player.uuid))
+        .and_then(|p| p.settlement);
+    let invitation = if membership == Some(village.id) {
+        format!("You are a member of {}.", village.name)
+    } else {
+        format!("To join this settlement: /civ join {}", village.name)
+    };
+    let message = format!(
+        "{} — {} of {} (morale {}). {} View: /civ info {}. Trade: /civ buy/sell <good> <amount>.",
+        resident.name, resident.job.name(), village.name, village.morale,
+        invitation, village.name
+    );
+    drop(guard);
+    // Do not consume a vanilla interaction unless the information was sent.
+    if game.native_tell(player.uuid, Text::literal(message).with_color(text::GOLD)) {
+        *claimed = true;
+    }
+}
+
 pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, ran: &mut bool) {
     let mut args = command.split_whitespace();
     if args.next() != Some("civ") { return; }

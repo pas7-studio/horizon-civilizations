@@ -33,6 +33,10 @@ Windows binary, and it does not establish gameplay compatibility.
 
 ## Safety
 
-The mod still has unresolved actor identity and crash-atomic inventory issues.
+Actor identity now uses persistent UUIDs, but has not been validated in-game; crash-atomic inventory issues remain.
 Do not use it in an important survival world or a multiplayer production server.
 A passing Rust check is not permission to mark the gameplay E2E passed.
+
+## NPC right-click proof
+
+After `/civ actors Ashford` and `/civ roster Ashford`, right-click a UUID-bound citizen: expect a civilization identity/job/help line instead of the regular trade menu. Right-click an ordinary unbound villager: vanilla interaction must remain. Test after world reload, NPC rename, disabled native-mod state, and in multiplayer (acting player's chat only). Legacy v0.1.2 villagers require `/civ reconcile Ashford` first.
