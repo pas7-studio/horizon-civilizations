@@ -993,3 +993,20 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
      diagnostic and preserve `BLOCKED`. The complete stage log remains
      available. Repeat using real Rust error logs when the actual
      Windows build is run.
+
+
+## Aborted first save / temporary recovery artifacts (unreleased PR #34)
+
+293. On a disposable world, create only `world.json.tmp` containing
+     incomplete settlement JSON. With no `world.json` primary, starting
+     Horizon Civilizations must **NOT** initialize an empty world. It must
+     show an interrupted-save error and leave the temp bytes untouched.
+294. Leave a valid `world.json` alongside stale `world.json.tmp`.
+     The loader must refuse to proceed until the operator archives and
+     inspects both files; it must not select one silently.
+295. With stale `world.json.tmp`, attempt an ordinary world save.
+     The write must fail BEFORE opening/truncating the temp file; compare
+     exact original bytes. Existing `world.json.swap` protection must remain.
+296. Close/reopen after a fully successful save: neither temp nor swap
+     file should remain, and the identical settlement/UUID bindings should
+     reload. Record Rust and real Minecraft evidence before release.
