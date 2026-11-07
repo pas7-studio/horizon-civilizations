@@ -1,3 +1,31 @@
+## Natural village discovery acceptance (new Draft PR #34 feature)
+
+Use a **throwaway Minecraft/Horizon world**. Do not copy a valuable save
+until real native build and gameplay are verified.
+
+1. In a fresh Overworld area with loaded natural, flat ground, move away
+   from existing towns, remain active for more than 2,400 loaded server
+   ticks (~2 minutes at 20 TPS), then use `/civ nearby`.
+2. A successful site must be ~88–91 blocks from an explorer, have 5×5
+   naturally suitable ground and enough safe positions for **ten** NPCs;
+   no new settlement should appear on a blocked or unloaded site.
+3. `/civ info NAME`, `/civ roster NAME`, `/civ hall NAME` and
+   `/civ warehouse NAME` must reveal the independent town's actual
+   saved state. Speak to an NPC, then `/civ join NAME` to become a
+   citizen. No player account becomes a lord from natural founding.
+4. Follow actual NPCs to resources, inspect the funding of the physical
+   town hall, confirm working signs/barrels, then restart mid-build.
+5. Revisit the same area and verify NO duplicate city, UUID or building.
+   Move 192+ blocks beyond all existing towns to discover another;
+   no more than eight independent NPC towns should be founded.
+6. In the Nether/End or when no players are present, verify no natural
+   town is founded. A partial/unloaded candidate must not be persisted.
+7. `/civ nearby` is read-only, shows only current-dimension towns,
+   nearest first with coordinates, and never generates/loads chunks.
+
+**Do not mark these steps passed based on Rust/Python source contracts.**
+The local build report and recorded native Minecraft evidence are required.
+
 # Local Horizon Civilizations playtest
 
 **Current assurance:** an older pinned Horizon native branch previously passed
