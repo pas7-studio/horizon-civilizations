@@ -81,7 +81,9 @@ class CivicHallWarehouseContracts(unittest.TestCase):
         farm = CORE.split("pub fn advance_farm(", 1)[1].split("\n    }", 1)[0]
         self.assertIn("FarmStage::Harvesting", farm)
         self.assertIn("new_wheat", farm)
-        self.assertIn("village.warehouse.insert(Good::Wheat, count)", farm)
+        self.assertIn("village.wheat_in_transit = count", farm)
+        self.assertIn("pub fn deliver_farm_wheat(", CORE)
+        self.assertIn("v.warehouse.insert(Good::Wheat, next)", CORE)
         self.assertIn("farm.harvest_receipts.push(HarvestReceipt", farm)
         self.assertNotIn("village.add(Good::Wheat", farm)
 
@@ -119,8 +121,8 @@ class CivicHallWarehouseContracts(unittest.TestCase):
     def test_version_mixin_and_legacy_schema(self):
         cargo = tomllib.loads((ROOT / "Cargo.toml").read_text())
         mixin = tomllib.loads((ROOT / "mixins/civilizations/horizon-mixin.toml").read_text())
-        self.assertEqual(cargo["package"]["version"], "0.1.12")
-        self.assertEqual(mixin["mod"]["version"], "0.1.12")
+        self.assertEqual(cargo["package"]["version"], mixin["mod"]["version"])
+        self.assertEqual(mixin["mod"]["version"], "0.1.13")
         self.assertEqual(len(mixin["injection"]), 7)
         self.assertIn("pub const SCHEMA: u32 = 1;", CORE)
         for field in ("warehouse", "hall_job", "hall_complete",
