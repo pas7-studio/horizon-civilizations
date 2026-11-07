@@ -45,7 +45,7 @@ python3 tools/package.py
 python3 tools/verify_static.py
 ```
 
-Packaging produces `target/civilizations-0.1.9.hnmod` (source-only; the
+Packaging produces `target/civilizations-0.1.10.hnmod` (source-only; the
 launcher compiles it). The template is based on the **native hook-point**
 pattern used by the official Horizon SMP mod. The compatibility pin is in
 `compatibility.json`; the source was inspected but not compiled in this workspace.
@@ -76,7 +76,7 @@ to compile/trust the native mod before the game can run.
 
 1. Install the official Horizon launcher from <https://playhorizon.dev/>.
 2. Create a separate test instance and back up the world.
-3. Put `civilizations-0.1.9.hnmod` in that instance's `horizon-native-mods/`
+3. Put `civilizations-0.1.10.hnmod` in that instance's `horizon-native-mods/`
    directory. The native build requires the launcher's explicit trust action.
 4. Let the launcher **build** the modded game and review build logs. If you see
    `target not found`, hook schema incompatibility, or Rust errors, stop: the
@@ -282,3 +282,32 @@ nothing is reserved.
 This version is source-only and **not compiled or playtested**. GitHub Actions
 remain disabled as requested; use the local commands in
 [PLAYTEST.md](docs/PLAYTEST.md) before merging the stacked drafts.
+
+## Village council: needs, priorities and economy outlook (v0.1.10 experimental)
+
+A village can now derive a **read-only** council priority board from its existing
+population, food/bread stock, three-day abstract-economy outlook, active wars,
+morale, durable UUID-linked residents, physical housing slots and future
+abstract-building material requirements. It ranks up to five urgent needs
+deterministically, with no random prompts, new save fields or autonomous
+commands. Use:
+
+- `/civ council Ashford` — see the three highest-ranked concerns, urgency
+  from 0 to 100, actual evidence and suggested next steps.
+- `/civ forecast Ashford` — inspect bread, wheat, morale, starvation,
+  simulated houses and pending visible houses for each of the next **three
+  hypothetical abstract days**.
+
+The forecast calls the existing `Settlement.day()` economic method on a
+**clone**, so it does not recalculate output using a different formula and
+cannot spend items, start construction, spawn villagers or alter the current
+world save. The forecast **excludes** separate world-level war attrition,
+player trading, Minecraft inventory, physical harvest credits, client play
+and time rewinds. It is a bounded scenario, not a guarantee of the future.
+
+The council does not bypass building approvals, military diplomacy or player
+inventory ownership. Its housing recommendation may direct an OP to
+`/civ survey Ashford`; actual land modification still needs explicit
+`/civ approvehouse` after real loaded-world block checks. Every previous
+trade/harvest caveat continues to apply. No gameplay E2E was performed
+for this version; GitHub Actions remain deliberately disabled.
