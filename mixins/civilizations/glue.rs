@@ -153,7 +153,7 @@ pub fn register(commands: &mut Vec<NativeCommand>) {
         "civ homes <name:word>", "civ survey <name:word>",
         "civ council <name:word>", "civ forecast <name:word>",
         "civ plots <name:word>", "civ development <name:word>",
-        "civ hall <name:word>", "civ warehouse <name:word>",
+        "civ hall <name:word>", "civ warehouse <name:word>", "civ bakery <name:word>",
         "civ construction <name:word>", "civ farming <name:word>",
         "civ harvests <name:word>",
         "civ join <name:word>", "civ title", "civ promote", "civ history",
@@ -1059,6 +1059,47 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
                 } else { "Warehouse transfer journal clear" }
             ));
         }
+        return;
+    }
+    if action == "bakery" {
+        let name = args.next().unwrap_or("");
+        let Some(village) = world.by_name(name) else {
+            error(game, "unknown settlement: /civ bakery <name>");
+            return;
+        };
+        let report = if let Some(b) = &village.bakery {
+            let construction = b.building.as_ref().map(|job| format!(
+                "BUILDING {}/{} blocks, blocked={}, funded={}",
+                job.cursor, bakery_plan(job.origin).len(), job.blocked,
+                b.supplies_reserved
+            )).unwrap_or_else(|| if b.complete {
+                "COMPLETED native crafting table and smoker".to_owned()
+            } else { "UNFUNDED construction".to_owned() });
+            let wood = b.construction_escrow.get(&Good::Wood).copied().unwrap_or(0);
+            let stone = b.construction_escrow.get(&Good::Stone).copied().unwrap_or(0);
+            let still_need_wood = crate::game::civilizations_core::BAKERY_WOOD_LOGS
+                .saturating_sub(wood);
+            let still_need_stone = crate::game::civilizations_core::BAKERY_COBBLESTONE
+                .saturating_sub(stone);
+            let native_ready = if b.complete {
+                bakery_plan(b.origin).iter().all(|step|
+                    world_block(game, &village.dimension, step.pos).as_deref() == Some(step.block))
+            } else { false };
+            format!(
+                "{} at {:?}. {}. Intact native blocks: {}. Materials carried for bakery: wood={}, stone={}; still needed: {} logs / {} cobblestone. Real wheat removed from hall: {}. Crafted bread on baker: {}. Completed 3-wheat-to-1-bread batches: {}.",
+                village.name, b.origin, construction, native_ready, wood, stone,
+                if b.supplies_reserved { 0 } else { still_need_wood },
+                if b.supplies_reserved { 0 } else { still_need_stone },
+                b.wheat_escrow, b.bread_in_transit, b.batches,
+            )
+        } else {
+            format!(
+                "{}: bakery not yet reserved. After the real hall and UUID-bound Baker/Builder are loaded, village autonomously chooses an unclaimed natural plot. Construction then needs {} genuine oak logs and {} genuine cobblestone.",
+                village.name, crate::game::civilizations_core::BAKERY_WOOD_LOGS,
+                crate::game::civilizations_core::BAKERY_COBBLESTONE
+            )
+        };
+        reply(game, report);
         return;
     }
     if action == "development" {
