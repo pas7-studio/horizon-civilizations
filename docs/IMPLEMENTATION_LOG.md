@@ -106,3 +106,17 @@
 - No new persistence schema fields, native mixin hook points or assets.
 - User disabled GitHub Actions. Rust compile/Clippy/native Horizon and
   actual gameplay are not verified; keep this version experimental.
+
+## 2026-11-07 — v0.1.8 physical home assignments (CI disabled)
+
+- Created stacked draft work on top of v0.1.7 NPC day/night routines.
+- Only completed `Settlement.visual_sites` count toward physical homes;
+  abstract housing and unfinished jobs are excluded.
+- Added pure Rust stable-by-ID slots (3 indoor positions per hut) and
+  a fail-closed six-block physical validation before navigation.
+- Night home routing falls back to commons if any floor/door/interior block
+  is absent, altered or unloaded. No chunk loading, world edits, or new
+  serialized fields.
+- Added read-only `/civ homes NAME` and resident home information, four
+  Rust unit tests and six Python source-contract tests.
+- No CI, local Rust compile, Horizon native check or gameplay E2E has run.

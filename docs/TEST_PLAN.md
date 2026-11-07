@@ -84,3 +84,13 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
 57. At night, keep a farmer within 8 blocks of a ripe field and a builder within 9 blocks of an unfinished hut. Neither crop/block edits nor building progress should happen until tick 2000..10999.
 58. Restart at night and re-open during another time phase. Schedule recomputes without extra `world.json` fields or duplicate resident UUIDs.
 59. With unloaded chunks, other dimensions or mod disabled, scheduling never force-loads, navigates foreign villagers or places blocks. Repeat with two nearby villages, time rewinds and large jumps.
+
+## Physical homes E2E (v0.1.8, local only)
+
+60. Start with Ashford's ten NPCs and abstract houses but no completed physical hut. `/civ homes Ashford` must report capacity 0, assigned 0 and ten waiting; night routing uses the commons without navigating into an imaginary house.
+61. Complete a physical 5x5 hut via the builder, verify its blocks, then run `/civ homes Ashford`. Expect capacity 3 and three residents assigned to its first completed site; all others remain without physical slots.
+62. Set time to 13000 in loaded chunks. Three off-duty assigned NPCs should attempt to navigate inside the hut through its 2-high doorway; guards must remain on watch. The game may still refuse a path; record the actual result and do not count source routing as successful game AI.
+63. Obstruct one interior standing position with a foreign block, unload its chunk or replace its entrance/floor with a foreign block. Without editing player blocks, the affected NPC must use the commons fallback. Restore the structure, reload and verify the night target can become eligible again.
+64. Complete a second hut: capacity becomes 6, the first three allocations remain stable, another three use the new hut. Re-open the world and confirm homes are reconstructed from recorded completed sites without duplicates or invented saves.
+65. Verify dawn/evening gathering and daytime professions still override homes; a night home route never generates stock, items, beds, teleports, new houses, or forced chunk loads. Test dimension mismatch and mod-disabled state.
+66. Change a resident's alive status only in a **disposable test fixture**, not manually in a valuable world; derived assignments may rebalance among living IDs, but dead actors must not be targeted. Inspect roster/UUID reconciliation before and after.

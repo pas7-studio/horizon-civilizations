@@ -45,7 +45,7 @@ python3 tools/package.py
 python3 tools/verify_static.py
 ```
 
-Packaging produces `target/civilizations-0.1.7.hnmod` (source-only; the
+Packaging produces `target/civilizations-0.1.8.hnmod` (source-only; the
 launcher compiles it). The template is based on the **native hook-point**
 pattern used by the official Horizon SMP mod. The compatibility pin is in
 `compatibility.json`; the source was inspected but not compiled in this workspace.
@@ -76,7 +76,7 @@ to compile/trust the native mod before the game can run.
 
 1. Install the official Horizon launcher from <https://playhorizon.dev/>.
 2. Create a separate test instance and back up the world.
-3. Put `civilizations-0.1.7.hnmod` in that instance's `horizon-native-mods/`
+3. Put `civilizations-0.1.8.hnmod` in that instance's `horizon-native-mods/`
    directory. The native build requires the launcher's explicit trust action.
 4. Let the launcher **build** the modded game and review build logs. If you see
    `target not found`, hook schema incompatibility, or Rust errors, stop: the
@@ -221,3 +221,29 @@ sleep animations, mine production, offscreen work or extra inventory
 credits are claimed. No saved fields or new Horizon hooks were added.
 v0.1.7 has not been compiled or tested in an actual Horizon game yet;
 GitHub Actions were disabled by the user, and local QA is planned.
+
+## Physical hut homes for NPCs (v0.1.8 experimental)
+
+This source milestone builds on the v0.1.7 routines. Only **completed
+physical 5x5 huts** (`visual_sites`) provide sleeping/regrouping destinations.
+Each hut has three deterministic indoor standing lanes. Citizens are assigned
+by sorted living resident IDs; adding a new completed hut fills the previously
+unassigned roster without moving the initial residents. Assignment is
+recalculated when living residents change, not serialized as another source of
+truth. Abstract simulation houses and unfinished building projects provide
+**zero** physical home slots.
+
+During the night, eligible non-guard villagers navigate toward their indoor
+position only if the actual already-loaded Minecraft floor, two-block doorway,
+and standing space match the hut template. Huts with a damaged checked floor, doorway or indoor standing lane, or with
+unloaded required blocks, fall back to the commons; the mod never loads
+chunks or overwrites blocks for residential movement. Guards keep their
+existing on-duty patrol destination.
+
+Use `/civ homes Ashford` to see completed huts, physical capacity, assigned
+citizens and residents without physical housing. Right-click a linked resident
+to see their computed home assignment. **No actual bed block, sleeping,
+door-opening, family structure, rent, house ownership or pathfinding
+guarantee is implemented.** Real interior navigation, damaged-house
+handling and world-save E2E remain untested. GitHub Actions are intentionally
+disabled; see [local playtest](docs/PLAYTEST.md).

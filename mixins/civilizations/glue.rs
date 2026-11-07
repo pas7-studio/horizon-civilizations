@@ -2,7 +2,8 @@
 // translates server hooks, commands, inventory changes, and native NPC spawns.
 use crate::game::{
     civilizations_core::{farm_plan, hut_plan, inspect_farm, inspect_hut, is_ground,
-        BuildInspection, DailyPhase, FarmBlock, FarmDecision, FarmStage, Good, Job, World, MAX_SIM_DAYS},
+        BuildInspection, DailyPhase, FarmBlock, FarmDecision, FarmStage, Good, HomeSlot, Job,
+        World, inspect_home, MAX_SIM_DAYS},
     native_mobs::NativeSpawn,
     native_server::{NativeCommand, NativeServerPlayer},
     Game,
@@ -145,6 +146,7 @@ pub fn register(commands: &mut Vec<NativeCommand>) {
     for usage in [
         "civ", "civ help", "civ list", "civ info", "civ info <name:word>",
         "civ roster <name:word>", "civ schedule <name:word>",
+        "civ homes <name:word>",
         "civ construction <name:word>", "civ farming <name:word>",
         "civ harvests <name:word>",
         "civ join <name:word>", "civ title", "civ promote", "civ history",
@@ -210,6 +212,16 @@ fn loaded_actors(game: &mut Game<'_>, world: &World, settlement_id: u64) -> Vec<
     }).collect()
 }
 
+/// Use a completed 5x5 hut only if its real floor, two-high doorway and
+/// indoor standing lane are present in loaded chunks. Never edits or loads.
+fn loaded_home_target(game: &Game<'_>, dimension: &str, home: HomeSlot) -> Option<[f64; 3]> {
+    if !inspect_home(home, |position| world_block(game, dimension, position)) {
+        return None;
+    }
+    let [x, y, z] = home.foot();
+    Some([f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5])
+}
+
 /// Profession-aware day/night routing, limited to loaded UUID-bound actors.
 /// This does not implement actual sleeping or independent resource generation.
 fn guide_actors(game: &mut Game<'_>, world: &World) {
@@ -220,7 +232,17 @@ fn guide_actors(game: &mut Game<'_>, world: &World) {
         for (resident_id, mob_id) in loaded_actors(game, world, village.id) {
             let Some(resident) = village.residents.iter().find(|r| r.id == resident_id && r.alive) else { continue; };
             let offset = phase.offset(resident.job, resident_id);
-            let pos = if phase.on_shift(resident.job) && resident.job == Job::Farmer {
+            // A completed saved hut is not proof its Minecraft blocks are
+            // still there. Verify before sending any resident indoors.
+            let home_target = if phase == DailyPhase::Night && !phase.on_shift(resident.job) {
+                village.home_slot(resident_id)
+                    .and_then(|home| loaded_home_target(game, &current_dim, home))
+            } else {
+                None
+            };
+            let pos = if let Some(home) = home_target {
+                home
+            } else if phase.on_shift(resident.job) && resident.job == Job::Farmer {
                 if let Some(farm) = &village.farm {
                     [f64::from(farm.origin[0]) + 0.5,
                      f64::from(farm.origin[1]),
@@ -494,10 +516,14 @@ pub fn interact_entity(game: &mut Game<'_>, entity: i32, kind: &str, claimed: &m
     };
     let phase = DailyPhase::at(game.world.day_time);
     let duty = if phase.on_shift(resident.job) { "on duty" } else { "off duty" };
+    let home = match village.home_slot(resident.id) {
+        Some(slot) => format!("Hut {:?}, place {} (physical blocks checked at night)", slot.site, slot.lane + 1),
+        None => "Commons (no completed physical home)".to_owned(),
+    };
     let message = format!(
-        "{} — {} of {} (morale {}). Routine: {} / {}. {} View: /civ info {}. Trade: /civ buy/sell <good> <amount>.",
+        "{} — {} of {} (morale {}). Routine: {} / {}. Home: {}. {} View: /civ info {}. Trade: /civ buy/sell <good> <amount>.",
         resident.name, resident.job.name(), village.name, village.morale,
-        phase.name(), duty, invitation, village.name
+        phase.name(), duty, home, invitation, village.name
     );
     drop(guard);
     // Do not consume a vanilla interaction unless the information was sent.
@@ -522,7 +548,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
     let actor = format!("{:032x}", player.uuid);
     let action = args.next().unwrap_or("help");
     if action == "help" {
-        reply(game, "Civilizations: /civ list | info [name] | roster <name> | schedule <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, day [days], construct <name>, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
+        reply(game, "Civilizations: /civ list | info [name] | roster <name> | schedule <name> | homes <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, day [days], construct <name>, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
         return;
     }
     if action == "list" {
@@ -546,6 +572,31 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             "{} routine: {} (Horizon tick {}) | on duty {} / {} | guards watch overnight | physical farm/build edits only on work shift 2000..10999 | navigation only",
             village.name, phase.name(), game.world.day_time.rem_euclid(24_000),
             on_duty, village.population()
+        ));
+        return;
+    }
+    if action == "homes" {
+        let name = args.next().unwrap_or("");
+        let Some(village) = world.by_name(name) else {
+            error(game, "unknown settlement: /civ homes <name>");
+            return;
+        };
+        let (capacity, assigned, waiting) = village.physical_housing();
+        let roster: Vec<String> = village.residents.iter()
+            .filter(|resident| resident.alive)
+            .take(10)
+            .map(|resident| match village.home_slot(resident.id) {
+                Some(home) => format!(
+                    "{}: hut at {:?}, lane {}",
+                    resident.name, home.site, home.lane + 1
+                ),
+                None => format!("{}: commons (no built hut slot)", resident.name),
+            })
+            .collect();
+        reply(game, format!(
+            "{} physical homes: {} completed huts, capacity {}, assigned {}, waiting {}. {}. No beds are claimed; night routes check real blocks first.",
+            village.name, village.visual_sites.len(), capacity, assigned, waiting,
+            roster.join(" | ")
         ));
         return;
     }
