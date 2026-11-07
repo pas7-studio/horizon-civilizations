@@ -6236,3 +6236,94 @@ mod guarded_partial_native_actor_recovery_tests {
         assert!(world.validate().is_err());
     }
 }
+
+#[cfg(test)]
+mod autonomous_frontier_tests {
+    use super::*;
+
+    #[test]
+    fn npc_founding_creates_full_independent_society_without_player_gifts() {
+        let mut world = World::default();
+        let id = world.found_autonomous(
+            "Oakford_1", "minecraft:overworld", [96, 71, 96]
+        ).unwrap();
+        let settlement = &world.settlements[&id];
+        assert_eq!(settlement.founder, NPC_FOUNDER);
+        assert_eq!(settlement.residents.len(), 10);
+        assert!(settlement.autonomy_enabled);
+        assert!(!settlement.actors_spawned);
+        assert!(!settlement.hall_complete);
+        assert!(settlement.warehouse.is_empty());
+        assert!(settlement.build_escrow.is_empty());
+        assert!(world.players.is_empty(), "no fake player, lordship or free coins");
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn a_real_player_may_join_an_independent_village_without_becoming_founder() {
+        let mut world = World::default();
+        let id = world.found_autonomous(
+            "Stonevale_1", "minecraft:overworld", [80, 70, 90]
+        ).unwrap();
+        world.join("player-uuid", id).unwrap();
+        let human = &world.players["player-uuid"];
+        assert_eq!(human.rank, Rank::Citizen);
+        assert_eq!(human.coins, 25);
+        assert_eq!(human.settlement, Some(id));
+        assert_eq!(world.settlements[&id].founder, NPC_FOUNDER);
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn autonomous_and_manual_settlements_share_spatial_collision_guards() {
+        let mut world = World::default();
+        world.found("HumanTown", "minecraft:overworld", [0, 70, 0], "op")
+            .unwrap();
+        assert!(world.found_autonomous(
+            "TooNear", "minecraft:overworld", [100, 70, 0]
+        ).is_err());
+        assert!(world.found_autonomous(
+            "WrongDim", "minecraft:the_nether", [300, 70, 0]
+        ).is_err());
+        let id = world.found_autonomous(
+            "SafeTown", "minecraft:overworld", [300, 70, 0]
+        ).unwrap();
+        assert_eq!(world.settlements[&id].residents.len(), 10);
+        assert_eq!(world.players["op"].rank, Rank::Lord);
+        assert_eq!(world.players["op"].coins, 25);
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn autonomous_villages_are_bounded_without_disabling_manual_founding() {
+        let mut world = World::default();
+        for n in 0..MAX_NPC_SETTLEMENTS {
+            world.found_autonomous(
+                &format!("Frontier_{n}"), "minecraft:overworld",
+                [n as i32 * 256, 70, 0],
+            ).unwrap();
+        }
+        assert!(world.found_autonomous(
+            "NinthTown", "minecraft:overworld", [2600, 70, 0]
+        ).is_err());
+        let human = world.found(
+            "HumanTown", "minecraft:overworld", [3000, 70, 0], "op"
+        ).unwrap();
+        assert_ne!(world.settlements[&human].founder, NPC_FOUNDER);
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn npc_founding_roundtrip_does_not_materialize_synthetic_accounts() {
+        let mut world = World::default();
+        world.found_autonomous(
+            "Birchmere_1", "minecraft:overworld", [88, 65, -64]
+        ).unwrap();
+        let encoded = serde_json::to_string(&world).unwrap();
+        let decoded: World = serde_json::from_str(&encoded).unwrap();
+        decoded.validate().unwrap();
+        assert_eq!(decoded.settlements[&1].founder, NPC_FOUNDER);
+        assert!(decoded.players.is_empty());
+        assert_eq!(decoded.settlements[&1].residents.len(), 10);
+    }
+}
