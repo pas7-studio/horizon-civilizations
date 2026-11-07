@@ -1,3 +1,19 @@
+# 2026-11-08 — compiler-first local diagnostics (updated PR #33)
+
+- [x] Release gate now runs real `cargo test` first, then Clippy,
+  then the still-required strict `cargo fmt --check` and standalone
+  mixin rustfmt checks. A formatting failure can no longer hide the
+  first Rust compiler failure.
+- [x] Two additional local harness cases verify compiler error takes
+  priority and formatting remains a PASS blocker.
+- [x] **12/12 harness unittests actually executed with mock executables
+  and passed on Linux/Python 3.13**. Python syntax compilation and
+  `--dry-run --build-client` step order also passed.
+- [ ] No real cargo compiler or native Horizon client is available in
+  this environment. Still **NOT gameplay verified**.
+
+---
+
 # Latest Draft — prevent false native client build readiness
 
 Stacked branch `fix/first-play-binary-evidence-v0115`, based on
