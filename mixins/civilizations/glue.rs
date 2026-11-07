@@ -167,6 +167,7 @@ pub fn register(commands: &mut Vec<NativeCommand>) {
     for usage in [
         "civ found <name:word>", "civ actors <name:word>",
         "civ reconcile <name:word>",
+        "civ recoveractor <name:word> <resident:integer> <confirm:word>",
         "civ day [days:integer]", "civ construct <name:word>",
         "civ approvehouse <name:word> <slot:integer> <y:integer>",
         "civ autonomy <name:word> <mode:word>",
@@ -980,7 +981,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
     let actor = format!("{:032x}", player.uuid);
     let action = args.next().unwrap_or("help");
     if action == "help" {
-        reply(game, "Civilizations: /civ list | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | hall <name> | warehouse <name> | diagnose <name> | buyplot <name> | buyhouse <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, barrelcheck <name>, resolvebarrel <name> confirm|cancel <observed_count>, gathercheck <name>, discardgather <name> intact|empty, day [days], construct <name>, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
+        reply(game, "Civilizations: /civ list | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | hall <name> | warehouse <name> | diagnose <name> | buyplot <name> | buyhouse <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, recoveractor <name> <resident-id> attempt, barrelcheck <name>, resolvebarrel <name> confirm|cancel <observed_count>, gathercheck <name>, discardgather <name> intact|empty, day [days], construct <name>, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
         return;
     }
     if action == "list" {
@@ -1483,8 +1484,15 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
         let name = args.next().unwrap_or("");
         let Some(s) = world.by_name(name) else { error(game, "unknown settlement: /civ roster <name>"); return; };
         let linked = loaded_actors(game, world, s.id);
-        let listing: Vec<_> = s.residents.iter().map(|r| format!("{}:{}", r.name, r.job.name())).collect();
-        reply(game, format!("{} actors: {}/{} nearby and loaded | {}", s.name, linked.len(), s.population(), listing.join(", ")));
+        let listing: Vec<_> = s.residents.iter().map(|r| format!(
+            "{}#{}:{} [{}]", r.name, r.id, r.job.name(),
+            if s.actor_recovery_issued.contains(&r.id) { "RECOVERY PENDING" }
+            else if r.entity_uuid.is_some() { "UUID saved" } else { "UNBOUND" }
+        )).collect();
+        reply(game, format!(
+            "{} actors: {}/{} nearby and loaded | {}. OP partial spawn: /civ reconcile {}, then /civ recoveractor {} <resident-id> attempt ONLY after native inspection.",
+            s.name, linked.len(), s.population(), listing.join(", "), s.name, s.name
+        ));
         return;
     }
     if action == "harvests" {
@@ -2017,7 +2025,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
                 Ok(format!("Spawned and UUID-linked {spawned} villagers. Reopen world and verify /civ roster {name}."))
             }
         })(),
-        "found" | "day" | "war" | "peace" | "actors" | "construct" | "approvehouse" | "autonomy" | "farm" | "recoverfarm" | "reconcile" | "barrelcheck" | "resolvebarrel" | "gathercheck" | "discardgather" => Err("requires server operator level 2".into()),
+        "found" | "day" | "war" | "peace" | "actors" | "recoveractor" | "construct" | "approvehouse" | "autonomy" | "farm" | "recoverfarm" | "reconcile" | "barrelcheck" | "resolvebarrel" | "gathercheck" | "discardgather" => Err("requires server operator level 2".into()),
         _ => Err("unknown subcommand. Use /civ help".into()),
     };
     match result {
