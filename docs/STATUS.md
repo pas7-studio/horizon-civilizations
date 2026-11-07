@@ -1,5 +1,16 @@
 # Latest Draft — partial village NPC spawn recovery (source only)
 
+**Crash-safety and first compiler-diagnostic follow-up:** fixed the
+mutating command handler so an error after a durable write halts world
+mutations rather than restoring an old in-memory snapshot. Reconcile
+save failures now mark the command as already saved to prevent a blind
+second write. Both initial spawners inherit 3-block pairwise clearance
+between selected positions; the preflight still finds ten spots on a
+flat 7x7 survey grid. The local build gate now records the first
+compiler/test diagnostic, not just a nonzero exit. Source contracts
+updated (19 guarded actor tests and 14 build-gate harness tests authored).
+No real Rust build or full Python unittest suite has been run here.
+
 **First-spawn safety hardening (same PR #34):** removed fixed-coordinate
 OP spawning. Both OP `/civ actors` and automatic village initialization now
 require one shared preflight for ten living, unbound residents, absence of
