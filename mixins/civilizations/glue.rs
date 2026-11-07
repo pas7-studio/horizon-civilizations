@@ -1077,7 +1077,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             ));
         } else {
             reply(game, format!(
-                "{} proposes huts: {} physical spaces missing, {} abstract houses awaiting build. {}. OP must visit a plot and run /civ approvehouse {} <slot> <y>. Suggestions expire if terrain changes; all blocks are rechecked.",
+                "{} can use these optional safe building slots: {} spaces missing, {} abstract houses awaiting build. {}. Autonomous builders select free plots by default after the funded town hall; OP /civ approvehouse {} <slot> <y> is an optional manual override. Real blocks and player plots are always rechecked.",
                 village.name, waiting, village.pending_visual_buildings,
                 proposals.join(" | "), village.name
             ));
@@ -1151,7 +1151,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
                 farm.blocked, farm.completed_cycles, farm.harvest_sequence,
             )
         } else {
-            format!("{} has no farm; OP: select empty 3x3 natural patch 12..80 blocks away, /civ farm {}", settlement.name, settlement.name)
+            format!("{} has no physical farm yet; UUID-bound farmers automatically select a loaded natural 3x3 plot. OP /civ farm {} remains an optional manual fallback.", settlement.name, settlement.name)
         };
         reply(game, message);
         return;
@@ -1295,7 +1295,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             check_empty_hut_site(game, &village.dimension, site)?;
             let price = state.world.as_mut().unwrap().commission_house(&actor, village.id, site)?;
             Ok(format!(
-                "Commissioned your own 5x5 hut at {:?} for {} civic coins, 8 village wood and 6 stone. A UUID-linked builder will physically build during work hours. /civ construction {}",
+                "Commissioned your own 5x5 hut at {:?} for {} civic coins (labor fee). A UUID-bound builder will collect 20 actual oak logs and 25 actual cobblestone from the hall barrels before physically building. /civ warehouse {}",
                 site, price, village.name
             ))
         })(),
@@ -1383,7 +1383,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             let name = args.next().ok_or("usage: /civ found <name>")?;
             let center = player.position.map(|v| v.floor() as i32);
             let id = state.world.as_mut().unwrap().found(name, &player.dimension, center, &actor)?;
-            Ok(format!("Founded {name} (#{id}). Use /civ actors {name} to summon its 10 villagers."))
+            Ok(format!("Founded {name} (#{id}). Autonomous NPC spawning and town hall planning start by default. The first civic hall needs 24 real logs and 25 cobblestone; /civ hall {name} and /civ warehouse {name} show progress."))
         })(),
         "promote" => (|| {
             let rank = state.world.as_mut().unwrap().promote(&actor)?;
