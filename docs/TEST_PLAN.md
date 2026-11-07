@@ -1159,3 +1159,37 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
 344. Serialize an old world with no meal fields and no recipient_id in
      existing barrel journal. Validate and load with safe defaults
      without crediting any meals or altering the old transaction.
+
+
+## Digger pit deliveries and starvation-safe work shifts (Draft PR #35 — source only)
+
+345. With an autonomous village active in a disposable Overworld, create
+     one real sand or dirt post via operator command and inspect
+     /civ roles NAME and /civ posts NAME. One living Digger, not a Miner,
+     must be staffed for those real work posts.
+346. Observe a Digger navigate to a loaded, unclaimed natural sand
+     or dirt block near its pit. Its own bound UUID/resident ID must be
+     the only identity allowed to issue the native source edit.
+347. Record before/after source block and journal state: Planned,
+     Issued, native_edit_confirmed, pickup_witnessed, then hall return.
+     Neither an air block alone nor a Miner standing at the source
+     authorizes one item of stock.
+348. Restart after the pickup witness but before delivery. The
+     preexisting Digger ID must survive world.json validation and
+     return exactly one item of the right material; repeated checks
+     cannot credit a second item.
+349. Restart with Issued but no confirmed native edit, unload the
+     work area, replace the block with a player structure, or kill
+     the assigned Digger. These must halt/quarantine or wait, not
+     rerun a block mutation or issue speculative stock.
+350. Run /time set 3000 during a completed-hall food shortage:
+     Farmer, Baker, Digger, Lumberjack and Miner must continue
+     their real work instead of spending the entire work shift at
+     the empty dining hall. No virtual bread may be served.
+351. At /time set 1000 or 12000, unserved living UUID-linked
+     residents should approach the hall for a real one-loaf meal.
+     At /time set 3000, they should resume their workplace route;
+     when fed, they should stop requesting repeat portions.
+352. Test BOTH sand and dirt across restart, compare actual native
+     barrels and the journal, and record FPS/server tick latency.
+     These checks remain unverified until native compile and live E2E.
