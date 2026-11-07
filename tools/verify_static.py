@@ -22,7 +22,9 @@ for entry in manifest["injection"]:
     assert "native_" in entry["target"]
     assert (BUNDLE / entry["helper"]).is_file()
 assert len(manifest["injection"]) == 6
-assert manifest["mod"]["version"] == "0.1.8"
+cargo = tomllib.loads((ROOT / "Cargo.toml").read_text())
+version = cargo["package"]["version"]
+assert manifest["mod"]["version"] == version
 core = (BUNDLE / "core.rs").read_text()
 glue = (BUNDLE / "glue.rs").read_text()
 for label in ["pub fn found", "pub fn advance", "pub fn buy", "pub fn sell", "pub fn declare_war", "pub fn make_peace", "pub fn validate", "pub fn workplace", "pub fn actor_name", "pub fn hut_plan", "pub fn start_visual_house", "pub fn finish_visual_house"]:
@@ -30,7 +32,7 @@ for label in ["pub fn found", "pub fn advance", "pub fn buy", "pub fn sell", "pu
 for label in ["native_spawn_mob", "native_world_dir", "native_feedback", "native_take_items", "native_give_items", "native_mob_navigate", "loaded_actors", "guide_actors", "build_one_step", "check_empty_hut_site", "native_run_command", "level_tick", "interact_entity", "native_entity_uuid", "native_tell"]:
     assert label in glue, label
 assert "Millenaire" not in core
-bundle_path = ROOT / "target" / "civilizations-0.1.8.hnmod"
+bundle_path = ROOT / "target" / f"civilizations-{version}.hnmod"
 if bundle_path.exists():
     with zipfile.ZipFile(bundle_path) as z:
         assert z.testzip() is None
