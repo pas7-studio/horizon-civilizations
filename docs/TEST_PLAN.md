@@ -189,11 +189,12 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
     choose other sites for both farm and hut, while the purchased square
     remains clear and reserved for the player. Verify /civ plots Ashford.
 93. On a bought **empty** parcel, run `/civ commission Ashford` with
-    15 more coins available and 8 wood/6 stone available in village
-    simulation. Both coin fee and materials are consumed once and
-    a single private hut job is recorded. A second commission, foreign
-    player's commission or unaffordable commission must fail without side
-    effects.
+    15 more civic coins available. The labor fee and one private hut
+    project are recorded immediately, but no abstract wood/stone is
+    charged. Actual native construction must wait for 20 real logs and
+    25 real cobblestone in the warehouse, reserved exactly once when
+    work starts. A second commission, foreign owner's commission or
+    unaffordable request must fail without side effects.
 94. Let the private hut complete; it must remain private (no assigned NPC
     beds), survive save/reload, and still be excluded from automatic
     construction on its owner's parcel. Player can also build their
