@@ -622,5 +622,5 @@ an OP can issue (example ID; use the real roster value):
 This is **one irreversible native spawn attempt per resident**,
 journalled before native effects, never retried automatically.
 If interrupted, inspect live entities and `/civ reconcile`;
-do not blindly create a duplicate. See TEST_PLAN 272–282.
+do not blindly create a duplicate. See TEST_PLAN 272–283.
 Never use a valuable game world to test this Draft feature.
