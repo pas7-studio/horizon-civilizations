@@ -3017,6 +3017,38 @@ mod village_land_and_autonomy_tests {
     }
 
     #[test]
+    fn buying_finished_hut_transfers_title_and_funds_replacement() {
+        let (mut world, id) = founded();
+        world.players.get_mut("owner").unwrap().coins += 20;
+        world.settlements.get_mut(&id).unwrap().visual_sites.push([20, 70, 0]);
+        assert_eq!(world.settlements[&id].public_huts(), 1);
+        assert_eq!(world.buy_finished_house("owner", id, [20,70,0]),
+                   Ok(FINISHED_HUT_PRICE_COINS));
+        assert_eq!(world.players["owner"].coins, 10);
+        assert_eq!(world.settlements[&id].treasury_coins, FINISHED_HUT_PRICE_COINS);
+        assert_eq!(world.settlements[&id].public_huts(), 0);
+        assert_eq!(world.settlements[&id].physical_housing(), (0, 0, 10));
+        assert_eq!(world.settlements[&id].player_parcels[0].owner, "owner");
+        assert!(world.settlements[&id].player_parcels[0].commissioned);
+        let saved = serde_json::to_string(&world).unwrap();
+        assert!(world.buy_finished_house("owner", id, [20,70,0]).is_err());
+        assert_eq!(world.players["owner"].coins, 10);
+        assert_eq!(world.settlements[&id].treasury_coins, FINISHED_HUT_PRICE_COINS);
+        world.validate().unwrap();
+        let loaded: World = serde_json::from_str(&saved).unwrap();
+        loaded.validate().unwrap();
+
+        // A sold hut is NOT a public house. Existing abstract day() must
+        // replenish civic housing via normal resource consumption.
+        world.advance(1).unwrap();
+        assert_eq!(world.settlements[&id].houses, 3);
+        assert_eq!(world.settlements[&id].pending_visual_buildings, 1);
+        assert_eq!(world.settlements[&id].quantity(Good::Wood), 7);
+        assert_eq!(world.settlements[&id].quantity(Good::Stone), 4);
+        world.validate().unwrap();
+    }
+
+    #[test]
     fn physical_housing_counts_only_public_huts() {
         let (mut world, id) = founded();
         let v = world.settlements.get_mut(&id).unwrap();
