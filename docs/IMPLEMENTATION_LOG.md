@@ -340,3 +340,12 @@
 - Added six Python source contracts and first-play acceptance tests 175–181.
   Local executable Rust/Python tests, native compile and in-game verification
   remain unperformed here. No GitHub Actions or merge.
+
+- Added physical bread-restocking backpressure at both native wheat pickup
+  and baking workbench. The pure helper uses 2 bread per living resident
+  (maximum 64), counts verified native barrel items + confirmed inbound
+  receipts + bakery bread-in-transit, not abstract daily stock.
+  Missing/unloaded barrel inventories pause bread production. Full bread
+  reserves do NOT starve the steward's other goods deliveries.
+- Three Rust domain cases and five Python source contracts authored for the
+  food buffer. No native build or game execution performed here.
