@@ -1327,6 +1327,20 @@ impl World {
                     return Err("invalid pending native market purchase".into());
                 }
             }
+            if let Some(b) = &village.bakery {
+                if !village.hall_complete
+                    || i64::from(b.origin[0]).abs() > 29_999_988
+                    || i64::from(b.origin[2]).abs() > 29_999_988
+                    || !(-2046..=2046).contains(&b.origin[1])
+                    || b.wheat_escrow > BREAD_WHEAT_RECIPE || b.bread_in_transit > 8
+                    || b.construction_escrow.values().any(|&amount| amount > BAKERY_COBBLESTONE)
+                    || (b.complete && (b.building.is_some() || !b.supplies_reserved))
+                    || (!b.complete && b.building.is_none())
+                    || b.building.as_ref().is_some_and(|job|
+                        job.origin != b.origin || job.cursor > bakery_plan(b.origin).len()) {
+                    return Err("invalid saved physical bakery state".into());
+                }
+            }
             if village.wheat_in_transit > 10_000_000 {
                 return Err("wheat in physical transit exceeds cap".into());
             }
@@ -1348,6 +1362,16 @@ impl World {
                     _ => {}
                 }
             }
+                match t.direction {
+                    BarrelDirection::ToBakeryBuilder if t.slot.is_none()
+                        || !matches!(t.good, Good::Wood | Good::Stone)
+                        || village.bakery.is_none() =>
+                        return Err("invalid native bakery material extraction".into()),
+                    BarrelDirection::ToBakerIngredients if t.slot.is_none()
+                        || t.good != Good::Wheat || village.bakery.is_none() =>
+                        return Err("invalid native baker wheat extraction".into()),
+                    _ => {}
+                }
             if village.hall_complete && village.hall_job.is_some() {
                 return Err("civic hall cannot be simultaneously complete and under construction".into());
             }
@@ -1839,7 +1863,34 @@ impl World {
                 if before < count || slot.is_none() {
                     return Err("missing native barrel item/slot for extraction".into());
                 }
+                        BarrelDirection::ToBakeryBuilder => {
+                let bakery = v.bakery.as_ref().ok_or("no planned bakery")?;
+                if bakery.building.is_none() || bakery.supplies_reserved || bakery.complete {
+                    return Err("no unfunded physical bakery project".into());
+                }
+                let required = match good {
+                    Good::Wood => BAKERY_WOOD_LOGS,
+                    Good::Stone => BAKERY_COBBLESTONE,
+                    _ => return Err("bakery construction requires wood or cobblestone".into()),
+                };
+                if bakery.construction_escrow.get(&good).copied().unwrap_or(0)
+                    .checked_add(count).is_none_or(|n| n > required) {
+                    return Err("bakery materials exceed the real construction bill".into());
+                }
+                if before < count || slot.is_none() {
+                    return Err("no verified native barrel slot for bakery supplies".into());
+                }
             }
+            BarrelDirection::ToBakerIngredients => {
+                let bakery = v.bakery.as_ref().ok_or("no bakery")?;
+                if !bakery.complete || good != Good::Wheat || slot.is_none()
+                    || before < count || bakery.wheat_escrow
+                        .checked_add(count).is_none_or(|n| n > BREAD_WHEAT_RECIPE)
+                    || bakery.bread_in_transit != 0 {
+                    return Err("baker cannot take additional unverified wheat".into());
+                }
+            }
+
         }
         self.settlements.get_mut(&id).unwrap().barrel_transfer = Some(BarrelTransfer {
             position, good, direction, phase: BarrelPhase::Planned, before, count, slot,
@@ -1875,6 +1926,17 @@ impl World {
                 let previous = v.build_escrow.get(&good).copied().unwrap_or(0);
                 let next = previous.checked_add(count).ok_or("building escrow overflow")?;
                 v.build_escrow.insert(good, next);
+            }
+            BarrelDirection::ToBakeryBuilder => {
+                let b = v.bakery.as_mut().ok_or("no bakery")?;
+                let prev = b.construction_escrow.get(&good).copied().unwrap_or(0);
+                b.construction_escrow.insert(good, prev.checked_add(count)
+                    .ok_or("bakery materials overflow")?);
+            }
+            BarrelDirection::ToBakerIngredients => {
+                let b = v.bakery.as_mut().ok_or("no bakery")?;
+                b.wheat_escrow = b.wheat_escrow.checked_add(count)
+                    .ok_or("baker wheat carry overflow")?;
             }
         }
         v.barrel_transfer = None;
