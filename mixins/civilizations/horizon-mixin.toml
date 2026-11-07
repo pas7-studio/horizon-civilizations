@@ -1,6 +1,6 @@
 [mod]
 id = "civilizations"
-version = "0.1.6"
+version = "0.1.7"
 priority = 100
 
 # Pin an inspected upstream revision. The native mod MUST be rebuilt and
