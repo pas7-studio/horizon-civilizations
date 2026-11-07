@@ -55,6 +55,8 @@ To compile the actual native-modded Horizon binary **on a networked build machin
 python3 tools/native_build.py --test
 ```
 
+To also compile a real game executable (more expensive, not automatically a gameplay pass), run `python3 tools/native_build.py --test --build-client`. The binary is printed in `native_client_binary`; provide compatible Minecraft resources separately and use a disposable world. See [playtest instructions](docs/PLAYTEST.md).
+
 This checks out isolated pinned copies of Horizon and horizon-mixins under `target/native-check/`, runs mixin plan/apply and `cargo check` for Horizon, and runs the embedded Rust domain tests. It never modifies an existing game checkout. The manual GitHub Actions workflow `Horizon native compile gate` performs the same check. Native compilation is NOT equivalent to a playable, real-world E2E test.
 
 ### Optional Windows test-instance installer
