@@ -47,7 +47,7 @@ python3 tools/package.py
 python3 tools/verify_static.py
 ```
 
-Packaging produces `target/civilizations-0.1.12.hnmod` (source-only; the
+Packaging produces `target/civilizations-0.1.13.hnmod` (source-only; the
 launcher compiles it). The template is based on the **native hook-point**
 pattern used by the official Horizon SMP mod. The compatibility pin is in
 `compatibility.json`; the source was inspected but not compiled in this workspace.
@@ -78,7 +78,7 @@ to compile/trust the native mod before the game can run.
 
 1. Install the official Horizon launcher from <https://playhorizon.dev/>.
 2. Create a separate test instance and back up the world.
-3. Put `civilizations-0.1.12.hnmod` in that instance's `horizon-native-mods/`
+3. Put `civilizations-0.1.13.hnmod` in that instance's `horizon-native-mods/`
    directory. The native build requires the launcher's explicit trust action.
 4. Let the launcher **build** the modded game and review build logs. If you see
    `target not found`, hook schema incompatibility, or Rust errors, stop: the
@@ -530,3 +530,84 @@ git switch feat/physical-town-hall-warehouse-v0112
 Follow [playtest](docs/PLAYTEST.md) in a disposable world. No Rust compiler,
 native Horizon build, game launch, sign NBT update, or live player-container
 transaction has been tested in this environment; this is source-only work.
+
+## v0.1.13 — actual vanilla barrel inventory and NPC material hauling (source-only)
+
+**This supersedes v0.1.12's barrel-as-marker limitation.** On the
+`feat/native-barrel-inventory-v0113` branch, after the physical town hall
+has finished, its two real `minecraft:barrel` inventories become the
+**authoritative on-site material storage**, through pinned Horizon native
+API 48. The original abstract daily stock remains wholly separate.
+No material is silently manufactured by construction.
+
+### The material flow you can actually inspect
+
+1. Lumberjack/miner: after conditional native block removal, their saved
+   job remains pending while the UUID-linked NPC walks **back to the hall**.
+   Only a nearby returning worker credits the delivery queue.
+2. Farmers: eight verified harvested crops become a saved on-worker transit
+   receipt. A UUID-linked farmer must return to the hall before these goods
+   enter the delivery queue.
+3. The merchant (starter mayor/steward) attends the central hall during
+   the work shift. With this real villager nearby, each incoming item batch
+   is journaled, **actually inserted into a real vanilla barrel**, verified
+   by a later native inventory read, then removed from the delivery queue.
+4. A house builder first walks back to the hall and **extracts actual logs
+   and cobblestone from its barrels** into a project-specific escrow.
+   A 5x5 hut still requires 20 oak logs and 25 cobblestone. The builder
+   starts navigating to the plot ONLY after the full material reservation
+   has been durably saved.
+5. `/civ warehouse NAME` shows **real current barrel contents**, incoming
+   deliveries, wheat carried by farmers, extracted builder escrow, and
+   any pending/blocked inventory journal. Town hall sign shortages also
+   read real barrel counts instead of the old JSON count.
+6. `/civ buy GOOD COUNT` near a **completed** hall buys plain items from
+   a real barrel slot. Civic coins are charged before the native extraction,
+   with a durable order; on a crash or ambiguous result the order is
+   quarantined rather than being automatically run twice. Purchases up to
+   64 items require a single eligible stack of at least that size.
+7. `/civ sell GOOD COUNT` near the village center takes genuine items
+   from the player's native inventory and places them into the steward's
+   incoming delivery queue. On complete town halls, the steward physically
+   inserts them into barrels; before completion they finance the first
+   civic hall (24 logs + 25 stone).
+
+### Inventory protection and crash policy
+
+A seventh native injection uses the inspected pinned Horizon API 233,
+`native_inventory_block_start`, to deny ordinary players access to the
+**two public registered hall barrels**. Operators can still open them
+for troubleshooting. Other vanilla chests and private barrels are untouched.
+
+Two persistent logs guard inventory movement:
+
+- `barrel_transfer`: 1..8 plain native items, Planned → Issued (save
+  **before** external change) → verified completion or Blocked.
+- `market_purchase`: authenticated player, exact item/slot/price, coins
+  precharged and saved before extracting native goods; delivery is completed
+  or quarantined, **never auto-retried**.
+
+Since Horizon's native chunk/container save and our `world.json` file
+are not one atomic transaction, a crash in the narrow external-write
+window may quarantine or lose a delivery rather than duplicate goods.
+Blocked transfers/orders require manual operator inspection of the exact
+barrel/player inventory and saved journal; no unsafe automatic repair.
+
+**Limitations:** vanilla hoppers and other mods may still move stored goods
+or disturb a saved transaction. Operators can bypass the restrictions, and
+physical blocks may be broken by vanilla interactions not handled by this
+hook. Natural block provenance on unclaimed land is imperfect. Goods
+currently appear in native barrels, but no handheld carry-stack animation,
+physical book/chest logistics GUI, roads, full item crafting, or automatic
+natural-world town founding is complete. Native Horizon compilation,
+in-game navigation, real barrel handling, permission hooks and save/restart
+still need local E2E: source contracts are NOT proof of a working game.
+
+```powershell
+git fetch origin
+git switch feat/native-barrel-inventory-v0113
+.\scripts\validate-local.ps1 -Format
+.\scripts\validate-local.ps1 -BuildClient
+```
+
+GitHub Actions remain deliberately disabled.
