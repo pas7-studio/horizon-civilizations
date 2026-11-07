@@ -303,3 +303,22 @@
 - Changes were written to GitHub; Rust/Python executable suites, Horizon
   native compilation and actual Minecraft gameplay were **not run**. No CI
   activation, no merge, no claim of playable binary.
+
+## 2026-11-08 — OP warehouse recovery + unified hall display (unreleased source)
+
+- Added an authenticated OP-only, read-only native barrel inspection command:
+  `/civ barrelcheck NAME`. It reports the specific saved native transaction
+  and actual observed official barrel quantity. Missing/unloaded containers
+  are reported as unknown rather than accepted as empty.
+- Added strict OP-only manual reconciliation commands. `cancel` is allowed
+  for unissued Planned intents when a fresh native count equals `before`.
+  `confirm` is allowed only for Blocked receipts when native count equals
+  `expected_after`; this changes only the persistent ledger and never
+  calls a native inventory mutation. Ambiguous counts remain quarantined.
+  Native market-purchase journals are explicitly outside this mechanism.
+- Hall bulletin shortage values use the combined bakery+hut actual material
+  calculation. An unresolved native receipt causes the sign to display
+  `STOCK CHECK / PENDING TX` rather than a potentially false shortage.
+- Added four Rust domain and six Python source tests; no Rust/Python suites
+  or live Horizon/Minecraft E2E were executed. Do not use on real worlds
+  until compile, migration, operator recovery and crash fault tests pass.
