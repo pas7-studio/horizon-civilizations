@@ -2786,10 +2786,11 @@ fn seems_natural_resource(game: &Game<'_>, dimension: &str, point: [i32; 3], goo
     }
 }
 
-/// A resource may be credited ONLY after: (1) plan saved; (2) the conditional
-/// block command was dispatched; (3) its issued state saved; (4) a later tick
-/// observes the block as air. If a crash happens between steps 2 and 3,
-/// the resource is lost to the village, not counted twice.
+/// A resource may be credited ONLY after: (1) plan saved; (2) Issued
+/// journal persisted; (3) native conditional block edit attempted; (4) later
+/// observation verifies air and a UUID-linked worker returns to the hall.
+/// If the process crashes after Issued but before the actual edit, the
+/// resulting uncertainty is quarantined; no automatic native retry or credit.
 fn gather_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), String> {
     if !DailyPhase::at(game.world.day_time).on_shift(Job::Miner) { return Ok(()); }
     let dimension = game.dim.id().to_owned();
@@ -2829,9 +2830,11 @@ fn gather_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
         return save_autonomous(state, before);
     }
     if name != job.source_block()
-        || !seems_natural_resource(game, &dimension, job.position, job.good) {
-        // Provenance can change after planning. Inspect the actual rooted
-        // tree or exposed stone again before authorizing any world mutation.
+        || !seems_natural_resource(game, &dimension, job.position, job.good)
+        || !state.world.as_ref().unwrap().gather_site_unclaimed(id, job.position, job.stand) {
+        // Physical resource or land ownership may change after a saved plan.
+        // Recheck tree/stone provenance and every registered parcel/worksite
+        // immediately before authorizing a Minecraft world mutation.
         state.world.as_mut().unwrap().block_gather(id)?;
         return save_autonomous(state, before);
     }
