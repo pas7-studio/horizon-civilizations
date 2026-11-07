@@ -47,7 +47,7 @@ python3 tools/package.py
 python3 tools/verify_static.py
 ```
 
-Packaging produces `target/civilizations-0.1.11.hnmod` (source-only; the
+Packaging produces `target/civilizations-0.1.12.hnmod` (source-only; the
 launcher compiles it). The template is based on the **native hook-point**
 pattern used by the official Horizon SMP mod. The compatibility pin is in
 `compatibility.json`; the source was inspected but not compiled in this workspace.
@@ -78,7 +78,7 @@ to compile/trust the native mod before the game can run.
 
 1. Install the official Horizon launcher from <https://playhorizon.dev/>.
 2. Create a separate test instance and back up the world.
-3. Put `civilizations-0.1.11.hnmod` in that instance's `horizon-native-mods/`
+3. Put `civilizations-0.1.12.hnmod` in that instance's `horizon-native-mods/`
    directory. The native build requires the launcher's explicit trust action.
 4. Let the launcher **build** the modded game and review build logs. If you see
    `target not found`, hook schema incompatibility, or Rust errors, stop: the
@@ -115,6 +115,8 @@ to compile/trust the native mod before the game can run.
 | `/civ council NAME`, `/civ forecast NAME` | All | Read-only needs and three-day abstract economic outlook |
 | `/civ survey NAME` | All | Propose up to five loaded, unoccupied building sites; never reserves land |
 | `/civ development NAME` | All | Inspect default-on NPC population, real farm/building activity and blockers |
+| `/civ hall NAME` | All | Inspect physical town hall, mayor, construction progress and real material needs |
+| `/civ warehouse NAME` | All | Inspect resource-backed village warehouse inventory, never abstract stock |
 | `/civ plots NAME` | All | See your bought land and privately owned structures |
 | `/civ buyplot NAME` | Joined players | Purchase a clear 5x5 village parcel for 10 civic coins |
 | `/civ buyhouse NAME` | Joined players | Purchase an intact finished public hut for 35 civic coins |
@@ -393,9 +395,10 @@ clear, run:
   the lot. No NPC construction is required.
 - If the player instead wants an NPC-built starter hut, stand on their
   *empty* parcel and use `/civ commission Ashford`. The job costs
-  **15 additional civic coins** and consumes **8 village wood + 6 stone**
-  from the existing abstract stock. The coin payments move into the
-  village's persisted civic treasury, not a phantom free balance.
+  **15 additional civic coins** paid into the village treasury. This
+  creates a queued order; **no abstract materials are charged**. When the
+  builder begins, exactly **20 real oak logs and 25 real cobblestone**
+  are reserved from the physical warehouse. Missing goods delay building.
 - Commissioned player huts stay **private**, never counted as available
   bedrooms for village NPCs. The player can inspect the project with
   `/civ construction Ashford`.
@@ -435,3 +438,95 @@ normal wood/stone consumption, not free stock generation.
 This purchases only a completed physical hut created by the mod. It
 does not purchase arbitrary vanilla or third-party player structures.
 Owners can build on their parcels using the usual game controls.
+
+## v0.1.12 — a physical Millenaire-style civic hall & real-material construction
+
+**New town priority:** before automatically constructing ordinary public huts,
+the village creates a **real central town hall** at its founding center, using
+a 5x5 version of the existing cautious cobblestone/oak blueprint. It includes
+two native Minecraft barrel blocks (warehouse service points), two oak signs
+(bulletin boards), a lectern (mayor desk), a clear doorway, walls and roof.
+The existing UUID-linked merchant NPC acts as the **starter mayor** and is
+routed to the hall during their work shift.
+
+The native server periodically attempts to fill the **real sign tile data**
+with the village name, mayor, population, shortages of wood and stone and
+residents without housing. This relies on Minecraft's native `data merge
+block` command and **must be checked in actual Horizon gameplay**; source
+code does not prove that the pinned native host accepts sign NBT updates.
+
+### Physical resource economy, not free blocks
+
+A new and legacy town begins with ZERO *verified physical goods* in its
+warehouse. Existing `stock` remains the separate legacy abstract economy:
+its daily output of hypothetical wood/stone cannot silently pay for Minecraft
+blocks. The new `warehouse` tracks only genuine inventory deliveries or
+confirmed physical collection.
+
+- **Town hall** costs **24 oak logs and 25 cobblestone**, reserved once from
+  the warehouse before the first block is placed.
+- Each **ordinary physical hut**, including player commissions, requires
+  **20 logs and 25 cobblestone** to be reserved from the warehouse before
+  its first native block edit. A previously simulated house isn't free.
+- `/civ sell wood 32` or `/civ sell stone 32`, when the player has actual
+  Minecraft oak logs/cobblestone, transfers those items through the native
+  inventory API and credits **only the physical warehouse**, not the
+  abstract stock. `/civ buy` withdraws from the same physical ledger.
+  This preserves existing civic-coin trade semantics, which are not yet a
+  complete cash-flow/escrow accounting implementation.
+- **Farmers** put eight *physical warehouse wheat units* into the same
+  serialized world transaction as a confirmed eight-crop harvest receipt,
+  after all crop changes were observed. They never duplicate abstract
+  wheat or items in the player inventory.
+- **Lumberjacks** scout loaded leafy oak logs and **miners** scout exposed
+  native stone. They receive explicit, save-first work tickets, walk toward
+  safe standing positions and use conditional native block edits. Only a
+  later observation of the removed block, after the issued step is durably
+  saved, can credit **one** log or stone unit. A crash before issued-state
+  persistence loses an uncertain delivery instead of duplicating it.
+- Resource scanning rejects **recorded** player parcels, town centers,
+  active huts, farms and other village structures. Block provenance cannot
+  fully distinguish a placed oak tree or player-built stone from naturally
+  generated blocks in unclaimed terrain; full anti-grief needs a reliable
+  protection/claim integration.
+
+### Actual village center controls
+
+```text
+/civ hall Ashford
+/civ warehouse Ashford
+/civ development Ashford
+/civ roster Ashford
+/civ sell wood 32
+/civ sell stone 32
+```
+
+`/civ hall` reports whether the civic hall is complete, its mayor,
+construction cursor and exact missing materials. `/civ warehouse` lists
+physically backed wheat/bread/logs/cobblestone/iron and the next build deficit.
+The two real wooden signs in a completed hall are intended to show an
+on-site summary without repeatedly typing commands.
+
+**Do not interpret the two barrels as an already integrated native chest
+inventory.** They are currently physical service markers with an authoritative
+save-backed village warehouse. Directly inserting or removing vanilla items
+from those block entities is **not** yet wired into the warehouse ledger; use
+the verified inventory sell/buy path. Native game verification and a proper
+container transactional API remain P0. The bread-baking/stonecutting and
+tree replanting processes are not yet independently physical.
+
+### Current build and validation
+
+The implementation is in `feat/physical-town-hall-warehouse-v0112`, stacked
+after PRs #15-#19. For local Windows validation **without GitHub Actions**:
+
+```powershell
+git fetch origin
+git switch feat/physical-town-hall-warehouse-v0112
+.\scripts\validate-local.ps1 -Format
+.\scripts\validate-local.ps1 -BuildClient
+```
+
+Follow [playtest](docs/PLAYTEST.md) in a disposable world. No Rust compiler,
+native Horizon build, game launch, sign NBT update, or live player-container
+transaction has been tested in this environment; this is source-only work.

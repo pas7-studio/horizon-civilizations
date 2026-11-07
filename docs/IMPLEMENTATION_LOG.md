@@ -192,3 +192,32 @@
   private houses, permitting material-paid replacement over time.
 - Added additional Rust ownership/economy regression and Python source
   assertions, plus manual gameplay cases 99–102.
+
+## 2026-11-07 — v0.1.12 first civic hall + receipt-backed physical warehouse
+
+- Stacked a new source milestone on default-on village autonomy PR #19,
+  without touching the active main binary or enabling GitHub Actions.
+- Real central 5x5 town hall building blueprint includes mayor's lectern,
+  two warehouse barrels and two bulletin signs; the existing merchant
+  resident is routed to this civic center on duty.
+- Added independent, persistent hall building job with domain/native
+  cursors, blocked protection, completion and world-load validation.
+- Added distinct physical warehouse `BTreeMap<Good,u32>`. Abstract
+  simulated stock cannot pay for physical blocks. Hall requires 24 logs
+  and 25 cobblestone; public/private physical huts require 20 logs and
+  25 cobblestone, reserved once before first block placement.
+- Actual native player-item sales enter physical warehouse; buys debit
+  physical ledger. Confirmed 8-crop physical harvest receipt now credits
+  precisely 8 village warehouse wheat while abstract stock stays unchanged.
+- Added durable plan/issued/observed gather ticket, UUID-linked native
+  lumberjack/miner navigation, conditional log/stone extraction and
+  exactly-once world-JSON credit after successful observation.
+- Added two real oak sign text update attempts with name, mayor,
+  population, stock shortages and missing homes; native NBT command
+  support is unverified.
+- Fixed two legacy test fixtures that previously fabricated completed
+  huts without physically reserved supplies; added nine domain tests
+  and eleven Python source contracts for the new subsystem.
+- Crucial follow-up: real vanilla barrel container contents are NOT
+  transactionally connected; these are physical service markers for a
+  separate authoritative save ledger. Native/gameplay tests NOT RUN.

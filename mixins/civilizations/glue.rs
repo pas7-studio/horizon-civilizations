@@ -1,9 +1,9 @@
 // Horizon bridge. All world logic lives in civilizations_core; this module
 // translates server hooks, commands, inventory changes, and native NPC spawns.
 use crate::game::{
-    civilizations_core::{farm_plan, hut_plan, inspect_farm, inspect_hut, is_ground,
+    civilizations_core::{farm_plan, hut_plan, town_hall_plan, inspect_farm, inspect_hut, inspect_town_hall, is_ground,
         BuildInspection, DailyPhase, FarmBlock, FarmDecision, FarmStage, Good, HomeSlot, Job, VisualBuildJob,
-        World, inspect_home, HOUSING_PLOT_OFFSETS, MAX_HOUSING_SURVEY_RESULTS,
+        World, inspect_home, hall_board_positions, HOUSING_PLOT_OFFSETS, MAX_HOUSING_SURVEY_RESULTS,
         MAX_SIM_DAYS},
     native_mobs::NativeSpawn,
     native_server::{NativeCommand, NativeServerPlayer},
@@ -150,6 +150,7 @@ pub fn register(commands: &mut Vec<NativeCommand>) {
         "civ homes <name:word>", "civ survey <name:word>",
         "civ council <name:word>", "civ forecast <name:word>",
         "civ plots <name:word>", "civ development <name:word>",
+        "civ hall <name:word>", "civ warehouse <name:word>",
         "civ construction <name:word>", "civ farming <name:word>",
         "civ harvests <name:word>",
         "civ join <name:word>", "civ title", "civ promote", "civ history",
@@ -248,6 +249,16 @@ fn guide_actors(game: &mut Game<'_>, world: &World) {
             };
             let pos = if let Some(home) = home_target {
                 home
+            } else if phase.on_shift(resident.job)
+                && matches!(resident.job, Job::Lumberjack | Job::Miner)
+                && village.gather_job.as_ref().is_some_and(|job|
+                    (job.good == Good::Wood && resident.job == Job::Lumberjack)
+                    || (job.good == Good::Stone && resident.job == Job::Miner))
+            {
+                let target = village.gather_job.as_ref().expect("gather exists");
+                [f64::from(target.stand[0]) + 0.5,
+                 f64::from(target.stand[1]),
+                 f64::from(target.stand[2]) + 0.5]
             } else if phase.on_shift(resident.job) && resident.job == Job::Farmer {
                 if let Some(farm) = &village.farm {
                     [f64::from(farm.origin[0]) + 0.5,
@@ -259,7 +270,11 @@ fn guide_actors(game: &mut Game<'_>, world: &World) {
                      f64::from(village.center[2] + offset[2]) + 0.5]
                 }
             } else if phase.on_shift(resident.job) && resident.job == Job::Builder {
-                if let Some(job) = &village.visual_job {
+                if let Some(job) = &village.hall_job {
+                    [f64::from(job.origin[0]) + 0.5,
+                     f64::from(job.origin[1]),
+                     f64::from(job.origin[2] - 4) + 0.5]
+                } else if let Some(job) = &village.visual_job {
                     [f64::from(job.origin[0]) + 0.5,
                      f64::from(job.origin[1]),
                      f64::from(job.origin[2] - 4) + 0.5]
@@ -268,6 +283,13 @@ fn guide_actors(game: &mut Game<'_>, world: &World) {
                      f64::from(village.center[1] + offset[1]),
                      f64::from(village.center[2] + offset[2]) + 0.5]
                 }
+            } else if phase.on_shift(resident.job)
+                && resident.job == Job::Merchant && village.hall_complete {
+                // The merchant is the first civic mayor / warehouse
+                // steward; they visibly attend the central hall by day.
+                [f64::from(village.center[0]) + 0.5,
+                 f64::from(village.center[1]),
+                 f64::from(village.center[2]) + 0.5]
             } else {
                 [f64::from(village.center[0] + offset[0]) + 0.5,
                  f64::from(village.center[1] + offset[1]),
@@ -314,6 +336,65 @@ fn check_empty_hut_site(game: &Game<'_>, dimension: &str, origin: [i32; 3]) -> R
     Ok(())
 }
 
+/// One real, resource-funded civic-hall construction step. The hall is
+/// different from a numbered abstract house and never duplicates that stock.
+fn build_town_hall_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), String> {
+    if !DailyPhase::at(game.world.day_time).on_shift(Job::Builder) { return Ok(()); }
+    let dimension = game.dim.id().to_owned();
+    let next = state.world.as_ref().unwrap().settlements.values()
+        .filter(|v| v.dimension == dimension)
+        .filter_map(|v| v.hall_job.as_ref().map(|job| (v.id, job.clone())))
+        .find(|(_, job)| !job.blocked && game.world.loaded(job.origin[0], job.origin[2]));
+    let Some((village_id, job)) = next else { return Ok(()); };
+    let observation = inspect_town_hall(&job, |point| world_block(game, &dimension, point));
+    match observation {
+        BuildInspection::Unloaded | BuildInspection::Paused => Ok(()),
+        BuildInspection::InvalidCursor => Err("invalid civic hall cursor".into()),
+        BuildInspection::Blocked { position, found } => {
+            let v = state.world.as_mut().unwrap().settlements.get_mut(&village_id).unwrap();
+            v.hall_job.as_mut().unwrap().blocked = true;
+            save(state).map_err(|e| format!("persistence: {e}"))?;
+            Err(format!("civic hall blocked at {position:?} by {found}"))
+        }
+        BuildInspection::Rewind(cursor) => {
+            let v = state.world.as_mut().unwrap().settlements.get_mut(&village_id).unwrap();
+            v.hall_job.as_mut().unwrap().cursor = cursor;
+            save(state).map_err(|e| format!("persistence: {e}"))
+        }
+        BuildInspection::Advance => {
+            let v = state.world.as_mut().unwrap().settlements.get_mut(&village_id).unwrap();
+            v.hall_job.as_mut().unwrap().cursor += 1;
+            save(state).map_err(|e| format!("persistence: {e}"))
+        }
+        BuildInspection::Complete => {
+            state.world.as_mut().unwrap().finish_town_hall(village_id)?;
+            save(state).map_err(|e| format!("persistence: {e}"))
+        }
+        BuildInspection::Place { position, old_block, new_block } => {
+            let world = state.world.as_ref().unwrap();
+            let v = &world.settlements[&village_id];
+            let builders = loaded_actors(game, world, village_id);
+            let near = v.residents.iter().filter(|r| r.alive && r.job == Job::Builder)
+                .any(|r| builders.iter().any(|(id, mob)| {
+                    *id == r.id && game.native_mob(&dimension, *mob).is_some_and(|actor| {
+                        let dx = actor.pos[0] - f64::from(job.origin[0]);
+                        let dz = actor.pos[2] - f64::from(job.origin[2]);
+                        dx * dx + dz * dz <= 9.0 * 9.0
+                    })
+                }));
+            if !near { return Ok(()); }
+            let [x, y, z] = position;
+            let cmd = format!(
+                "execute in {dimension} if block {x} {y} {z} {old_block} run setblock {x} {y} {z} {new_block} replace"
+            );
+            if !game.native_run_command(&cmd) {
+                log::warn!("[civilizations] civic hall block command refused: {cmd}");
+            }
+            Ok(())
+        }
+    }
+}
+
 /// A physical builder must be nearby. The command path never edits blocks;
 /// mutations occur on a later authoritative server tick.
 fn build_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), String> {
@@ -330,6 +411,10 @@ fn build_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), St
     let Some((village_id, job)) = selected else {
         return Ok(());
     };
+    if !state.world.as_ref().unwrap().settlements[&village_id].hut_supplies_reserved
+        && job.cursor > 0 {
+        return Err("unfunded legacy partial hut; inspect before resuming real work".into());
+    }
     // This pure function rechecks all previously reported blocks and makes
     // one conservative decision. It does not mutate the world or save.
     let inspection = inspect_hut(&job, |pos| world_block(game, &dim, pos));
@@ -351,12 +436,18 @@ fn build_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), St
             Ok(())
         }
         BuildInspection::Advance => {
+            if !state.world.as_ref().unwrap().settlements[&village_id].hut_supplies_reserved {
+                return Err("observed unfunded hut block: manual inspection required".into());
+            }
             let s = state.world.as_mut().unwrap().settlements.get_mut(&village_id).unwrap();
             s.visual_job.as_mut().unwrap().cursor += 1;
             save(state).map_err(|e| format!("persistence: {e}"))?;
             Ok(())
         }
         BuildInspection::Complete => {
+            if !state.world.as_ref().unwrap().settlements[&village_id].hut_supplies_reserved {
+                return Err("cannot close an unfunded physical hut".into());
+            }
             state.world.as_mut().unwrap().finish_visual_house(village_id)?;
             save(state).map_err(|e| format!("persistence: {e}"))?;
             Ok(())
@@ -375,6 +466,16 @@ fn build_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), St
             }));
             if !near {
                 return Ok(());
+            }
+            // Paying for a virtual house does NOT supply Minecraft items.
+            // Debit actual warehouse goods exactly once before the first
+            // physical block command and save the reservation first.
+            if !state.world.as_ref().unwrap().settlements[&village_id].hut_supplies_reserved {
+                let previous = state.world.as_ref().unwrap().clone();
+                if !state.world.as_mut().unwrap().reserve_hut_supplies(village_id)? {
+                    return Ok(()); // town hall board shows shortage
+                }
+                save_autonomous(state, previous)?;
             }
             let [x, y, z] = position;
             // Conditional server write: the saved cursor advances only after
@@ -522,6 +623,9 @@ pub fn interact_entity(game: &mut Game<'_>, entity: i32, kind: &str, claimed: &m
     };
     let phase = DailyPhase::at(game.world.day_time);
     let duty = if phase.on_shift(resident.job) { "on duty" } else { "off duty" };
+    let role = if resident.job == Job::Merchant {
+        "mayor / warehouse steward"
+    } else { resident.job.name() };
     let council = village.council_priorities().first()
         .map(|priority| format!(
             "Council: {} {}/100", priority.need.label(), priority.urgency
@@ -533,7 +637,7 @@ pub fn interact_entity(game: &mut Game<'_>, entity: i32, kind: &str, claimed: &m
     };
     let message = format!(
         "{} — {} of {} (morale {}). Routine: {} / {}. Home: {}. {}. {} View: /civ info {}. Trade: /civ buy/sell <good> <amount>.",
-        resident.name, resident.job.name(), village.name, village.morale,
+        resident.name, role, village.name, village.morale,
         phase.name(), duty, home, council, invitation, village.name
     );
     drop(guard);
@@ -559,7 +663,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
     let actor = format!("{:032x}", player.uuid);
     let action = args.next().unwrap_or("help");
     if action == "help" {
-        reply(game, "Civilizations: /civ list | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | buyplot <name> | buyhouse <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, day [days], construct <name>, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
+        reply(game, "Civilizations: /civ list | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | hall <name> | warehouse <name> | buyplot <name> | buyhouse <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, day [days], construct <name>, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
         return;
     }
     if action == "list" {
@@ -568,6 +672,46 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             items.push(format!("#{} {} [{}] pop={} houses={}", s.id, s.name, s.culture, s.population(), s.houses));
         }
         reply(game, if items.is_empty() { "No settlements yet. OP: /civ found Ashford".into() } else { items.join(" | ") });
+        return;
+    }
+    if action == "hall" || action == "warehouse" {
+        let name = args.next().unwrap_or("");
+        let Some(village) = world.by_name(name) else {
+            error(game, "unknown settlement: /civ hall <name>");
+            return;
+        };
+        let mayor = village.residents.iter()
+            .find(|r| r.alive && r.job == Job::Merchant)
+            .map(|r| r.name.as_str()).unwrap_or("unassigned");
+        let (hall_wood, hall_stone) = village.hall_materials_missing();
+        let (hut_wood, hut_stone) = (
+            crate::game::civilizations_core::HUT_WOOD_LOGS
+                .saturating_sub(village.warehouse_quantity(Good::Wood)),
+            crate::game::civilizations_core::HUT_COBBLESTONE
+                .saturating_sub(village.warehouse_quantity(Good::Stone)),
+        );
+        let goods = [Good::Wheat, Good::Bread, Good::Wood, Good::Stone, Good::Iron];
+        let inventory = goods.iter().map(|good| format!(
+            "{}:{}", good.as_str(), village.warehouse_quantity(*good)
+        )).collect::<Vec<_>>().join(" / ");
+        if action == "warehouse" {
+            reply(game, format!(
+                "{} PHYSICAL warehouse [{}]. Current hall needs {} logs, {} cobblestone; next hut needs {} logs, {} cobblestone. Player /civ sell <good> <amount> delivers actual inventory. Abstract daily-production stock is NOT this warehouse.",
+                village.name, inventory, hall_wood, hall_stone, hut_wood, hut_stone
+            ));
+        } else {
+            let building = village.hall_job.as_ref().map(|job| format!(
+                "{}/{} blocks verified at {:?}, blocked={}",
+                job.cursor, town_hall_plan(job.origin).len(), job.origin, job.blocked
+            )).unwrap_or_else(|| "waiting for funded construction".to_owned());
+            let state = if village.hall_complete {
+                "COMPLETED: mayor desk, resource barrels and 2 bulletin signs"
+            } else { "UNDER CONSTRUCTION / UNFUNDED" };
+            reply(game, format!(
+                "{} civic center: {}. Mayor: {} (village merchant). {}. Physical goods: [{}]. Need {} logs and {} stone to fund hall. Signs refresh when a complete hall is loaded.",
+                village.name, state, mayor, building, inventory, hall_wood, hall_stone
+            ));
+        }
         return;
     }
     if action == "development" {
@@ -794,7 +938,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             .map(|receipt| format!("#{} day {} ({} crops)",
                 receipt.sequence, receipt.world_day, receipt.crops)).collect();
         reply(game, format!(
-            "{} visual harvest evidence: {} recorded harvests, {} kept in bounded log. {}. No physical stock has been credited.",
+            "{} observed physical harvest evidence: {} recorded batches, {} kept in bounded log. {}. Physical warehouse credits confirmed crops only; no abstract stock or player items credited.",
             village.name, farm.harvest_sequence, farm.harvest_receipts.len(),
             if details.is_empty() { "No harvest receipts".to_owned() } else { details.join(" | ") },
         ));
@@ -1324,8 +1468,95 @@ fn autonomous_village_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Resu
         && actors.iter().any(|(known, _)| *known == r.id));
     let has_builder = village.residents.iter().any(|r| r.alive && r.job == Job::Builder
         && actors.iter().any(|(known, _)| *known == r.id));
+    // Recover from a refused/modified extraction without paying any wood or
+    // stone; the next planning cycle may choose another untouched source.
+    if village.gather_job.as_ref().is_some_and(|job| job.blocked) {
+        let before = state.world.as_ref().unwrap().clone();
+        state.world.as_mut().unwrap().discard_blocked_gather(id)?;
+        save_autonomous(state, before)?;
+        return Ok(());
+    }
+
+    // Fetch REAL materials before allocating any physical structure. A
+    // lumberjack needs a leafy oak trunk and a miner needs exposed natural
+    // stone; both require verified empty standing space and UUID identity.
+    let (wood_needed, stone_needed) = if !village.hall_complete {
+        village.hall_materials_missing()
+    } else if village.visual_job.is_some()
+        && !village.hut_supplies_reserved
+        || village.pending_visual_buildings > 0 && village.physical_housing().2 > 0 {
+        (
+            crate::game::civilizations_core::HUT_WOOD_LOGS
+                .saturating_sub(village.warehouse_quantity(Good::Wood)),
+            crate::game::civilizations_core::HUT_COBBLESTONE
+                .saturating_sub(village.warehouse_quantity(Good::Stone)),
+        )
+    } else { (0, 0) };
+
+    if village.gather_job.is_none() {
+        for (good, need, profession) in [
+            (Good::Wood, wood_needed, Job::Lumberjack),
+            (Good::Stone, stone_needed, Job::Miner),
+        ] {
+            if need == 0 || !village.residents.iter().any(|r| {
+                r.alive && r.job == profession
+                    && actors.iter().any(|(rid, _)| *rid == r.id)
+            }) {
+                continue;
+            }
+            // Inspect at most 320 of 1,681 X/Z candidates per planner
+            // turn, with up to 6 nearby Y levels. Never scan thousands of
+            // chunks at once; rotate to visit new places on later turns.
+            let candidates = 41_usize * 41;
+            let start = ((state.physical_ticks / 100) as usize * 101) % candidates;
+            for step in 0..320_usize {
+                let index = (start + step) % candidates;
+                let dx = (index / 41) as i32 * 2 - 40;
+                let dz = (index % 41) as i32 * 2 - 40;
+                    let (Some(x), Some(z)) = (
+                        village.center[0].checked_add(dx),
+                        village.center[2].checked_add(dz)
+                    ) else { continue; };
+                    for dy in [-2_i32, -1, 0, 1, 2, 3] {
+                        let Some(y) = village.center[1].checked_add(dy) else { continue; };
+                        let position = [x, y, z];
+                        if !seems_natural_resource(game, &dimension, position, good) { continue; }
+                        let Some(stand) = gather_stand(game, &dimension, position) else { continue; };
+                        let planned = state.world.as_mut().unwrap()
+                            .plan_gather(id, good, position, stand).is_ok();
+                        if planned {
+                            // Previous value has no gather job. Save the
+                            // intent before authorizing a future world edit.
+                            let before = state.world.as_ref().unwrap().clone();
+                            // Reconstruct pre-image by clearing only our
+                            // newly planned intent in the transaction backup.
+                            let mut prior = before;
+                            prior.settlements.get_mut(&id).unwrap().gather_job = None;
+                            save_autonomous(state, prior)?;
+                            log::info!("[civilizations] {} sent a {} to {:?}", village.name,
+                                profession.name(), position);
+                            return Ok(());
+                        }
+                    }
+            }
+        }
+    }
+
+    // Town hall is physically assembled first from the verified warehouse
+    // bill of materials; it may remain pending while players deliver goods.
+    // The planner does NOT consume abstract simulation wood/stone.
+    if !village.hall_complete && village.hall_job.is_none() && has_builder {
+        if check_empty_hut_site(game, &dimension, village.center).is_ok() {
+            let before = state.world.as_ref().unwrap().clone();
+            if state.world.as_mut().unwrap().reserve_town_hall(id)? {
+                save_autonomous(state, before)?;
+                log::info!("[civilizations] {} started material-backed civic hall", village.name);
+                return Ok(());
+            }
+        }
+    }
     let need_field = has_farmer && village.farm.is_none();
-    let need_hut = has_builder && village.visual_job.is_none()
+    let need_hut = has_builder && village.hall_complete && village.visual_job.is_none()
         && village.pending_visual_buildings > 0 && village.physical_housing().2 > 0;
     if !need_field && !need_hut { return Ok(()); }
 
@@ -1364,6 +1595,166 @@ fn autonomous_village_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Resu
     Ok(())
 }
 
+/// Refresh two actual native Minecraft sign tile entities with readable
+/// information. Only the mod's expected signs in a COMPLETED hall qualify.
+/// No change to stock, players or civic JSON is made by this operation.
+fn refresh_hall_boards(game: &mut Game<'_>, world: &World) {
+    let dimension = game.dim.id().to_owned();
+    let mut commands = Vec::new();
+    for village in world.settlements.values()
+        .filter(|v| v.dimension == dimension && v.hall_complete)
+    {
+        let mayor = village.residents.iter()
+            .find(|r| r.alive && r.job == Job::Merchant)
+            .map(|r| r.name.as_str()).unwrap_or("NONE");
+        let (_, _, homeless) = village.physical_housing();
+        let (wood_missing, stone_missing) = if village.hall_complete {
+            let next = if village.visual_job.is_some() || village.pending_visual_buildings > 0 {
+                (crate::game::civilizations_core::HUT_WOOD_LOGS,
+                 crate::game::civilizations_core::HUT_COBBLESTONE)
+            } else { (0, 0) };
+            (next.0.saturating_sub(village.warehouse_quantity(Good::Wood)),
+             next.1.saturating_sub(village.warehouse_quantity(Good::Stone)))
+        } else { village.hall_materials_missing() };
+        let [mayor_sign, needs_sign] = hall_board_positions(village.center);
+        for (pos, lines) in [
+            (mayor_sign, [
+                "TOWN HALL".to_owned(), village.name.clone(),
+                format!("MAYOR {mayor}"), format!("POP {}", village.population()),
+            ]),
+            (needs_sign, [
+                "VILLAGE NEEDS".to_owned(),
+                format!("WOOD -{wood_missing}"),
+                format!("STONE -{stone_missing}"),
+                format!("NO HOME {homeless}"),
+            ]),
+        ] {
+            if world_block(game, &dimension, pos).as_deref() != Some("minecraft:oak_sign") {
+                continue;
+            }
+            // All printed inputs originate from names constrained to ASCII
+            // letters/digits/underscore and bounded integer counters.
+            let json_lines: Vec<String> = lines.iter().map(|line| {
+                format!("'{}'", serde_json::json!({"text": line}).to_string())
+            }).collect();
+            let [x, y, z] = pos;
+            commands.push(format!(
+                "execute in {dimension} if block {x} {y} {z} minecraft:oak_sign run data merge block {x} {y} {z} {{front_text:{{messages:[{}]}}}}",
+                json_lines.join(",")
+            ));
+        }
+    }
+    for command in commands {
+        if !game.native_run_command(&command) {
+            log::warn!("[civilizations] town hall sign refresh unsupported: {command}");
+        }
+    }
+}
+
+/// Find reachable-looking air next to a candidate real resource. This is
+/// NOT a pathfinding guarantee: the native AI may refuse its route.
+fn gather_stand(game: &Game<'_>, dimension: &str, pos: [i32; 3]) -> Option<[i32; 3]> {
+    for dy in [0_i32, 1, -1] {
+        for (dx, dz) in [(1_i32, 0_i32), (-1, 0), (0, 1), (0, -1)] {
+            let (Some(x), Some(y), Some(z)) = (
+                pos[0].checked_add(dx), pos[1].checked_add(dy), pos[2].checked_add(dz)
+            ) else { continue; };
+            let Some(head) = y.checked_add(1) else { continue; };
+            let Some(floor) = y.checked_sub(1) else { continue; };
+            if world_block(game, dimension, [x, y, z]).as_deref() == Some("minecraft:air")
+                && world_block(game, dimension, [x, head, z]).as_deref() == Some("minecraft:air")
+                && world_block(game, dimension, [x, floor, z])
+                    .is_some_and(|block| is_ground(&block)) {
+                return Some([x, y, z]);
+            }
+        }
+    }
+    None
+}
+
+/// Local material source recognition. Naturalness is conservative but not
+/// provable from block state alone: player protection claims and the structure
+/// exclusion remain mandatory; no guaranteed anti-grief for other mods.
+fn seems_natural_resource(game: &Game<'_>, dimension: &str, point: [i32; 3], good: Good) -> bool {
+    match good {
+        Good::Wood => {
+            if world_block(game, dimension, point).as_deref() != Some("minecraft:oak_log") {
+                return false;
+            }
+            // A leaf-bearing oak tree, not a bare timber log in a wall.
+            for (dx, dy, dz) in [(0_i32, 1_i32, 0_i32), (1, 1, 0),
+                                 (-1, 1, 0), (0, 1, 1), (0, 1, -1)] {
+                let (Some(x), Some(y), Some(z)) = (
+                    point[0].checked_add(dx), point[1].checked_add(dy),
+                    point[2].checked_add(dz)
+                ) else { continue; };
+                if world_block(game, dimension, [x, y, z]).as_deref()
+                    == Some("minecraft:oak_leaves") {
+                    return true;
+                }
+            }
+            false
+        }
+        Good::Stone => world_block(game, dimension, point).as_deref() == Some("minecraft:stone"),
+        _ => false,
+    }
+}
+
+/// A resource may be credited ONLY after: (1) plan saved; (2) the conditional
+/// block command was dispatched; (3) its issued state saved; (4) a later tick
+/// observes the block as air. If a crash happens between steps 2 and 3,
+/// the resource is lost to the village, not counted twice.
+fn gather_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), String> {
+    if !DailyPhase::at(game.world.day_time).on_shift(Job::Miner) { return Ok(()); }
+    let dimension = game.dim.id().to_owned();
+    let target = state.world.as_ref().unwrap().settlements.values()
+        .filter(|v| v.dimension == dimension)
+        .filter_map(|v| v.gather_job.as_ref().map(|job| (v.id, job.clone())))
+        .find(|(_, job)| !job.blocked && game.world.loaded(job.position[0], job.position[2]));
+    let Some((id, job)) = target else { return Ok(()); };
+    let observed = world_block(game, &dimension, job.position);
+    let Some(name) = observed else { return Ok(()); };
+    let before = state.world.as_ref().unwrap().clone();
+    if job.issued {
+        if name == "minecraft:air" {
+            state.world.as_mut().unwrap().confirm_gather(id)?;
+        } else {
+            // Commands can be refused or a plot may be modified. Never
+            // issue twice: block and replan a different natural block.
+            state.world.as_mut().unwrap().block_gather(id)?;
+        }
+        return save_autonomous(state, before);
+    }
+    if name != job.source_block() {
+        state.world.as_mut().unwrap().block_gather(id)?;
+        return save_autonomous(state, before);
+    }
+    let world = state.world.as_ref().unwrap();
+    let v = &world.settlements[&id];
+    let profession = if job.good == Good::Wood { Job::Lumberjack } else { Job::Miner };
+    let actors = loaded_actors(game, world, id);
+    let near = v.residents.iter().filter(|r| r.alive && r.job == profession)
+        .any(|r| actors.iter().any(|(rid, mob)| {
+            *rid == r.id && game.native_mob(&dimension, *mob).is_some_and(|actor| {
+                let dx = actor.pos[0] - f64::from(job.position[0]);
+                let dz = actor.pos[2] - f64::from(job.position[2]);
+                dx * dx + dz * dz <= 6.0 * 6.0
+            })
+        }));
+    if !near { return Ok(()); }
+    let [x, y, z] = job.position;
+    let cmd = format!(
+        "execute in {dimension} if block {x} {y} {z} {} run setblock {x} {y} {z} minecraft:air replace",
+        job.source_block()
+    );
+    if !game.native_run_command(&cmd) {
+        state.world.as_mut().unwrap().block_gather(id)?;
+    } else {
+        state.world.as_mut().unwrap().mark_gather_issued(id)?;
+    }
+    save_autonomous(state, before)
+}
+
 /// Runs after an authoritative level tick: the selected dimension and its
 /// loaded chunks are guaranteed to be the ones inspected/modified here.
 pub fn level_tick(game: &mut Game<'_>, dimension: &str) {
@@ -1379,6 +1770,11 @@ pub fn level_tick(game: &mut Game<'_>, dimension: &str) {
     // Villages start their own visible work by default, without needing
     // OP construction/field/spawn commands. The planner is bounded and
     // *never* edits a block without the existing worker-aware tick.
+    if state.physical_ticks % 400 == 0 {
+        if let Some(world) = state.world.as_ref() {
+            refresh_hall_boards(game, world);
+        }
+    }
     if state.physical_ticks % 100 == 0 {
         if let Err(error) = autonomous_village_step(game, state) {
             log::warn!("[civilizations] autonomous planning stopped: {error}");
@@ -1396,6 +1792,13 @@ pub fn level_tick(game: &mut Game<'_>, dimension: &str) {
         if let Some(world) = &state.world { guide_actors(game, world); }
     }
     if state.physical_ticks % 4 == 0 {
+        if let Err(error) = build_town_hall_one_step(game, state) {
+            log::warn!("[civilizations] civic hall construction paused: {error}");
+            if error.starts_with("persistence:") {
+                state.problem = Some(error);
+                return;
+            }
+        }
         if let Err(error) = build_one_step(game, state) {
             // Unloaded chunks are normal; a player may leave and return.
             if error.contains("unloaded") || error.contains("not loaded") {
@@ -1411,6 +1814,13 @@ pub fn level_tick(game: &mut Game<'_>, dimension: &str) {
         }
     }
     if state.physical_ticks % 8 == 0 {
+        if let Err(error) = gather_one_step(game, state) {
+            log::warn!("[civilizations] physical gathering paused: {error}");
+            if error.starts_with("persistence:") {
+                state.problem = Some(error);
+                return;
+            }
+        }
         if let Err(error) = farm_one_step(game, state) {
             if error.contains("unloaded") || error.contains("not loaded") {
                 return;

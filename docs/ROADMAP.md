@@ -216,3 +216,34 @@ play. That was a **product gap**, not cosmetic polish.
 - [x] Restock public abstract housing via existing material-consuming
   economic simulation after a private sale instead of minting free
   replacement huts.
+
+## P0 physical town hall and real material supply — v0.1.12 source branch
+
+- [x] Separate the civic hall blueprint from ordinary abstract/personal
+  houses, with barrels, bulletin signs and a lectern for the village mayor.
+- [x] Fund town hall from physical warehouse (24 oak logs, 25 cobblestone),
+  with persistent cursor and native loaded-world block reconciliation.
+- [x] Require 20 logs and 25 cobblestone before any physical hut block work;
+  a prior abstract house or simulated income does not pay that bill.
+- [x] Physically delivered player inventory item trades credit the warehouse,
+  not the virtual economy. Player buys withdraw only physically backed items.
+- [x] Credit eight warehouse wheat only with one confirmed physical harvest
+  receipt, without duplicating stock or player inventory items.
+- [x] Send real lumberjack/miner actors to loaded, unclaimed natural-source
+  positions; persist plan → issued → observed gather states, each yielding
+  at most one material unit.
+- [x] Central town hall read-only /civ hall /civ warehouse status and two
+  native sign block text-update attempts for mayor and shortages.
+- [ ] **Native E2E REQUIRED:** compilation, correct MC sign NBT, world
+  placement, worker pathfinding, obtaining a complete bill of materials,
+  restart/reload, protected plots and visible construction.
+- [ ] Wire two physical barrels to real container inventory with transactional
+  deposits/withdrawals and theft/duplication protection. Current barrels
+  are visual service points; separate warehouse ledger is authoritative.
+- [ ] Assign a dedicated elected/moving mayor role; currently the merchant
+  resident acts as first mayor.
+- [ ] Real bakery, quarry, lumberyard, wood replanting, warehouses with
+  stack-visible contents, roads, hauling/couriers and city growth based on
+  actual store supply.
+- [ ] Native player land/block provenance and protection interoperability:
+  recorded plot exclusions do NOT equal universal anti-grief.

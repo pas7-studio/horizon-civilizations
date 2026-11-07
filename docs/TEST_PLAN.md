@@ -189,11 +189,12 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
     choose other sites for both farm and hut, while the purchased square
     remains clear and reserved for the player. Verify /civ plots Ashford.
 93. On a bought **empty** parcel, run `/civ commission Ashford` with
-    15 more coins available and 8 wood/6 stone available in village
-    simulation. Both coin fee and materials are consumed once and
-    a single private hut job is recorded. A second commission, foreign
-    player's commission or unaffordable commission must fail without side
-    effects.
+    15 more civic coins available. The labor fee and one private hut
+    project are recorded immediately, but no abstract wood/stone is
+    charged. Actual native construction must wait for 20 real logs and
+    25 real cobblestone in the warehouse, reserved exactly once when
+    work starts. A second commission, foreign owner's commission or
+    unaffordable request must fail without side effects.
 94. Let the private hut complete; it must remain private (no assigned NPC
     beds), survive save/reload, and still be excluded from automatic
     construction on its owner's parcel. Player can also build their
@@ -230,3 +231,70 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
      world with available wood and stone. The city should work toward
      replacing private housing with a **material-paid** public house,
      rather than counting the sold structure as available village beds.
+
+## P0 physical civic hall / material warehouse v0.1.12 (local E2E)
+
+103. Create a disposable village on level natural ground. Run only
+     `/civ found Ashford`. Wait with loaded chunks; the UUID-linked merchant
+     must be identified as the starter mayor. Check `/civ hall Ashford`.
+     Hall should remain **unbuilt** without real warehouse resources,
+     even though the abstract legacy stock contains wood/stone.
+104. With authentic oak logs and cobblestone in the player's native inventory,
+     sell 24 logs and 25 stone to the joined settlement using `/civ sell`.
+     Confirm inventory decremented by exactly those counts, warehouse rose
+     by those counts, abstract stock did not duplicate, and save/reopen
+     preserves the amounts exactly.
+105. Verify the autonomous builder selects the existing central 5x5 clear
+     plot, spends those real resources once and physically builds the hall
+     gradually, from floor to walls/roof to barrels, signs and lectern.
+     Leave and return mid-build; it must not mint/charge twice.
+106. Inspect the real signs (not merely `/civ hall` text). They should
+     show town name, mayor, headcount and outstanding materials. Any native
+     console `data merge block` error must be captured; a source contract
+     alone does not count as successful text rendering.
+107. Check `/civ warehouse Ashford` and `/civ hall Ashford` while
+     standing in front of the built civic hall. The two barrels are **not**
+     yet synced vanilla chest inventories: do not manually use them as a
+     verified storage source. Use the inventory transfer commands.
+108. Before any subsequent physical hut, provide 20 more oak logs and 25
+     cobblestone. With less than either amount, no native hut blocks may
+     appear and no failed reservation may consume the other good.
+109. With adequate stock, verify a physical hut's first native block action
+     is preceded by one durable supply reservation. Restart during the
+     first/last step and ensure no second debit, no foreign-block overwrite
+     and correct site completion.
+110. In a real loaded 3x3 irrigated wheat patch, confirm all eight mature
+     crops are observed harvested. The farm receipts increase once and
+     exactly eight physical warehouse wheat units are added, while
+     abstract wheat and player inventory do not change. No duplicate on
+     reload/replant/callback.
+111. Allow lumberjack to find a leafy oak tree outside player claims.
+     Verify the villager physically navigates near the source, the intended
+     oak_log is conditionally replaced by air, then one warehouse oak log
+     is credited after a later observation. No instant simulated '+3'.
+112. Repeat with a miner and exposed natural stone; one verified stone
+     removal yields one warehouse cobblestone unit. Resource harvesting
+     must be bounded to loaded chunks, not repeated after restart.
+113. Interrupt after gather plan save but before command, after the block
+     command but before issued-state save, and after issued-state save but
+     before confirmation (use disposable fault-injection fixtures). Nothing
+     may be credited twice; uncertain changes fail closed.
+114. Purchase a player parcel, place private oak/stone structures on it,
+     then repeat village scanning. The village's miners/builders must not
+     select registered property. Also test a constructed leaf-covered
+     oak tree in **unclaimed** land; inspect limitations of provenance
+     detection without assuming perfect anti-grief.
+115. Damage a hall foundation, sign, barrel or lectern after construction
+     only in a disposable world. A previously completed hall must not
+     silently rewrite edited blocks. Assess need for explicit repair path.
+116. Simulate two villages and distinct dimensions, unloading chunks and
+     revisiting later; each ledger and cursor must remain isolated.
+117. Buy a physical item back from the warehouse, verify exactly one
+     native inventory transfer and warehouse debit; prevent selling
+     non-owned items or buying unavailable stock.
+118. Verify the merchant NPC actually travels into the hall during
+     work hours; at dusk it should follow its home routine, without
+     becoming a duplicate mayor/villager.
+119. Record screen captures of working hall, signs, visible builder work,
+     crop tending and material transfer, plus native logs. **Only those
+     observations close first-playable acceptance, not source assertions.**

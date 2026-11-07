@@ -16,7 +16,7 @@ class HarvestReceiptContracts(unittest.TestCase):
     def test_read_only_command_and_no_stock_credit(self):
         self.assertIn('"civ harvests <name:word>"', GLUE)
         self.assertIn('if action == "harvests"', GLUE)
-        self.assertIn("No physical stock has been credited", GLUE)
+        self.assertIn("Physical warehouse credits confirmed crops only", GLUE)
         start = CORE.index("FarmStage::Harvesting => {")
         end = CORE.index("FarmStage::Replanting => {", start)
         self.assertNotIn("stock.insert", CORE[start:end])

@@ -34,7 +34,7 @@ try {
     if ($LASTEXITCODE -ne 0) { throw 'package.py failed' }
     & $PythonExe @PythonArgs tools/verify_static.py
     if ($LASTEXITCODE -ne 0) { throw 'verify_static.py failed' }
-    $Package = Join-Path $Root 'target\civilizations-0.1.11.hnmod'
+    $Package = Join-Path $Root 'target\civilizations-0.1.12.hnmod'
     $Destination = Join-Path $InstancePath 'horizon-native-mods'
     New-Item -ItemType Directory -Path $Destination -Force | Out-Null
     Copy-Item -Path $Package -Destination $Destination -Force

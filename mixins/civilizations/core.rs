@@ -370,6 +370,63 @@ pub fn hut_plan(origin: [i32; 3]) -> Vec<HutBlock> {
     plan
 }
 
+/// One pending real-resource extraction. Persist the plan before the block
+/// command; issue state before granting any Minecraft-derived warehouse item.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct GatherJob {
+    pub position: [i32; 3],
+    /// Verified empty two-high destination a worker can navigate toward.
+    pub stand: [i32; 3],
+    pub good: Good, // only Wood (oak log) or Stone (natural stone)
+    pub issued: bool,
+    #[serde(default)]
+    pub blocked: bool,
+}
+
+impl GatherJob {
+    pub fn source_block(&self) -> &'static str {
+        match self.good {
+            Good::Wood => "minecraft:oak_log",
+            Good::Stone => "minecraft:stone",
+            _ => "",
+        }
+    }
+}
+
+/// Founding civic hall uses the existing 5x5 safe physical shell, with an
+/// identifiable mayor desk, two resource barrels and two bulletin signs.
+/// Barrel contents are not treated as a vanilla chest inventory: the guarded
+/// civic warehouse ledger is authoritative until a verified container API
+/// can support crash-atomic external transfers.
+pub const HALL_WOOD_LOGS: u32 = 24;
+pub const HALL_COBBLESTONE: u32 = 25;
+pub const HUT_WOOD_LOGS: u32 = 20;
+pub const HUT_COBBLESTONE: u32 = 25;
+
+pub fn town_hall_plan(origin: [i32; 3]) -> Vec<HutBlock> {
+    let mut plan = hut_plan(origin);
+    for (dx, dz, block) in [
+        (-1, 1, "minecraft:barrel"),
+        (1, 1, "minecraft:barrel"),
+        (-1, -1, "minecraft:oak_sign"),
+        (1, -1, "minecraft:oak_sign"),
+        (0, 1, "minecraft:lectern"),
+    ] {
+        plan.push(HutBlock {
+            pos: [origin[0] + dx, origin[1], origin[2] + dz],
+            block, floor: false,
+        });
+    }
+    plan
+}
+
+/// Bulletin signs are real blocks inside the civic hall; the native adapter
+/// supplies validated, bounded sign text after the town hall is complete.
+pub fn hall_board_positions(origin: [i32; 3]) -> [[i32; 3]; 2] {
+    [[origin[0] - 1, origin[1], origin[2] - 1],
+     [origin[0] + 1, origin[1], origin[2] - 1]]
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VisualBuildJob {
     pub origin: [i32; 3],
@@ -436,6 +493,31 @@ pub fn inspect_hut(job: &VisualBuildJob, mut read: impl FnMut([i32; 3]) -> Optio
     BuildInspection::Complete
 }
 
+
+/// Same fail-closed crash reconciliation as ordinary huts, but with
+/// the distinct civic center blueprint and actual warehouse blocks.
+pub fn inspect_town_hall(
+    job: &VisualBuildJob, mut read: impl FnMut([i32; 3]) -> Option<String>
+) -> BuildInspection {
+    if job.blocked { return BuildInspection::Paused; }
+    let plan = town_hall_plan(job.origin);
+    if job.cursor > plan.len() { return BuildInspection::InvalidCursor; }
+    for (index, step) in plan.iter().enumerate() {
+        if index > job.cursor { break; }
+        let Some(actual) = read(step.pos) else { return BuildInspection::Unloaded; };
+        if actual == step.block {
+            if index == job.cursor { return BuildInspection::Advance; }
+            continue;
+        }
+        let replaceable = if step.floor { is_ground(&actual) } else { actual == "minecraft:air" };
+        if !replaceable { return BuildInspection::Blocked { position: step.pos, found: actual }; }
+        if index < job.cursor { return BuildInspection::Rewind(index); }
+        return BuildInspection::Place {
+            position: step.pos, old_block: actual, new_block: step.block,
+        };
+    }
+    BuildInspection::Complete
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -670,6 +752,20 @@ pub struct Settlement {
     pub founder: String,
     pub residents: Vec<Resident>,
     pub stock: BTreeMap<Good, u32>,
+    /// Physical goods acquired from verified inventory transfers and
+    /// completed observable harvests. NOT the abstract daily stock.
+    #[serde(default)]
+    pub warehouse: BTreeMap<Good, u32>,
+    /// Active physical civic hall construction; never inferred from a JSON
+    /// house counter, and can resume after restarting with observed blocks.
+    #[serde(default)]
+    pub hall_job: Option<VisualBuildJob>,
+    /// The civic center is proven complete only after all plan blocks read.
+    #[serde(default)]
+    pub hall_complete: bool,
+    /// Pending actual tree/stone harvest; reconciled against native blocks.
+    #[serde(default)]
+    pub gather_job: Option<GatherJob>,
     /// Player civic coin payments are transferred here, not silently burned.
     #[serde(default)]
     pub treasury_coins: u64,
@@ -693,6 +789,9 @@ pub struct Settlement {
     pub visual_sites: Vec<[i32; 3]>,
     #[serde(default)]
     pub visual_job: Option<VisualBuildJob>,
+    /// Physical bill-of-materials deducted once per active hut project.
+    #[serde(default)]
+    pub hut_supplies_reserved: bool,
     /// Optional one-field living crop simulation, retained across saves.
     #[serde(default)]
     pub farm: Option<FarmPlot>,
@@ -892,6 +991,34 @@ impl Settlement {
         priorities
     }
 
+    pub fn warehouse_quantity(&self, good: Good) -> u32 {
+        self.warehouse.get(&good).copied().unwrap_or(0)
+    }
+
+    /// Physical receipt; reject overflow rather than silently mint or lose items.
+    pub fn warehouse_credit(&mut self, good: Good, count: u32) -> Result<(), String> {
+        let next = self.warehouse_quantity(good).checked_add(count)
+            .ok_or("physical warehouse capacity overflow")?;
+        if next > 10_000_000 { return Err("physical warehouse capacity exceeded".into()); }
+        self.warehouse.insert(good, next);
+        Ok(())
+    }
+
+    pub fn warehouse_debit(&mut self, good: Good, count: u32) -> Result<(), String> {
+        let current = self.warehouse_quantity(good);
+        if current < count { return Err(format!(
+            "warehouse lacks {} {}: {} available, {} required",
+            good.as_str(), current, count
+        )); }
+        self.warehouse.insert(good, current - count);
+        Ok(())
+    }
+
+    pub fn hall_materials_missing(&self) -> (u32, u32) {
+        (HALL_WOOD_LOGS.saturating_sub(self.warehouse_quantity(Good::Wood)),
+         HALL_COBBLESTONE.saturating_sub(self.warehouse_quantity(Good::Stone)))
+    }
+
     pub fn quantity(&self, good: Good) -> u32 {
         self.stock.get(&good).copied().unwrap_or(0)
     }
@@ -1004,6 +1131,27 @@ impl World {
             if village.id != id { return Err("settlement id/key mismatch".into()); }
             let normalized = village.name.to_ascii_lowercase();
             if !seen.insert(normalized) { return Err("duplicate settlement names".into()); }
+            if let Some(gather) = &village.gather_job {
+                let [x, y, z] = gather.position;
+                if !matches!(gather.good, Good::Wood | Good::Stone)
+                    || i64::from(x).abs() > 29_999_988
+                    || i64::from(z).abs() > 29_999_988
+                    || !(-2046..=2046).contains(&y) {
+                    return Err("invalid physical gather record".into());
+                }
+            }
+            if village.hall_complete && village.hall_job.is_some() {
+                return Err("civic hall cannot be simultaneously complete and under construction".into());
+            }
+            if let Some(job) = &village.hall_job {
+                if job.origin != village.center
+                    || job.cursor > town_hall_plan(job.origin).len() {
+                    return Err("civic hall cursor/site invalid".into());
+                }
+            }
+            for &amount in village.warehouse.values() {
+                if amount > 10_000_000 { return Err("physical warehouse entry too large".into()); }
+            }
             if village.player_parcels.len() > MAX_PLAYER_PARCELS { return Err("too many player parcels".into()); }
             for parcel in &village.player_parcels {
                 if parcel.owner.is_empty() || !self.players.contains_key(&parcel.owner) {
@@ -1080,6 +1228,9 @@ impl World {
                     return Err("visual site outside world bounds".into());
                 }
                 if !unique_sites.insert((site[0], site[1], site[2])) { return Err("duplicate visual build site".into()); }
+            }
+            if village.hut_supplies_reserved && village.visual_job.is_none() {
+                return Err("reserved hut materials without an active job".into());
             }
             if let Some(job) = &village.visual_job {
                 if i64::from(job.origin[0]).abs() > 29_999_990 || i64::from(job.origin[2]).abs() > 29_999_990
@@ -1173,6 +1324,11 @@ impl World {
                 (Good::Wheat, 20), (Good::Bread, 12), (Good::Wood, 12),
                 (Good::Stone, 8), (Good::Iron, 2),
             ]),
+            // Founding abstract stock is NOT physical inventory.
+            warehouse: BTreeMap::new(),
+            hall_job: None,
+            hall_complete: false,
+            gather_job: None,
             treasury_coins: 0,
             houses: 2,
             building_progress: 0,
@@ -1186,6 +1342,7 @@ impl World {
             player_parcels: Vec::new(),
             visual_sites: Vec::new(),
             visual_job: None,
+            hut_supplies_reserved: false,
             farm: None,
         };
         self.settlements.insert(id, settlement);
@@ -1266,6 +1423,141 @@ impl World {
         let origin = [x, y, z];
         self.check_visual_house_site(village_id, origin)?;
         Ok(origin)
+    }
+
+    /// Reserve the actual resource budget for the village's one central hall.
+    /// No free town hall spawns in a new or migrated world.
+    pub fn reserve_town_hall(&mut self, village_id: u64) -> Result<bool, String> {
+        let v = self.settlements.get(&village_id).ok_or("unknown settlement")?;
+        if !v.autonomy_enabled || v.hall_complete || v.hall_job.is_some() { return Ok(false); }
+        if v.hall_materials_missing() != (0, 0) {
+            return Ok(false);
+        }
+        if i64::from(v.center[0]).abs() > 29_999_988
+            || i64::from(v.center[2]).abs() > 29_999_988
+            || !(-2046..=2046).contains(&v.center[1]) {
+            return Err("civic center outside safe build bounds".into());
+        }
+        // Domain claims are only a first pass; native preflight checks all
+        // world blocks, loaded chunks and a safe location BEFORE this call.
+        if self.settlements.values().filter(|s| s.dimension == v.dimension).any(|s| {
+            s.player_parcels.iter().any(|plot| near_plot(plot.origin, v.center))
+            || s.visual_sites.iter().any(|site| near_plot(*site, v.center))
+            || s.visual_job.as_ref().is_some_and(|job| near_plot(job.origin, v.center))
+            || s.farm.as_ref().is_some_and(|farm| near_plot(farm.origin, v.center))
+        }) {
+            return Err("civic hall site overlaps a registered building or player parcel".into());
+        }
+        let v = self.settlements.get_mut(&village_id).unwrap();
+        v.warehouse_debit(Good::Wood, HALL_WOOD_LOGS)?;
+        v.warehouse_debit(Good::Stone, HALL_COBBLESTONE)?;
+        let center = v.center;
+        v.hall_job = Some(VisualBuildJob { origin: center, cursor: 0, blocked: false });
+        let name = v.name.clone();
+        self.event(format!("{name}: civic hall construction funded and started at {center:?}"));
+        Ok(true)
+    }
+
+    /// A full native block read is mandatory before recording completion.
+    pub fn finish_town_hall(&mut self, village_id: u64) -> Result<(), String> {
+        let v = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?;
+        let job = v.hall_job.as_ref().ok_or("no civic hall construction")?;
+        if job.cursor != town_hall_plan(job.origin).len() {
+            return Err("civic hall building plan incomplete".into());
+        }
+        let name = v.name.clone();
+        v.hall_job = None;
+        v.hall_complete = true;
+        self.event(format!("{name}: physical civic hall completed"));
+        Ok(())
+    }
+
+    /// Planning creates no items. Both native and domain checks forbid
+    /// extraction inside the town hall, another structure or player lot.
+    pub fn plan_gather(
+        &mut self, village_id: u64, good: Good, position: [i32; 3], stand: [i32; 3]
+    ) -> Result<(), String> {
+        if !matches!(good, Good::Wood | Good::Stone) {
+            return Err("only physical oak logs or exposed stone may be gathered".into());
+        }
+        let v = self.settlements.get(&village_id).ok_or("unknown settlement")?;
+        if v.gather_job.is_some() { return Err("another physical gather is pending".into()); }
+        if !v.autonomy_enabled { return Err("village autonomy paused".into()); }
+        let worker_job = if good == Good::Wood { Job::Lumberjack } else { Job::Miner };
+        if v.count(worker_job) == 0 { return Err("no qualified living worker".into()); }
+        if i64::from(position[0]).abs() > 29_999_988
+            || i64::from(position[2]).abs() > 29_999_988
+            || !(-2046..=2046).contains(&position[1]) {
+            return Err("gather point outside safe world bounds".into());
+        }
+        let wx = i128::from(stand[0]) - i128::from(position[0]);
+        let wy = i128::from(stand[1]) - i128::from(position[1]);
+        let wz = i128::from(stand[2]) - i128::from(position[2]);
+        if wx * wx + wy * wy + wz * wz > 16 {
+            return Err("worker stand is not reachable from resource within 4 blocks".into());
+        }
+        let dx = i128::from(position[0]) - i128::from(v.center[0]);
+        let dz = i128::from(position[2]) - i128::from(v.center[2]);
+        if !(12_i128 * 12..=80_i128 * 80).contains(&(dx * dx + dz * dz)) {
+            return Err("gather only in the village outer work area".into());
+        }
+        for other in self.settlements.values().filter(|s| s.dimension == v.dimension) {
+            if near_plot(other.center, position) || near_plot(other.center, stand)
+                || other.player_parcels.iter().any(|lot|
+                    near_plot(lot.origin, position) || near_plot(lot.origin, stand))
+                || other.visual_sites.iter().any(|site|
+                    near_plot(*site, position) || near_plot(*site, stand))
+                || other.visual_job.as_ref().is_some_and(|job| near_plot(job.origin, position))
+                || other.farm.as_ref().is_some_and(|farm| near_plot(farm.origin, position)) {
+                return Err("natural resource overlaps a building, town hall or player claim".into());
+            }
+        }
+        self.settlements.get_mut(&village_id).unwrap().gather_job = Some(GatherJob {
+            position, stand, good, issued: false, blocked: false,
+        });
+        Ok(())
+    }
+
+    pub fn mark_gather_issued(&mut self, village_id: u64) -> Result<(), String> {
+        let job = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?
+            .gather_job.as_mut().ok_or("no planned gather")?;
+        if job.blocked || job.issued { return Err("gather may not be re-issued".into()); }
+        job.issued = true;
+        Ok(())
+    }
+
+    /// A planned job whose block was removed externally is NOT a harvest:
+    /// either player intervention or a crash before issued-state persistence
+    /// must fail closed, never credit phantom inventory.
+    pub fn block_gather(&mut self, village_id: u64) -> Result<(), String> {
+        let job = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?
+            .gather_job.as_mut().ok_or("no gather job")?;
+        job.blocked = true;
+        Ok(())
+    }
+
+    /// Discard an obstructed gather without any material credit, then retry
+    /// another site on the next planning cycle; no foreign blocks are edited.
+    pub fn discard_blocked_gather(&mut self, village_id: u64) -> Result<(), String> {
+        let v = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?;
+        if !v.gather_job.as_ref().is_some_and(|job| job.blocked) {
+            return Err("only a blocked gather can be discarded".into());
+        }
+        v.gather_job = None;
+        Ok(())
+    }
+
+    pub fn confirm_gather(&mut self, village_id: u64) -> Result<(), String> {
+        let v = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?;
+        let job = v.gather_job.as_ref().ok_or("no gather job")?;
+        if !job.issued || job.blocked { return Err("unproven gather cannot be credited".into()); }
+        let good = job.good;
+        let pos = job.position;
+        v.warehouse_credit(good, 1)?;
+        v.gather_job = None;
+        let name = v.name.clone();
+        self.event(format!("{name}: physically gathered one {} at {pos:?}", good.as_str()));
+        Ok(())
     }
 
     /// Already-paid abstract houses become physical jobs automatically. This
@@ -1382,9 +1674,6 @@ impl World {
         let p = self.players.get(player_id).ok_or("join the village first")?;
         if p.settlement != Some(village_id) { return Err("join this village before commissioning".into()); }
         if p.coins < COMMISSION_PRICE_COINS { return Err("not enough coins for a building commission".into()); }
-        if village.quantity(Good::Wood) < 8 || village.quantity(Good::Stone) < 6 {
-            return Err("village requires 8 wood and 6 stone for the commission".into());
-        }
         let houses = village.houses.checked_add(1).ok_or("house count overflow")?;
         let pending = village.pending_visual_buildings.checked_add(1).ok_or("pending job overflow")?;
         let treasury_after = village.treasury_coins.checked_add(COMMISSION_PRICE_COINS)
@@ -1394,12 +1683,16 @@ impl World {
         // the same save object. The command adapter rolls back on save error.
         self.players.get_mut(player_id).unwrap().coins -= COMMISSION_PRICE_COINS;
         let village = self.settlements.get_mut(&village_id).unwrap();
-        assert!(village.take(Good::Wood, 8) && village.take(Good::Stone, 6));
+        // The owner's labor fee pays the civic treasury. The physical
+        // bill-of-materials is charged exactly once later, immediately
+        // before the first world block, by reserve_hut_supplies().
+        // No virtual abstract stone/wood may pay for that construction.
         village.houses = houses;
         village.pending_visual_buildings = pending;
         village.treasury_coins = treasury_after;
         village.player_parcels[parcel_index].commissioned = true;
         village.visual_job = Some(VisualBuildJob { origin, cursor: 0, blocked: false });
+        village.hut_supplies_reserved = false;
         let name = village.name.clone();
         self.event(format!("{name}: commissioned player-owned hut at {},{},{}",origin[0],origin[1],origin[2]));
         Ok(COMMISSION_PRICE_COINS)
@@ -1412,6 +1705,7 @@ impl World {
         let village = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?;
         let name = village.name.clone();
         village.visual_job = Some(VisualBuildJob { origin, cursor: 0, blocked: false });
+        village.hut_supplies_reserved = false;
         self.event(format!(
             "{name}: physical construction project reserved at {},{},{}",
             origin[0], origin[1], origin[2]
@@ -1419,6 +1713,25 @@ impl World {
         Ok(())
     }
 
+
+    /// Backed by actual items delivered by players or confirmed physically
+    /// collected by the village. An existing abstract house is NOT a supply.
+    pub fn reserve_hut_supplies(&mut self, village_id: u64) -> Result<bool, String> {
+        let v = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?;
+        let job = v.visual_job.as_ref().ok_or("no active hut construction")?;
+        if v.hut_supplies_reserved { return Ok(false); }
+        if job.cursor != 0 || job.blocked {
+            return Err("unfunded partial/blocked hut needs inspection before any physical work".into());
+        }
+        if v.warehouse_quantity(Good::Wood) < HUT_WOOD_LOGS
+            || v.warehouse_quantity(Good::Stone) < HUT_COBBLESTONE {
+            return Ok(false);
+        }
+        v.warehouse_debit(Good::Wood, HUT_WOOD_LOGS)?;
+        v.warehouse_debit(Good::Stone, HUT_COBBLESTONE)?;
+        v.hut_supplies_reserved = true;
+        Ok(true)
+    }
 
     /// Rotate across loaded, unblocked physical jobs in a deterministic order.
     /// Never let an unloaded first village stall all other civilizations.
@@ -1491,6 +1804,16 @@ impl World {
     pub fn advance_farm(&mut self, village_id: u64, decision: FarmDecision) -> Result<bool, String> {
         let world_day = self.day;
         let village = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?;
+        // Harvest credit must be validated BEFORE mutating its receipt/cursor.
+        // Each receipt and warehouse credit commit in the same world JSON save.
+        let credit_harvest = matches!(&decision, FarmDecision::StageComplete)
+            && village.farm.as_ref().is_some_and(|farm| farm.stage == FarmStage::Harvesting);
+        let new_wheat = if credit_harvest {
+            let n = village.warehouse_quantity(Good::Wheat)
+                .checked_add(8).ok_or("wheat warehouse overflow")?;
+            if n > 10_000_000 { return Err("wheat warehouse full".into()); }
+            Some(n)
+        } else { None };
         let farm = village.farm.as_mut().ok_or("no farm")?;
         match decision {
             FarmDecision::Unloaded | FarmDecision::Paused | FarmDecision::Place { .. } => Ok(false),
@@ -1529,8 +1852,9 @@ impl World {
                         if farm.harvest_receipts.len() > MAX_HARVEST_RECEIPTS {
                             farm.harvest_receipts.remove(0);
                         }
-                        // Receipt + phase are committed in one JSON save.
-                        // No inventory/warehouse/coin credit is applied.
+                        // Receipt + phase + physical warehouse wheat credit
+                        // are committed in ONE JSON save. No abstract stock,
+                        // native item drops or player coins are credited.
                         FarmStage::Replanting
                     },
                     FarmStage::Replanting => {
@@ -1539,6 +1863,12 @@ impl World {
                     }
                 };
                 farm.cursor = 0;
+                // This physical wheat is a *receipt-backed* ledger entry,
+                // never the abstract stock produced by daily simulation.
+                // No item is placed in a vanilla barrel (separate API needed).
+                if let Some(count) = new_wheat {
+                    village.warehouse.insert(Good::Wheat, count);
+                }
                 Ok(true)
             }
         }
@@ -1564,7 +1894,11 @@ impl World {
         if job.cursor != hut_plan(job.origin).len() { return Err("construction incomplete".into()); }
         let origin = job.origin;
         if village.pending_visual_buildings == 0 { return Err("house counter underflow".into()); }
+        if !village.hut_supplies_reserved {
+            return Err("hut cannot complete without proven physical material reservation".into());
+        }
         village.visual_job = None;
+        village.hut_supplies_reserved = false;
         village.visual_sites.push(origin);
         village.pending_visual_buildings -= 1;
         let name = village.name.clone();
@@ -1643,7 +1977,10 @@ impl World {
         let payout = u64::from(good.price()) * u64::from(count);
         if p.coins.checked_add(payout).is_none() { return Err("coin balance overflow".into()); }
         let s = self.settlements.get_mut(&village_id).ok_or("no settlement")?;
-        s.add(good, count);
+        // Real inventory transfer is checked and committed in the adapter.
+        // Do NOT also credit abstract stock: that would count the same item
+        // as both a Minecraft-derived resource and virtual daily production.
+        s.warehouse_credit(good, count)?;
         let p = self.players.get_mut(player_id).ok_or("no player")?;
         p.coins += payout;
         let rep = p.reputation.entry(village_id).or_default();
@@ -1658,7 +1995,7 @@ impl World {
         if p.settlement != Some(village_id) { return Err("join this settlement first".into()); }
         if p.coins < cost { return Err("not enough coins".into()); }
         let s = self.settlements.get_mut(&village_id).ok_or("no settlement")?;
-        if !s.take(good, count) { return Err("settlement stock is insufficient".into()); }
+        s.warehouse_debit(good, count)?;
         self.players.get_mut(player_id).ok_or("no player")?.coins -= cost;
         Ok(cost)
     }
@@ -1893,6 +2230,9 @@ mod tests {
         let encoded = serde_json::to_string(&w).unwrap();
         let mut reloaded: World = serde_json::from_str(&encoded).unwrap();
         reloaded.validate().unwrap();
+        // This older fixture bypasses native block placement; explicitly
+        // emulate a previously persisted warehouse materials reservation.
+        reloaded.settlements.get_mut(&id).unwrap().hut_supplies_reserved = true;
         reloaded.finish_visual_house(id).unwrap();
         assert_eq!(reloaded.settlements[&id].visual_sites, vec![[20, 64, 0]]);
         assert_eq!(reloaded.settlements[&id].pending_visual_buildings, 0);
@@ -2967,14 +3307,16 @@ mod village_land_and_autonomy_tests {
         assert_eq!(world.commission_house("owner", id, [20, 70, 0]), Ok(COMMISSION_PRICE_COINS));
         assert_eq!(world.players["owner"].coins, 0);
         assert_eq!(world.settlements[&id].treasury_coins, LAND_PRICE_COINS + COMMISSION_PRICE_COINS);
-        assert_eq!(world.settlements[&id].quantity(Good::Wood), 4);
-        assert_eq!(world.settlements[&id].quantity(Good::Stone), 2);
+        assert_eq!(world.settlements[&id].quantity(Good::Wood), 12);
+        assert_eq!(world.settlements[&id].quantity(Good::Stone), 8);
+        assert_eq!(world.settlements[&id].warehouse_quantity(Good::Wood), 0);
         assert!(world.commission_house("owner", id, [20, 70, 0]).is_err());
         assert_eq!(world.settlements[&id].houses, 3);
         assert_eq!(world.settlements[&id].pending_visual_buildings, 1);
         world.validate().unwrap();
         world.settlements.get_mut(&id).unwrap().visual_job.as_mut().unwrap().cursor =
             hut_plan([20, 70, 0]).len();
+        world.settlements.get_mut(&id).unwrap().hut_supplies_reserved = true;
         world.finish_visual_house(id).unwrap();
         assert_eq!(world.settlements[&id].public_huts(), 0);
         assert_eq!(world.settlements[&id].physical_housing(), (0, 0, 10));
@@ -3009,13 +3351,18 @@ mod village_land_and_autonomy_tests {
     }
 
     #[test]
-    fn commission_without_materials_never_takes_player_coins() {
+    fn commission_queues_without_virtual_materials_but_cannot_build_unfunded() {
         let (mut world, id) = founded();
         world.buy_plot("owner", id, [20, 70, 0]).unwrap();
         world.settlements.get_mut(&id).unwrap().stock.insert(Good::Wood, 0);
-        let before = serde_json::to_string(&world).unwrap();
-        assert!(world.commission_house("owner", id, [20, 70, 0]).is_err());
-        assert_eq!(serde_json::to_string(&world).unwrap(), before);
+        world.settlements.get_mut(&id).unwrap().stock.insert(Good::Stone, 0);
+        assert_eq!(world.commission_house("owner", id, [20, 70, 0]), Ok(COMMISSION_PRICE_COINS));
+        assert_eq!(world.players["owner"].coins, 0);
+        assert_eq!(world.settlements[&id].quantity(Good::Wood), 0);
+        assert_eq!(world.settlements[&id].quantity(Good::Stone), 0);
+        assert!(!world.reserve_hut_supplies(id).unwrap());
+        assert!(!world.settlements[&id].hut_supplies_reserved);
+        world.validate().unwrap();
     }
 
     #[test]
@@ -3064,5 +3411,180 @@ mod village_land_and_autonomy_tests {
         ids.sort_unstable();
         assert_eq!(v.home_slot(ids[0]).unwrap().site, [40,70,0]);
         world.validate().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod civic_hall_warehouse_tests {
+    use super::*;
+
+    fn settlement() -> (World, u64) {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0,70,0], "owner").unwrap();
+        (world, id)
+    }
+
+    fn stock_hall(world: &mut World, id: u64) {
+        let v = world.settlements.get_mut(&id).unwrap();
+        v.warehouse_credit(Good::Wood, HALL_WOOD_LOGS).unwrap();
+        v.warehouse_credit(Good::Stone, HALL_COBBLESTONE).unwrap();
+    }
+
+    #[test]
+    fn hall_is_a_unique_physical_blueprint_with_mayor_desk_and_two_bulletins() {
+        let origin = [0, 70, 0];
+        let hall = town_hall_plan(origin);
+        let sites: BTreeSet<_> = hall.iter().map(|b| b.pos).collect();
+        assert_eq!(hall.len(), sites.len());
+        assert_eq!(hall.iter().filter(|b| b.floor).count(), 25);
+        assert_eq!(hall.iter().filter(|b| b.block == "minecraft:barrel").count(), 2);
+        assert_eq!(hall.iter().filter(|b| b.block == "minecraft:oak_sign").count(), 2);
+        assert_eq!(hall.iter().filter(|b| b.block == "minecraft:lectern").count(), 1);
+        assert_eq!(hall_board_positions(origin), [[-1,70,-1], [1,70,-1]]);
+        assert_eq!(hall, town_hall_plan(origin));
+    }
+
+    #[test]
+    fn new_and_legacy_villages_have_zero_real_warehouse_supply() {
+        let (world,id) = settlement();
+        let v = &world.settlements[&id];
+        assert!(v.quantity(Good::Wood) > 0); // only abstract virtual stock
+        assert_eq!(v.warehouse_quantity(Good::Wood), 0);
+        assert_eq!(v.hall_materials_missing(), (HALL_WOOD_LOGS, HALL_COBBLESTONE));
+        assert!(!v.hall_complete);
+        assert!(v.hall_job.is_none());
+        let mut older = serde_json::to_value(&world).unwrap();
+        let v = older["settlements"].as_object_mut().unwrap()
+            .get_mut(&id.to_string()).unwrap().as_object_mut().unwrap();
+        v.remove("warehouse");
+        v.remove("hall_job");
+        v.remove("hall_complete");
+        v.remove("gather_job");
+        v.remove("hut_supplies_reserved");
+        let migrated: World = serde_json::from_value(older).unwrap();
+        migrated.validate().unwrap();
+        assert_eq!(migrated.settlements[&id].warehouse_quantity(Good::Stone), 0);
+        assert!(!migrated.settlements[&id].hall_complete);
+    }
+
+    #[test]
+    fn hall_reserves_real_supplies_once_and_only_finishes_after_observation() {
+        let (mut world,id) = settlement();
+        assert!(!world.reserve_town_hall(id).unwrap());
+        stock_hall(&mut world,id);
+        assert!(world.reserve_town_hall(id).unwrap());
+        assert!(!world.reserve_town_hall(id).unwrap());
+        let v = &world.settlements[&id];
+        assert_eq!(v.warehouse_quantity(Good::Stone), 0);
+        assert_eq!(v.warehouse_quantity(Good::Wood), 0);
+        assert!(world.finish_town_hall(id).is_err());
+        world.settlements.get_mut(&id).unwrap().hall_job.as_mut().unwrap().cursor =
+            town_hall_plan([0,70,0]).len();
+        world.finish_town_hall(id).unwrap();
+        assert!(world.settlements[&id].hall_complete);
+        assert!(world.settlements[&id].hall_job.is_none());
+        assert!(!world.reserve_town_hall(id).unwrap());
+        let loaded: World = serde_json::from_str(&serde_json::to_string(&world).unwrap()).unwrap();
+        loaded.validate().unwrap();
+        assert!(loaded.settlements[&id].hall_complete);
+    }
+
+    #[test]
+    fn hall_reconciler_halts_on_player_blocks_and_will_not_clear_modifications() {
+        let job = VisualBuildJob { origin: [30,70,0], cursor: 0, blocked: false };
+        let floor = town_hall_plan(job.origin)[0].pos;
+        assert!(matches!(
+            inspect_town_hall(&job, |p| if p == floor {
+                Some("minecraft:chest".to_owned())
+            } else { Some("minecraft:air".to_owned()) }),
+            BuildInspection::Blocked { .. }
+        ));
+        assert_eq!(inspect_town_hall(&job, |_| None), BuildInspection::Unloaded);
+    }
+
+    #[test]
+    fn physically_received_trade_goods_do_not_double_credit_abstract_stock() {
+        let (mut world,id) = settlement();
+        let before = world.settlements[&id].quantity(Good::Wood);
+        assert_eq!(world.sell("owner", id, Good::Wood, 8), Ok(24));
+        assert_eq!(world.settlements[&id].quantity(Good::Wood), before);
+        assert_eq!(world.settlements[&id].warehouse_quantity(Good::Wood), 8);
+        assert_eq!(world.buy("owner", id, Good::Wood, 3), Ok(9));
+        assert_eq!(world.settlements[&id].warehouse_quantity(Good::Wood), 5);
+        assert_eq!(world.settlements[&id].quantity(Good::Wood), before);
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn a_hut_must_reserve_actual_materials_once_before_it_can_complete() {
+        let (mut world,id) = settlement();
+        world.advance(1).unwrap();
+        world.start_visual_house(id, [20,70,0]).unwrap();
+        assert!(!world.reserve_hut_supplies(id).unwrap());
+        {
+            let v = world.settlements.get_mut(&id).unwrap();
+            v.warehouse_credit(Good::Wood, HUT_WOOD_LOGS).unwrap();
+            v.warehouse_credit(Good::Stone, HUT_COBBLESTONE).unwrap();
+        }
+        assert!(world.reserve_hut_supplies(id).unwrap());
+        assert!(!world.reserve_hut_supplies(id).unwrap());
+        assert_eq!(world.settlements[&id].warehouse_quantity(Good::Wood), 0);
+        world.settlements.get_mut(&id).unwrap().visual_job.as_mut().unwrap().cursor =
+            hut_plan([20,70,0]).len();
+        world.finish_visual_house(id).unwrap();
+        assert!(!world.settlements[&id].hut_supplies_reserved);
+        assert_eq!(world.settlements[&id].public_huts(), 1);
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn gathering_requires_native_issued_receipt_and_cannot_credit_twice() {
+        let (mut world,id) = settlement();
+        assert!(world.plan_gather(id, Good::Bread, [24,70,0],[25,70,0]).is_err());
+        assert!(world.plan_gather(id, Good::Wood, [0,70,0],[1,70,0]).is_err());
+        assert!(world.plan_gather(id, Good::Wood, [24,70,0],[200,70,0]).is_err());
+        world.plan_gather(id, Good::Wood, [24,70,0],[25,70,0]).unwrap();
+        assert_eq!(world.settlements[&id].warehouse_quantity(Good::Wood), 0);
+        assert!(world.confirm_gather(id).is_err());
+        world.mark_gather_issued(id).unwrap();
+        assert!(world.mark_gather_issued(id).is_err());
+        world.confirm_gather(id).unwrap();
+        assert_eq!(world.settlements[&id].warehouse_quantity(Good::Wood), 1);
+        assert!(world.confirm_gather(id).is_err());
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn obstructed_gather_is_discarded_without_credit_or_reissue() {
+        let (mut world,id) = settlement();
+        world.plan_gather(id, Good::Stone, [24,69,0],[25,70,0]).unwrap();
+        world.block_gather(id).unwrap();
+        assert!(world.confirm_gather(id).is_err());
+        assert!(world.mark_gather_issued(id).is_err());
+        assert_eq!(world.settlements[&id].warehouse_quantity(Good::Stone), 0);
+        world.discard_blocked_gather(id).unwrap();
+        assert!(world.settlements[&id].gather_job.is_none());
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn only_confirmed_crop_cycles_credit_physical_warehouse_once() {
+        let (mut world,id) = settlement();
+        world.start_farm(id, [20,70,0]).unwrap();
+        {
+            let f = world.settlements.get_mut(&id).unwrap().farm.as_mut().unwrap();
+            f.stage = FarmStage::Harvesting;
+            f.cursor = 8;
+        }
+        let abstract_before = world.settlements[&id].quantity(Good::Wheat);
+        world.advance_farm(id, FarmDecision::StageComplete).unwrap();
+        assert_eq!(world.settlements[&id].warehouse_quantity(Good::Wheat), 8);
+        assert_eq!(world.settlements[&id].quantity(Good::Wheat), abstract_before);
+        assert_eq!(world.settlements[&id].farm.as_ref().unwrap().harvest_sequence, 1);
+        assert!(world.advance_farm(id, FarmDecision::StageComplete).is_err());
+        assert_eq!(world.settlements[&id].warehouse_quantity(Good::Wheat), 8);
+        let restored: World = serde_json::from_str(&serde_json::to_string(&world).unwrap()).unwrap();
+        restored.validate().unwrap();
+        assert_eq!(restored.settlements[&id].warehouse_quantity(Good::Wheat), 8);
     }
 }
