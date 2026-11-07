@@ -94,3 +94,33 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
 64. Complete a second hut: capacity becomes 6, the first three allocations remain stable, another three use the new hut. Re-open the world and confirm homes are reconstructed from recorded completed sites without duplicates or invented saves.
 65. Verify dawn/evening gathering and daytime professions still override homes; a night home route never generates stock, items, beds, teleports, new houses, or forced chunk loads. Test dimension mismatch and mod-disabled state.
 66. Change a resident's alive status only in a **disposable test fixture**, not manually in a valuable world; derived assignments may rebalance among living IDs, but dead actors must not be targeted. Inspect roster/UUID reconciliation before and after.
+
+## Autonomous housing survey E2E (v0.1.9, manual local only)
+
+67. Found Ashford; before any simulated house is ready, `/civ survey Ashford`
+    must explain that there is no completed abstract house budget; no changes
+    to `world.json`, terrain or player inventory should occur.
+68. Advance the economy until one pending abstract house is ready.
+    `/civ survey Ashford` must show only loaded, fully clear, flat 5×5 natural
+    plots, each with stable slot and absolute X/Y/Z; max five results.
+69. Try `/civ approvehouse Ashford SLOT Y` as a non-OP, from over 24 blocks
+    away, across dimensions, at the wrong Y, and with invalid slot numbers.
+    Every attempt must fail before saving a construction job.
+70. Approve one listed plot from next to it. Check `/civ construction Ashford`
+    shows exactly one reserved job, and the previously read-only survey had
+    not changed that state. A second approval must fail while job active.
+71. Obstruct/replace a single expected air or natural-floor block between
+    `survey` and approval. The original approval must now reject the site
+    without overwriting player-made blocks or advancing any cursor.
+72. Complete a house, then attempt the original `/civ construct Ashford`
+    on top of a completed hut, field, or active project, including another
+    village's recorded structure in the **same dimension**. Each must fail.
+73. Survey after all living residents have physical hut capacity, after
+    running out of pending abstract houses, and at a world boundary.
+    No unneeded, overflowed or out-of-bounds proposals may be approved.
+74. Relaunch the save after approval but before work, after a partial build,
+    and after completion. A proposal itself should never be serialized,
+    while an approved construction remains durable and cursor-reconcilable.
+75. Verify multiple villages and dimensions: plot conflicts must not be
+    created in one dimension; coordinates from a different dimension are
+    not automatically owned by the first. No forced chunk loading.
