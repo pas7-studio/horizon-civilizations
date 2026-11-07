@@ -63,6 +63,24 @@ class NativeWorkerProximityContracts(unittest.TestCase):
         self.assertLess(section.index("native_worker_reaches_block("),
                         section.index("mark_gather_issued(id)?"))
 
+    def test_planned_work_stand_is_revalidated_before_any_mining(self):
+        stand = body(GLUE, "fn gather_stand_still_clear(")
+        self.assertIn("world_block(game, dimension, stand)", stand)
+        self.assertIn("world_block(game, dimension, [x, head, z])", stand)
+        self.assertIn("world_block(game, dimension, [x, floor, z])", stand)
+        self.assertIn("is_ground(&block)", stand)
+        runner = body(GLUE, "fn gather_one_step(")
+        self.assertIn("!gather_stand_still_clear(game, &dimension, job.stand)", runner)
+        self.assertLess(runner.index("!gather_stand_still_clear("),
+                        runner.index("mark_gather_issued(id)?"))
+
+    def test_worker_must_be_at_saved_stand_as_well_as_within_block_reach(self):
+        runner = body(GLUE, "fn gather_one_step(")
+        self.assertIn("native_worker_near(actor.pos, job.stand, 2.5, 2.0)", runner)
+        self.assertIn("native_worker_reaches_block(actor.pos, job.position, 4.5)", runner)
+        self.assertLess(runner.index("native_worker_near(actor.pos, job.stand"),
+                        runner.index("native_worker_reaches_block(actor.pos, job.position"))
+
     def test_no_data_migration_or_virtual_resource_grant(self):
         self.assertNotIn("native_worker_near:", CORE)
         self.assertNotIn("warehouse_credit(", body(CORE, "pub fn native_worker_near("))
