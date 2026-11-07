@@ -419,6 +419,12 @@ pub struct GatherJob {
     #[serde(default)]
     pub worker_id: Option<u64>,
     pub issued: bool,
+    /// Durable acknowledgement only after a successful native command AND
+    /// an immediate loaded observation of the edited block as air. A crash
+    /// between Issued persistence and this receipt is irreducibly ambiguous:
+    /// block/quarantine it rather than crediting a player-removed block.
+    #[serde(default)]
+    pub native_edit_confirmed: bool,
     /// An actual loaded UUID-linked worker has observed the source block
     /// as air at the original saved work stand AFTER issue. Only then may
     /// their native route turn toward the village receiving area.
@@ -1559,9 +1565,12 @@ impl World {
                         return Err("physical gather worker ID is invalid".into());
                     }
                 }
-                if gather.pickup_witnessed &&
-                    (!gather.issued || gather.worker_id.is_none()) {
-                    return Err("pickup witness without issued identity".into());
+                if gather.native_edit_confirmed
+                    && (!gather.issued || gather.worker_id.is_none()) {
+                    return Err("native edit receipt without issued worker identity".into());
+                }
+                if gather.pickup_witnessed && !gather.native_edit_confirmed {
+                    return Err("pickup witness without confirmed native block edit".into());
                 }
                 let [x, y, z] = gather.position;
                 let [sx, sy, sz] = gather.stand;
@@ -2393,7 +2402,7 @@ impl World {
         }
         self.settlements.get_mut(&village_id).unwrap().gather_job = Some(GatherJob {
             position, stand, good, worker_id: None, issued: false,
-            pickup_witnessed: false, blocked: false,
+            native_edit_confirmed: false, pickup_witnessed: false, blocked: false,
         });
         Ok(())
     }
@@ -2461,6 +2470,22 @@ impl World {
         Ok(())
     }
 
+    /// The adapter must call this ONLY after its native conditional
+    /// command returned success and a FRESH read of that loaded source
+    /// block returned air. Save this acknowledgement before pickup.
+    /// Domain code cannot itself attest to native engine observations.
+    pub fn mark_gather_native_edit_confirmed(&mut self, village_id: u64)
+        -> Result<(), String> {
+        let job = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?
+            .gather_job.as_mut().ok_or("no gather job")?;
+        if !job.issued || job.blocked || job.worker_id.is_none()
+            || job.native_edit_confirmed {
+            return Err("native edit receipt requires a new issued assigned gather".into());
+        }
+        job.native_edit_confirmed = true;
+        Ok(())
+    }
+
     /// The bridge has just observed the issued source as air AND the same
     /// UUID-linked worker at the saved loaded source work stand, inside
     /// actual 3D reach. Do not mark pickup before the native block edit.
@@ -2470,7 +2495,8 @@ impl World {
     ) -> Result<(), String> {
         let v = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?;
         let job = v.gather_job.as_mut().ok_or("no gather job")?;
-        if !job.issued || job.blocked || job.pickup_witnessed {
+        if !job.issued || !job.native_edit_confirmed
+            || job.blocked || job.pickup_witnessed {
             return Err("gather not awaiting a first source pickup witness".into());
         }
         if job.worker_id != Some(resident_id) {
@@ -2520,7 +2546,8 @@ impl World {
     pub fn confirm_gather(&mut self, village_id: u64) -> Result<(), String> {
         let v = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?;
         let job = v.gather_job.as_ref().ok_or("no gather job")?;
-        if !job.issued || !job.pickup_witnessed || job.blocked {
+        if !job.issued || !job.native_edit_confirmed
+            || !job.pickup_witnessed || job.blocked {
             return Err("unproven pickup or gather cannot be credited".into());
         }
         let good = job.good;
@@ -2537,7 +2564,7 @@ impl World {
                     position: [stem.root[0], y, stem.root[2]],
                     stand: stem.stand, good: Good::Wood,
                     worker_id: Some(worker_id), issued: false,
-                    pickup_witnessed: false, blocked: false,
+                    native_edit_confirmed: false, pickup_witnessed: false, blocked: false,
                 }))
             } else {
                 None
@@ -5344,7 +5371,7 @@ mod native_gather_quarantine_tests {
         world.settlements.get_mut(&id).unwrap().gather_job = Some(GatherJob {
             position: [16,70,0], stand: [17,70,0],
             good: Good::Stone, worker_id: None, issued: true,
-            pickup_witnessed: false, blocked: true,
+            native_edit_confirmed: false, pickup_witnessed: false, blocked: true,
         });
         world.validate().unwrap();
         let before = world.settlements[&id].warehouse_quantity(Good::Stone);
@@ -5377,7 +5404,7 @@ mod native_gather_quarantine_tests {
         world.settlements.get_mut(&id).unwrap().gather_job = Some(GatherJob {
             position: [16,70,0], stand: [17,70,0],
             good: Good::Wood, worker_id: None, issued: false,
-            pickup_witnessed: false, blocked: true,
+            native_edit_confirmed: false, pickup_witnessed: false, blocked: true,
         });
         assert!(world.abandon_blocked_issued_gather(id).is_err());
         world.settlements.get_mut(&id).unwrap().gather_job.as_mut().unwrap().issued = true;
