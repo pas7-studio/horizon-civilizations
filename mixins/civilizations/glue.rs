@@ -1687,6 +1687,9 @@ fn barrel_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
         .map(|v| v.id).collect();
     for id in ids {
         let village = state.world.as_ref().unwrap().settlements[&id].clone();
+        // Never move village items behind a precharged player purchase.
+        // Issued market orders require explicit local reconciliation.
+        if village.market_purchase.is_some() { continue; }
         if let Some(transfer) = village.barrel_transfer {
             if transfer.phase == BarrelPhase::Blocked { continue; }
             let Some(actual) = plain_barrel_count(game, &dimension, transfer.position, transfer.good)
