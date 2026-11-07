@@ -8,6 +8,7 @@ A passing native client compilation is READY_FOR_GAMEPLAY_E2E, not PLAYABLE.
 from __future__ import annotations
 
 import argparse
+import hashlib
 import json
 import os
 import shutil
@@ -88,6 +89,56 @@ def run_step(root: Path, output: Path, step: Step) -> StepResult:
                       str(log_path.relative_to(root)), problem)
 
 
+def verify_native_build_evidence(root: Path, log_path: Path,
+                                 build_client: bool) -> dict:
+    """A 0 process exit is not proof the expected native client exists.
+
+    Read the final JSON emitted by our pinned native_build.py, validate its
+    checkout identity, and prove a nonempty exact-path binary when requested.
+    This checks build artifacts only; it NEVER marks game-world E2E as tested.
+    """
+    raw = log_path.read_text(encoding="utf-8", errors="replace")
+    start = raw.rfind("\n{")
+    if start < 0:
+        raise RuntimeError("native build finished without the final JSON evidence record")
+    try:
+        record = json.loads(raw[start + 1:])
+    except (ValueError, TypeError) as exc:
+        raise RuntimeError(f"invalid final native build JSON: {exc}") from exc
+    if not isinstance(record, dict):
+        raise RuntimeError("native build result must be a JSON object")
+    pinned = json.loads((root / "compatibility.json").read_text(encoding="utf-8"))
+    if record.get("horizon_revision") != pinned["horizon_revision"]:
+        raise RuntimeError("native build returned wrong pinned Horizon revision")
+    if record.get("cargo_check") != "PASS":
+        raise RuntimeError("native build did not report a successful cargo check")
+    expected_stage = (root / "target/native-check/modded").resolve()
+    if not isinstance(record.get("modded_horizon"), str) or not record["modded_horizon"]:
+        raise RuntimeError("native build did not report the modded checkout path")
+    if Path(record["modded_horizon"]).resolve() != expected_stage:
+        raise RuntimeError("native build reported an unexpected modded checkout path")
+    if not build_client:
+        return {"native_build_verified": True}
+    expected_binary = (expected_stage / "target/fast" /
+                       ("horizon-client.exe" if os.name == "nt" else "horizon-client"))
+    reported = record.get("native_client_binary")
+    if not isinstance(reported, str) or not reported:
+        raise RuntimeError("native build returned no client executable path")
+    if Path(reported).resolve() != expected_binary:
+        raise RuntimeError("native build reported a client path outside the pinned output")
+    if not expected_binary.is_file() or expected_binary.stat().st_size < 1024:
+        raise RuntimeError("native build exited 0 but expected executable is missing or too small: "
+                           + str(expected_binary))
+    hasher = hashlib.sha256()
+    with expected_binary.open("rb") as executable:
+        for block in iter(lambda: executable.read(1024 * 1024), b""):
+            hasher.update(block)
+    return {"native_build_verified": True,
+            "native_client_path": str(expected_binary),
+            "native_client_bytes": expected_binary.stat().st_size,
+            "native_client_sha256": hasher.hexdigest()}
+
+
 def write_report(root: Path, output: Path, data: dict) -> None:
     (output / "report.json").write_text(json.dumps(data, indent=2, ensure_ascii=False)
                                         + "\n", encoding="utf-8")
@@ -96,6 +147,9 @@ def write_report(root: Path, output: Path, data: dict) -> None:
              f"- Working tree clean before checks: `{data['clean_start']}`",
              f"- Working tree clean after checks: `{data['clean_end']}`",
              f"- Gate: **{data['gate']}**",
+             f"- Native build evidence verified: `{data['native_build_verified']}`",
+             f"- Native client: `{data['native_client_path']}`",
+             f"- Native client SHA256: `{data['native_client_sha256']}`",
              "- Real Minecraft gameplay E2E: **NOT TESTED**", "",
              "| Stage | Status | Log |", "| --- | --- | --- |"]
     for step in data["steps"]:
@@ -139,7 +193,9 @@ def main(argv: list[str] | None = None) -> int:
     data: dict = {"created_utc": stamp, "branch": "UNKNOWN", "sha": "UNKNOWN",
                   "clean_start": False, "clean_end": False, "rustc": "UNKNOWN", "cargo": "UNKNOWN", "rustfmt": "UNKNOWN",
                   "python": sys.version.split()[0], "gate": "BLOCKED",
-                  "gameplay_e2e": "NOT_TESTED", "blocking_reason": None, "steps": []}
+                  "gameplay_e2e": "NOT_TESTED", "blocking_reason": None,
+                  "native_build_verified": False, "native_client_path": None,
+                  "native_client_bytes": None, "native_client_sha256": None, "steps": []}
     try:
         if sys.version_info < (3, 11):
             raise RuntimeError("Python 3.11 or later required")
@@ -180,6 +236,16 @@ def main(argv: list[str] | None = None) -> int:
                 data["blocking_reason"] = (f"{step.name} failed, exit={result.exit_code}; "
                                            f"see {result.log}: {result.error or 'nonzero return'}")
                 break
+            if step.name == "pinned-horizon-native-build":
+                try:
+                    data.update(verify_native_build_evidence(
+                        root, root / result.log, args.build_client))
+                except (OSError, RuntimeError, ValueError, KeyError) as exc:
+                    data["steps"][-1]["status"] = "FAIL"
+                    data["steps"][-1]["error"] = str(exc)
+                    data["blocking_reason"] = ("native post-build verification failed: "
+                                               + str(exc) + "; see " + result.log)
+                    break
         current_sha = git_value(root, "rev-parse", "HEAD")
         data["clean_end"] = not bool(git_value(root, "status", "--porcelain"))
         if current_sha != data["sha"]:
