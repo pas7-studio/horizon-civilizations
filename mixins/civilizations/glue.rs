@@ -16,13 +16,11 @@ use std::sync::{Mutex, MutexGuard};
 const MOD_ID: &str = "civilizations";
 const DIR: &str = "horizon-civilizations";
 const SAVE: &str = "world.json";
-const TICKS_PER_DAY: u64 = 24_000;
 
 struct ActiveWorld {
     path: PathBuf,
     world: Option<World>,
     problem: Option<String>,
-    server_ticks: u64,
     physical_ticks: u64,
 }
 
@@ -32,7 +30,7 @@ fn load(path: PathBuf) -> ActiveWorld {
     let file = path.join(SAVE);
     if path.join("world.json.swap").exists() {
         let message = "interrupted save detected (world.json.swap). Back up the folder, then restore the correct primary world.json manually".to_owned();
-        return ActiveWorld { path, world: None, problem: Some(message), server_ticks: 0, physical_ticks: 0 };
+        return ActiveWorld { path, world: None, problem: Some(message), physical_ticks: 0 };
     }
     let result = match fs::read_to_string(&file) {
         Ok(text) => serde_json::from_str::<World>(&text)
@@ -49,7 +47,7 @@ fn load(path: PathBuf) -> ActiveWorld {
             (None, Some(error))
         }
     };
-    ActiveWorld { path, world, problem, server_ticks: 0, physical_ticks: 0 }
+    ActiveWorld { path, world, problem, physical_ticks: 0 }
 }
 
 fn active(path: PathBuf) -> MutexGuard<'static, Option<ActiveWorld>> {
@@ -869,13 +867,18 @@ pub fn tick(game: &mut Game<'_>) {
     let mut guard = active(dir.join(DIR));
     let state = guard.as_mut().expect("active initialized");
     if state.problem.is_some() || state.world.is_none() { return; }
-    state.server_ticks = state.server_ticks.saturating_add(1);
-    if state.server_ticks % TICKS_PER_DAY != 0 { return; }
+    // The authoritative host day persists across Horizon game reloads.
+    let host_day = game.world.day_time.div_euclid(24_000);
+    if state.world.as_ref().unwrap().last_host_day.is_some_and(|last| host_day <= last) {
+        return;
+    }
     let before = state.world.as_ref().unwrap().clone();
-    let result = state.world.as_mut().unwrap().advance(1).and_then(|_| save(state));
-    if let Err(e) = result {
+    let result = state.world.as_mut().unwrap()
+        .observe_host_day(host_day)
+        .and_then(|changed| if changed { save(state) } else { Ok(()) });
+    if let Err(error) = result {
         state.world = Some(before);
-        state.problem = Some(format!("automatic day halted after save failure: {e}"));
-        log::error!("[civilizations] disabled automatic simulation: {e}");
+        state.problem = Some(format!("host day synchronization halted: {error}"));
+        log::error!("[civilizations] authoritative day synchronization stopped: {error}");
     }
 }
