@@ -93,13 +93,17 @@ class PhysicalBakerySourceContracts(unittest.TestCase):
         self.assertIn("save_autonomous(state, old)?", method)
 
     def test_native_inventory_demand_includes_stored_goods_and_transit(self):
-        planner=GLUE.split("fn autonomous_village_step(",1)[1].split("\n}",1)[0]
+        planner = GLUE.split("fn autonomous_village_step(", 1)[1].split("\n}", 1)[0]
+        demand = CORE.split("pub fn physical_construction_shortfall(", 1)[1].split("\n}", 1)[0]
         self.assertIn("physical_barrel_stock(game, &dimension, village.center)", planner)
-        self.assertIn("village.warehouse_quantity(good)", planner)
-        self.assertIn("village.build_escrow.get(&Good::Wood)", planner)
-        self.assertIn("b.construction_escrow.get(&Good::Wood)", planner)
-        self.assertIn("return Ok(())", planner)
-        self.assertIn("wood_goal.saturating_sub", planner)
+        self.assertIn("physical_construction_shortfall(", planner)
+        self.assertIn("village.barrel_transfer.is_some()", planner)
+        self.assertIn("village.market_purchase.is_some()", planner)
+        self.assertIn("village.warehouse_quantity(good)", demand)
+        self.assertIn("village.build_escrow.get(&good)", demand)
+        self.assertIn("b.construction_escrow.get(&good)", demand)
+        self.assertIn("bakery_bill.saturating_add(hut_bill)", demand)
+        self.assertIn("unpaid(Good::Wood).saturating_sub(available(Good::Wood))", demand)
 
     def test_player_buyout_and_workshop_claim_exclude_npc_damage(self):
         self.assertIn("pub fn player_may_break(",CORE)
