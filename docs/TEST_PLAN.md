@@ -1063,3 +1063,99 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
      confirm Needs/Treasury update within ~20 s and unchanged boards are not
      rewritten. Break a wall block behind an extra board: it must not be placed.
      Check a hall from before this version still migrates its first two signs.
+
+
+## Autonomous NPC village founding and player discovery (PR #35 / v0.1.15)
+
+320. In a clean disposable Overworld with no existing civilizations, stand
+     on an active loaded plain for at least 2,400 authoritative ticks.
+     The source should select only a natural, 5x5 clear site about 88–91
+     blocks from a genuine nearby player. Confirm saved settlement founder
+     is `civilizations:npc`, not that player's UUID. No player title or
+     coin balance is created by the founding itself.
+321. With only trees/cliffs/foreign blocks or unloaded chunks at candidate
+     sites, no new civilization is persisted and no block/mob mutation
+     occurs. Restore load/terrain and wait for the next bounded survey.
+322. Ensure at least ten natural, clear, mutually separated native NPC spawn
+     positions before settlement creation. A seemingly clear 5x5 town hall
+     area with obstructed surrounding positions must NOT create a town.
+323. In a disposable world with one existing manual or autonomous village,
+     stay within 192 blocks of its center for multiple founding periods:
+     no second village appears just from staying there. On traveling
+     farther away, verify new towns respect minimum 192-block separation.
+324. Inspect an automatically founded community before joining:
+     ten residents, default autonomy ON, hall UNBUILT, physical storage
+     empty, no human Lord. `/civ join NAME` grants normal Citizen status;
+     OP `/civ found NAME` still grants the previous founder title.
+325. Observe autonomous NPC spawn, physical hall funding, worker gathering,
+     construction and farming through normal code paths (not a special
+     free-material path). Restart midway, then verify no duplicate town,
+     NPC UUID, hall or warehouse resources.
+326. Try in the Nether/End and on a dedicated server without active
+     players. No natural founding occurs. Verify host singleplayer and
+     genuine LAN/dedicated guests are both independently supported.
+327. Travel widely; no more than eight NPC-founded villages can exist.
+     Manual OP founding still works until the overall 64-settlement cap.
+328. Use `/civ nearby` in each dimension. Verify nearest-four ordering,
+     nonnegative distance, coordinates and correct hall status. A
+     settlement in another dimension must never appear in this list.
+     An empty result must explain how to explore.
+329. Leave `/civ nearby` running repeatedly: no player inventory, JSON
+     save, chunk loads, native commands or settlement state may change.
+     Compare before/after `world.json` and Minecraft block snapshots.
+330. Revisit identical terrain after a completed first founding, exit/restart
+     and wait additional founding periods: the original center remains
+     unique, ID monotonic, history no double-found event; full citizen
+     roster retains stable IDs across reload.
+331. On partial native spawn or a storage/persistence error, stop native
+     mutations according to the existing recovery gate. Auto-founding must
+     never bypass a blocked world or reissue one-shot NPC creation.
+
+
+## Real native resident meals and daily hunger (Draft PR #35 — source only)
+
+332. In a disposable world with a completed civic hall, ten living UUID-
+     bound villagers and a steward, put plain vanilla bread in the real
+     hall barrel. Only a nearby real resident may consume one item and
+     receive exactly one durable meal receipt per Horizon host day.
+333. Inspect actual native barrel slots before/after a portion: one
+     bread disappears exactly once. Inventory with no plain bread, wrong
+     item, damaged/customized stack, unloaded barrel or missing steward
+     must never generate a meal receipt.
+334. During meal time, witness each distinct citizen navigate to the
+     hall entrance, then resume normal work or night routine after eating.
+     Names alone cannot impersonate an already UUID-bound resident.
+335. Consume one portion then restart before a second transaction:
+     the first resident ID stays served and cannot eat twice, while an
+     unfed resident remains eligible. No abstract bread stock change.
+336. Crash after Planned but before Issued: recheck the living recipient,
+     authoritative UUID, loaded mob, steward, exact slot and item count
+     before extracting. A departed/dead resident cancels only the
+     unissued attempt with zero bread consumed.
+337. Crash after Issued but before native item extraction: never issue
+     a second extraction automatically. Match expected later count and
+     confirm, or quarantine as Blocked for explicit operator resolution.
+338. Die after Issued: do not corrupt the save or erase the pending
+     receipt; reconcile against actual native count. Preserve the dead
+     resident ID as audit history without counting them as living-fed.
+339. Put a conflicting market order, baker wheat extraction or builder
+     transfer in the journal. Physical meals must wait for the one
+     native barrel journal, never race or withdraw during conflict.
+340. If no real bread exists, observe a genuine host-day transition.
+     The previous physical shortage adds one day and decreases village
+     morale by two. Repeated same-day ticks, reloads and clock rewinds
+     cannot apply that penalty repeatedly.
+341. Feed every living resident; on following real host-day transition
+     reset consecutive shortage days and recover one morale. Do not
+     manufacture offscreen meals across skipped/fast-forwarded days.
+342. Change a resident's alive flag after their confirmed meal: the
+     historic receipt stays in the journal but living-fed count
+     excludes the dead, and another living hungry villager still
+     requires one real bread item.
+343. Inspect the hall Treasury sign and
+     `/civ meals NAME`: all show physically counted served/required
+     and shortage state, distinct from the abstract economic forecast.
+     `/civ meals` makes no changes to world.json or inventory.
+344. Serialize an old world with no meal fields and no recipient_id in
+     existing barrel journal. Validate and load with safe defaults
+     without crediting any meals or altering the old transaction.
