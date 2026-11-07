@@ -1966,6 +1966,11 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
                     continue;
                 }
                 if let Err(e) = save(state) {
+                    // A native UUID has already been bound in memory. Do not
+                    // let the outer command handler retry this failed save,
+                    // or restore an older clone over a partially committed
+                    // world.json. Stop writes until disk recovery.
+                    already_saved = true;
                     state.problem = Some(format!("actor identity save halted: {e}"));
                     return Ok(format!("Reconciled {linked} actors before save failure; world halted. Restore backup and restart. {e}"));
                 }
@@ -2129,8 +2134,21 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             } else { reply(game, message); }
         }
         Err(message) => {
-            state.world = Some(previous);
-            error(game, message);
+            if already_saved {
+                // A previous step committed world.json. Rolling back only
+                // RAM would make subsequent saves silently erase the
+                // committed identity/transaction record. Fail closed.
+                log::error!("[civilizations] command failed after durable save: {message}");
+                state.problem = Some(format!(
+                    "command failed after durable save; inspect before restarting: {message}"
+                ));
+                error(game, format!(
+                    "Command stopped after a durable save; world halted for inspection: {message}"
+                ));
+            } else {
+                state.world = Some(previous);
+                error(game, message);
+            }
         }
     }
 }
@@ -2171,6 +2189,18 @@ fn safe_actor_spawn_points(
                         let dy = mob.position.y - point[1];
                         let dz = mob.position.z - point[2];
                         mob.alive() && dx * dx + dy * dy + dz * dz < 9.0
+                    }) {
+                        continue;
+                    }
+                    // The preflight is a batch survey: selected citizens
+                    // must also be separated from EACH OTHER, not only from
+                    // mobs currently present before the first spawn.
+                    // Keep the same 3-block clearance used for live mobs.
+                    if spots.iter().any(|other: &[f64; 3]| {
+                        let dx = other[0] - point[0];
+                        let dy = other[1] - point[1];
+                        let dz = other[2] - point[2];
+                        dx * dx + dy * dy + dz * dz < 9.0
                     }) {
                         continue;
                     }
