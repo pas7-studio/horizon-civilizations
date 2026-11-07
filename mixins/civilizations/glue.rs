@@ -1941,6 +1941,58 @@ fn barrel_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
             return Ok(());
         }
 
+        // First fund the public bakery from physically present native
+        // oak logs and cobblestone. A real builder must stand at the hall,
+        // and every extracted item becomes bakery-specific saved escrow.
+        let bakery_builder = village.bakery.as_ref().is_some_and(|b|
+            b.building.is_some() && !b.supplies_reserved)
+            && DailyPhase::at(game.world.day_time).on_shift(Job::Builder)
+            && storage_worker_near(game, state.world.as_ref().unwrap(), id, Job::Builder);
+        if bakery_builder {
+            let bakery = village.bakery.as_ref().unwrap();
+            let wood = bakery.construction_escrow.get(&Good::Wood).copied().unwrap_or(0);
+            let stone = bakery.construction_escrow.get(&Good::Stone).copied().unwrap_or(0);
+            if wood >= crate::game::civilizations_core::BAKERY_WOOD_LOGS
+                && stone >= crate::game::civilizations_core::BAKERY_COBBLESTONE {
+                let before = state.world.as_ref().unwrap().clone();
+                if state.world.as_mut().unwrap().reserve_bakery_supplies(id)? {
+                    save_autonomous(state, before)?;
+                    return Ok(());
+                }
+            }
+            for (good, required) in [
+                (Good::Wood, crate::game::civilizations_core::BAKERY_WOOD_LOGS),
+                (Good::Stone, crate::game::civilizations_core::BAKERY_COBBLESTONE),
+            ] {
+                let waiting = required.saturating_sub(
+                    bakery.construction_escrow.get(&good).copied().unwrap_or(0));
+                if request_workshop_pickup(
+                    game, state, id, good, waiting, BarrelDirection::ToBakeryBuilder,
+                )? {
+                    return Ok(());
+                }
+            }
+        }
+
+        // A completed real bakery needs THREE wheat actually removed from
+        // vanilla barrels per bread. Baker must be at the receiving area;
+        // no abstract simulated inventory or virtual daily production.
+        let bakery_needs_wheat = village.bakery.as_ref().is_some_and(|b|
+            b.complete
+                && b.wheat_escrow < crate::game::civilizations_core::BREAD_WHEAT_RECIPE
+                && b.bread_in_transit == 0)
+            && DailyPhase::at(game.world.day_time).on_shift(Job::Baker)
+            && storage_worker_near(game, state.world.as_ref().unwrap(), id, Job::Baker);
+        if bakery_needs_wheat {
+            let missing = crate::game::civilizations_core::BREAD_WHEAT_RECIPE
+                - village.bakery.as_ref().unwrap().wheat_escrow;
+            if request_workshop_pickup(
+                game, state, id, Good::Wheat, missing, BarrelDirection::ToBakerIngredients,
+            )? {
+                return Ok(());
+            }
+        }
+
         let can_collect = village.visual_job.is_some()
             && !village.hut_supplies_reserved
             && DailyPhase::at(game.world.day_time).on_shift(Job::Builder)
