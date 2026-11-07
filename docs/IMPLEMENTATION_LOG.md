@@ -604,3 +604,9 @@
   native Horizon client build or Minecraft E2E in this environment.
 - Keep stacked PR Draft and main untouched; do not enable Actions or merge
   before real Windows build evidence and disposable-world test.
+
+- Follow-up: corrected `tools/first_play_gate.py` default expected
+  branch to the actual PR #34 checkout and aligned the Python test
+  fixture. The user can now invoke `--build-client` on the correct
+  branch without an explicit `--expected-branch` override. Runtime
+  gate tests and actual native compilation remain unexecuted here.
