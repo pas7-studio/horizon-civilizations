@@ -1,8 +1,8 @@
 // Horizon bridge. All world logic lives in civilizations_core; this module
 // translates server hooks, commands, inventory changes, and native NPC spawns.
 use crate::game::{
-    civilizations_core::{farm_plan, hut_plan, town_hall_plan, hall_storage_positions,
-        BarrelDirection, BarrelPhase, inspect_farm, inspect_hut, inspect_town_hall, is_ground,
+    civilizations_core::{farm_plan, hut_plan, town_hall_plan, bakery_plan, hall_storage_positions,
+        BarrelDirection, BarrelPhase, inspect_farm, inspect_hut, inspect_town_hall, inspect_bakery, is_ground,
         BuildInspection, DailyPhase, FarmBlock, FarmDecision, FarmStage, Good, HomeSlot, Job, VisualBuildJob,
         World, inspect_home, hall_board_positions, HOUSING_PLOT_OFFSETS, MAX_HOUSING_SURVEY_RESULTS,
         MAX_SIM_DAYS},
