@@ -12,6 +12,7 @@ use std::io::Write;
 use std::path::PathBuf;
 use std::sync::{Mutex, MutexGuard};
 
+const MOD_ID: &str = "civilizations";
 const DIR: &str = "horizon-civilizations";
 const SAVE: &str = "world.json";
 const TICKS_PER_DAY: u64 = 24_000;
@@ -124,6 +125,7 @@ pub fn register(commands: &mut Vec<NativeCommand>) {
     }
     for usage in [
         "civ found <name:word>", "civ actors <name:word>",
+        "civ reconcile <name:word>",
         "civ day [days:integer]", "civ construct <name:word>",
         "civ war <from:word> <to:word>",
         "civ peace <from:word> <to:word>",
@@ -153,26 +155,28 @@ fn own_settlement(world: &World, player_id: &str) -> Result<u64, String> {
 /// Find our previously named actors even after the world has been reopened.
 /// Only loaded entities are inspected; missing chunks are never force-loaded.
 /// The name is a soft identity, not proof against an intentionally renamed mob.
-fn loaded_actors(game: &Game<'_>, world: &World, settlement_id: u64) -> Vec<(u64, u32)> {
-    let Some(village) = world.settlements.get(&settlement_id) else { return Vec::new(); };
-    if game.dim.id() != village.dimension { return Vec::new(); }
-    village.residents.iter().filter_map(|r| {
-        let expected = village.actor_name(r);
-        // 0.1.0 actors had names without explicit resident identifiers.
-        let legacy = format!("{} [{}]", r.name, village.name);
-        let found = game.mobs.iter().filter(|mob| {
-            mob.kind.id == "minecraft:villager"
-                && mob.alive()
-                && (mob.custom_name.as_deref() == Some(expected.as_str())
-                    || mob.custom_name.as_deref() == Some(legacy.as_str()))
-        });
-        let mut matches = found.take(2);
-        let first = matches.next()?;
-        // Duplicate identity is ambiguous: do not command either entity.
-        if matches.next().is_some() { return None; }
-        let dx = first.position.x - f64::from(village.center[0]);
-        let dz = first.position.z - f64::from(village.center[2]);
-        (dx * dx + dz * dz < 96.0 * 96.0).then_some((r.id, first.id))
+fn loaded_actors(game: &mut Game<'_>, world: &World, settlement_id: u64) -> Vec<(u64, u32)> {
+    let Some(village) = world.settlements.get(&settlement_id) else {
+        return Vec::new();
+    };
+    if game.dim.id() != village.dimension {
+        return Vec::new();
+    }
+    // Names can be changed or forged. A live actor is trusted ONLY if its
+    // persistent UUID equals the value recorded in world.json.
+    village.residents.iter().filter_map(|resident| {
+        if !resident.alive {
+            return None;
+        }
+        let uuid = resident.entity_uuid?;
+        let (dimension, mob_id, kind) = game.native_entity_by_uuid(uuid)?;
+        if dimension != village.dimension || kind != "minecraft:villager" {
+            return None;
+        }
+        let mob = game.native_mob(&dimension, mob_id)?;
+        let dx = mob.pos[0] - f64::from(village.center[0]);
+        let dz = mob.pos[2] - f64::from(village.center[2]);
+        (dx * dx + dz * dz < 96.0 * 96.0).then_some((resident.id, mob_id))
     }).collect()
 }
 
@@ -317,6 +321,10 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
     let mut args = command.split_whitespace();
     if args.next() != Some("civ") { return; }
     *ran = true;
+    if !game.native_on(MOD_ID) {
+        error(game, "Civilizations is disabled");
+        return;
+    }
     let Some(world_dir) = game.native_world_dir() else { error(game, "no server world open"); return; };
     let mut guard = active(world_dir.join(DIR));
     let state = guard.as_mut().expect("active initialized");
@@ -325,7 +333,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
     let actor = format!("{:032x}", player.uuid);
     let action = args.next().unwrap_or("help");
     if action == "help" {
-        reply(game, "Civilizations: /civ list | info [name] | roster <name> | construction <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, day [days], construct <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
+        reply(game, "Civilizations: /civ list | info [name] | roster <name> | construction <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, day [days], construct <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
         return;
     }
     if action == "list" {
@@ -464,23 +472,72 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
                 Ok(format!("Bought {count} {} for {cost} coins", good.as_str()))
             }
         })(),
+        "reconcile" if player.permission >= 2 => (|| {
+            let name = args.next().ok_or("usage: /civ reconcile <name>")?;
+            let village = previous.by_name(name).ok_or("unknown settlement")?;
+            if !village.actors_spawned {
+                return Err("spawn village actors first".into());
+            }
+            if village.dimension != player.dimension {
+                return Err("visit the settlement dimension first".into());
+            }
+            let mut linked = 0usize;
+            let mut ambiguous = 0usize;
+            for resident in village.residents.iter().filter(|r| r.alive && r.entity_uuid.is_none()) {
+                let expected = village.actor_name(resident);
+                let legacy = format!("{} [{}]", resident.name, village.name);
+                let mut candidates = game.mobs.iter().filter(|mob| {
+                    let dx = mob.position.x - f64::from(village.center[0]);
+                    let dz = mob.position.z - f64::from(village.center[2]);
+                    mob.alive() && mob.kind.id == "minecraft:villager"
+                        && dx * dx + dz * dz < 96.0 * 96.0
+                        && (mob.custom_name.as_deref() == Some(expected.as_str())
+                            || mob.custom_name.as_deref() == Some(legacy.as_str()))
+                }).map(|mob| mob.id);
+                let Some(entity_id) = candidates.next() else {
+                    continue;
+                };
+                if candidates.next().is_some() {
+                    ambiguous += 1;
+                    continue;
+                }
+                let Some(handle) = game.native_entity(entity_id) else {
+                    continue;
+                };
+                let Some(uuid) = game.native_entity_uuid(handle) else {
+                    continue;
+                };
+                // An ambiguous/foreign UUID is never silently re-assigned.
+                if state.world.as_mut().unwrap().bind_actor(village.id, resident.id, uuid).is_err() {
+                    ambiguous += 1;
+                    continue;
+                }
+                if let Err(e) = save(state) {
+                    state.problem = Some(format!("actor identity save halted: {e}"));
+                    return Ok(format!("Reconciled {linked} actors before save failure; world halted. Restore backup and restart. {e}"));
+                }
+                already_saved = true;
+                linked += 1;
+            }
+            Ok(format!("Reconciled {linked} legacy actors; {ambiguous} ambiguous/conflicting skipped. /civ roster {name}. Missing actors are not spawned automatically."))
+        })(),
         "actors" if player.permission >= 2 => (|| {
             let name = args.next().ok_or("usage: /civ actors <name>")?;
             let s = previous.by_name(name).ok_or("unknown settlement")?;
             if s.actors_spawned {
-                return Ok(format!("Actors already summoned. {}/{} are currently linked; no duplicate spawns. Use /civ roster {name}.", loaded_actors(game, &previous, s.id).len(), s.population()));
+                return Ok(format!("Actors already reserved. {}/{} loaded UUID-linked; no duplicate spawns. Legacy world: /civ reconcile {name}.", loaded_actors(game, &previous, s.id).len(), s.population()));
             }
             if s.dimension != player.dimension { return Err("go to that dimension first".into()); }
             let dx = i64::from(s.center[0]) - player.position[0].floor() as i64;
             let dz = i64::from(s.center[2]) - player.position[2].floor() as i64;
             if dx * dx + dz * dz > 32 * 32 { return Err("stand within 32 blocks of the settlement center".into()); }
-            // Reserve the one-shot summon durably before any physical entity
-            // is created. If the process crashes mid-batch we do not silently
-            // mint duplicates on restart; an operator must inspect/recover.
+            // Persist one-shot reservation before the first spawn. A crash
+            // cannot accidentally retrigger a full batch on next login.
             state.world.as_mut().unwrap().settlements.get_mut(&s.id).unwrap().actors_spawned = true;
             save(state)?;
             already_saved = true;
             let mut spawned = 0usize;
+            let mut halted = false;
             for (i, resident) in s.residents.iter().take(10).enumerate() {
                 let x = f64::from(s.center[0]) + (i as f64 % 5.0) * 2.0 - 4.0 + 0.5;
                 let z = f64::from(s.center[2]) + (i / 5) as f64 * 2.0 - 1.0 + 0.5;
@@ -488,19 +545,34 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
                     name: Some(s.actor_name(resident)),
                     ..NativeSpawn::default()
                 };
-                if game.native_spawn_mob(&s.dimension, "minecraft:villager", [x, f64::from(s.center[1]), z], &opts).is_some() {
-                    spawned += 1;
-                } else { break; }
+                let Some(entity_id) = game.native_spawn_mob(
+                    &s.dimension, "minecraft:villager",
+                    [x, f64::from(s.center[1]), z], &opts
+                ) else {
+                    break;
+                };
+                spawned += 1;
+                let maybe_uuid = game.native_entity(entity_id)
+                    .and_then(|handle| game.native_entity_uuid(handle));
+                let link = maybe_uuid.ok_or_else(|| "spawned actor UUID is unavailable".to_owned())
+                    .and_then(|uuid| state.world.as_mut().unwrap().bind_actor(s.id, resident.id, uuid).map(|_| ()))
+                    .and_then(|_| save(state));
+                if let Err(e) = link {
+                    state.problem = Some(format!("actor spawn identity interrupted: {e}"));
+                    log::error!("[civilizations] spawned an actor without a durable identity: {e}");
+                    halted = true;
+                    break;
+                }
             }
-            if spawned != 10 {
-                // Actors already summoned stay in the world. Never auto-retry
-                // a partial batch, which would duplicate them.
-                Ok(format!("Summoned {spawned}/10 actors; retry disabled to prevent duplicates. They use vanilla villager AI."))
+            if halted {
+                Ok(format!("Spawn halted after {spawned}/10 actors: identity persistence failed. Restart and manually inspect/reconcile; no auto-respawn."))
+            } else if spawned != 10 {
+                Ok(format!("Spawned {spawned}/10 actors. Reserved one-shot spawn; use /civ roster {name}, do not rerun blindly."))
             } else {
-                Ok(format!("Summoned {spawned} visible villagers; village jobs are simulated, not yet linked to their animations."))
+                Ok(format!("Spawned and UUID-linked {spawned} villagers. Reopen world and verify /civ roster {name}."))
             }
         })(),
-        "found" | "day" | "war" | "peace" | "actors" | "construct" => Err("requires server operator level 2".into()),
+        "found" | "day" | "war" | "peace" | "actors" | "construct" | "reconcile" => Err("requires server operator level 2".into()),
         _ => Err("unknown subcommand. Use /civ help".into()),
     };
     match result {
@@ -522,6 +594,9 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
 /// Runs after an authoritative level tick: the selected dimension and its
 /// loaded chunks are guaranteed to be the ones inspected/modified here.
 pub fn level_tick(game: &mut Game<'_>, dimension: &str) {
+    if !game.native_on(MOD_ID) {
+        return;
+    }
     if game.dim.id() != dimension { return; }
     let Some(dir) = game.native_world_dir() else { return; };
     let mut guard = active(dir.join(DIR));
@@ -551,6 +626,9 @@ pub fn level_tick(game: &mut Game<'_>, dimension: &str) {
 }
 
 pub fn tick(game: &mut Game<'_>) {
+    if !game.native_on(MOD_ID) {
+        return;
+    }
     let Some(dir) = game.native_world_dir() else { return; };
     let mut guard = active(dir.join(DIR));
     let state = guard.as_mut().expect("active initialized");

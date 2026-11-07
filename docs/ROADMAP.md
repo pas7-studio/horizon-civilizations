@@ -19,7 +19,7 @@ release until all preceding gates have evidence.
 ## P1 - First true playable milestone
 
 - [x] Basic reload reattachment by deterministic names (unloaded/ambiguous names are ignored)
-- [ ] Reliable UUID-based identity and full restart reconciliation
+- [x] UUID-based actor ownership and operator-driven reconciliation (native CI and gameplay E2E still required)
 - [x] Experimental job-specific NPC walking targets (loaded chunks only)
 - [ ] Real profession goals: farmers farm, miners mine, builders build
 - [ ] Physical building templates and progressive block placement

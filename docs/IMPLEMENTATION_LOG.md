@@ -46,3 +46,11 @@
 - Refactored previously ad hoc physical block checks to a side-effect-free Rust inspection contract: unloaded chunks, rollback rewind, obstruction, previously placed blocks and completed jobs.
 - Changed construction selection to rotate among loaded jobs so the first stalled village does not block every other settlement.
 - Added scenario-driven Rust tests and explicit in-game acceptance requirements. Physical building remains experimental until the real-world E2E is captured.
+
+## 2026-11-07 — UUID-bound NPCs / migration
+
+- Replaced actor custom-name ownership with persisted Horizon UUID bindings; verification uses loaded UUID lookup.
+- Saved identity after each spawn with a precommitted one-shot reservation; partial creation fails closed.
+- Added an explicit operator-only legacy reconciliation command; malformed, repeated or misowned UUIDs are rejected.
+- Added native-mod on/off guards to command and simulation ticks and Rust identity invariants/tests.
+- Pending: native CI and manual game-world spawn/restart/reconciliation smoke tests.

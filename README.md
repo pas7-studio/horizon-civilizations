@@ -154,3 +154,9 @@ legitimate Java Edition account is required by Horizon.
 ### Verification evidence
 
 The pinned native Horizon compile gate has passed ([GitHub run 42375553368](https://github.com/pas7-studio/horizon-civilizations/actions/runs/42375553368)); Core Rust/Clippy/package checks passed ([run 42375993049](https://github.com/pas7-studio/horizon-civilizations/actions/runs/42375993049)). These are **build/test checks only**. Neither run launches an interactive world, and physical construction/NPC behavior still requires the disposable-world scenarios in docs/TEST_PLAN.md. Follow-up changes to scheduling and crash-recovery must pass their own CI before merge.
+
+## UUID-bound NPC identity (2026-11-07)
+
+The mod now persists each spawned villager's actual Horizon entity UUID as a 32-character hex string. All movement and building checks use UUID lookup, not a visible name. Existing v0.1.2 worlds have no UUID fields; an operator must visit loaded original villagers and run `/civ reconcile Ashford` exactly once to bind unique, tagged legacy NPCs. Ambiguous names, unavailable UUIDs and collisions are skipped. No automatic respawn is attempted. The migration works only in a disposable test world until the actual in-game E2E passes.
+
+The module is checked with `game.native_on("civilizations")` before world commands and simulation ticks; native addon disable stops further simulation/writes.
