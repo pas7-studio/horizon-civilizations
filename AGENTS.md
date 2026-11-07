@@ -1,3 +1,23 @@
+# Latest source: guarded recovery of partial villager spawning
+
+- Branch `feat/guarded-partial-villager-recovery-v0115` stacks after
+  PR #33. Actions OFF and main untouched; no playable claims.
+- Problem: one-time initial native spawn reservation may be only
+  partially complete after a crash. DO NOT reset `actors_spawned`
+  or automatically respawn the entire batch.
+- Implemented `Settlement.actor_recovery_issued` per living
+  unbound resident. Operator can inspect via `/civ roster NAME`,
+  first `/civ reconcile NAME`, then deliberately
+  `/civ recoveractor NAME ID attempt` ONLY after 96-block
+  loaded scan, no exact/legacy tagged actor, safe open site.
+- Record one-shot reservation BEFORE native spawn; a failed or
+  interrupted UUID persistence must not reissue the spawn. Exact
+  UUID binding clears only that ID's marker.
+- 7 Rust cases, 12 Python static source tests, TEST_PLAN 272–282.
+  No Rust/native Horizon compile or Minecraft E2E in this container.
+
+---
+
 # Current source branch — native binary evidence gate (2026-11-08)
 
 - Latest stacked Draft `fix/first-play-binary-evidence-v0115`,
