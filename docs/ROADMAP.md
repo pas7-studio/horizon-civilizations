@@ -146,3 +146,18 @@ and either authoritative mob UUID ownership or a well-scoped identity registry.
 **Development policy while GitHub Actions are disabled:** add isolated,
 reviewable source milestones with explicit local verification gaps. Do not call
 them playable until the local Horizon client E2E proves the actual world state.
+
+## Safe village housing proposals (v0.1.9 source-only)
+
+- [x] Derived need: no housing proposal if all living residents already have physical spaces.
+- [x] Bounded, deterministic village plot slots and read-only live terrain survey.
+- [x] Verify recorded plots across **all settlements in the same dimension**
+  before either manual construction or suggested-site approval.
+- [x] Reject recorded farm, completed hut and active project conflicts.
+- [x] Explicit near-site OP approval that rechecks the entire loaded 5x5
+  natural/empty plot and creates one durable construction job.
+- [x] Existing UUID-bound builder, daytime-only physical placement and
+  post-crash cursor reconciliation unchanged.
+- [ ] Local compiler, Rust/Python tests, native Horizon check and gameplay E2E.
+- [ ] Genuine player land claims, placed sign/structure detection, plotted
+  roads/paths and a veto-capable town council (not implemented).
