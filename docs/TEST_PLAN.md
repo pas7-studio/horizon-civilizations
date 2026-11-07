@@ -536,3 +536,26 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
      hall construction job, an absent builder, an unfinished bakery and
      unavailable natural plots. Each should produce a meaningful blocker
      without changing the world or claiming gameplay acceptance.
+
+## Physical bread demand and warehouse backpressure (unreleased source)
+
+182. Build exact branch and confirm Rust/Python suite. Create settlement
+     with 10 living residents and completed native hall/bakery. The target
+     physical bread buffer should be 20 loaves. Record both actual barrels,
+     confirmed inbound bread, and baker-carried bread separately.
+183. With 20 native bread and plentiful wheat, verify baker withdraws no
+     wheat and crafts no additional loaf. Other warehouse delivery of
+     logs/stone/wheat must still proceed normally.
+184. With 15 on shelf, 4 confirmed inbound bread, zero in transit, one
+     new loaf is needed. After it is delivered, baking must pause at 20.
+185. With 18 bread on shelf and 2 baker-carried finished bread receipts,
+     baking must pause until those loaves are deposited. Save/reload
+     cannot cause an extra batch.
+186. Missing/unloaded official native barrel must pause wheat extraction
+     and crafting. Restoring both native block entities resumes work,
+     without treating an unavailable container as empty.
+187. Trade away 5 actual bread after reaching target: the baker should
+     resume bounded real-wheat restocking once the purchase is settled.
+188. Test no living baker/residents, shifts, saved journals, extra
+     already-extracted wheat and simultaneous hut funding. No parallel
+     warehouse goods should be starved by full bread buffer.
