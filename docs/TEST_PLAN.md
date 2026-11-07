@@ -63,3 +63,9 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
 43. **Harvest receipt:** after all eight mature crops have been observed removed, exactly one receipt is stored, with sequential ID, world day and crop count. The command /civ harvests NAME must show it, and a repeated stage completion must not append another receipt.
 44. **Persistence and bounded history:** reopen world and confirm receipt identity; after more than 32 completed harvests only latest 32 remain while lifetime sequence increases. Legacy v0.1.4 farms load with no fabricated receipts.
 45. **Corrupt audit:** invalid crop count, duplicate/non-increasing sequence, future observed world day and oversized history must reject the world save. No crops, money, stock or player items may be minted by audit creation.
+
+49. **Time bootstrap:** create a pre-v0.1.6 world with a valid save but no last_host_day, load it on an advanced Horizon day, confirm zero phantom production and a new persisted anchor.
+50. **Day crossing and reload:** keep world open across a real Horizon day boundary (or sleep/skip-night), verify one abstract economy day. Close/reopen on the same host day and verify no second credit.
+51. **Time rewinds:** use /time set to an earlier day, re-open, and verify no replay until the previous maximum observed day is exceeded.
+52. **Large time jumps:** advance the host day by 10,000 and confirm at most 30 simulation days and one persistent cursor update; next tick at the same host day must be a no-op.
+53. **World split:** overworld and Nether hooks must not each count an economic day; verify the shared Horizon world clock is used once.

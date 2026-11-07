@@ -79,3 +79,7 @@ A persistently saved 3×3 irrigated wheat field now has a finite preparation pha
 ## v0.1.5 audit (feature branch)
 
 Full physical harvest observation now creates a persistent increasing receipt (sequence, world day, eight crops). Saves retain 32 recent receipts and reject invalid sequences on load; legacy v0.1.4 farms start with empty evidence. The command /civ harvests NAME reports this audit. This is not an economy transaction or gameplay E2E. No warehouse stock or item drops are granted by this feature.
+
+## Host day counter migration (v0.1.6 feature branch)
+
+Authoritative daily simulation now follows the persistent Horizon `day_time` clock. A saved `last_host_day` anchor protects against repeat application across reloads and backwards clock changes; old worlds initialize the anchor without backpay. Large clock jumps are limited to 30 simulation days to prevent runaway stock. Manual `/civ day` remains explicit. Native compile, real world time progression and sleep E2E pending.
