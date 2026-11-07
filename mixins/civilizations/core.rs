@@ -6314,6 +6314,22 @@ mod autonomous_frontier_tests {
     }
 
     #[test]
+    fn reload_cannot_found_a_second_npc_town_on_the_same_site() {
+        let mut world = World::default();
+        let original = world.found_autonomous(
+            "Oakford_1", "minecraft:overworld", [88, 70, 0]
+        ).unwrap();
+        let json = serde_json::to_string(&world).unwrap();
+        let mut reloaded: World = serde_json::from_str(&json).unwrap();
+        assert!(reloaded.found_autonomous(
+            "NewName", "minecraft:overworld", [90, 70, 1]
+        ).is_err());
+        assert_eq!(reloaded.settlements.len(), 1);
+        assert_eq!(reloaded.settlements[&original].name, "Oakford_1");
+        reloaded.validate().unwrap();
+    }
+
+    #[test]
     fn npc_founding_roundtrip_does_not_materialize_synthetic_accounts() {
         let mut world = World::default();
         world.found_autonomous(
