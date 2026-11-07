@@ -763,6 +763,9 @@ pub struct Settlement {
     pub visual_sites: Vec<[i32; 3]>,
     #[serde(default)]
     pub visual_job: Option<VisualBuildJob>,
+    /// Physical bill-of-materials deducted once per active hut project.
+    #[serde(default)]
+    pub hut_supplies_reserved: bool,
     /// Optional one-field living crop simulation, retained across saves.
     #[serde(default)]
     pub farm: Option<FarmPlot>,
@@ -1190,6 +1193,9 @@ impl World {
                 }
                 if !unique_sites.insert((site[0], site[1], site[2])) { return Err("duplicate visual build site".into()); }
             }
+            if village.hut_supplies_reserved && village.visual_job.is_none() {
+                return Err("reserved hut materials without an active job".into());
+            }
             if let Some(job) = &village.visual_job {
                 if i64::from(job.origin[0]).abs() > 29_999_990 || i64::from(job.origin[2]).abs() > 29_999_990
                     || !(-2048..=2048).contains(&job.origin[1]) {
@@ -1299,6 +1305,7 @@ impl World {
             player_parcels: Vec::new(),
             visual_sites: Vec::new(),
             visual_job: None,
+            hut_supplies_reserved: false,
             farm: None,
         };
         self.settlements.insert(id, settlement);
@@ -1555,6 +1562,7 @@ impl World {
         village.treasury_coins = treasury_after;
         village.player_parcels[parcel_index].commissioned = true;
         village.visual_job = Some(VisualBuildJob { origin, cursor: 0, blocked: false });
+        village.hut_supplies_reserved = false;
         let name = village.name.clone();
         self.event(format!("{name}: commissioned player-owned hut at {},{},{}",origin[0],origin[1],origin[2]));
         Ok(COMMISSION_PRICE_COINS)
@@ -1567,6 +1575,7 @@ impl World {
         let village = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?;
         let name = village.name.clone();
         village.visual_job = Some(VisualBuildJob { origin, cursor: 0, blocked: false });
+        village.hut_supplies_reserved = false;
         self.event(format!(
             "{name}: physical construction project reserved at {},{},{}",
             origin[0], origin[1], origin[2]
@@ -1574,6 +1583,25 @@ impl World {
         Ok(())
     }
 
+
+    /// Backed by actual items delivered by players or confirmed physically
+    /// collected by the village. An existing abstract house is NOT a supply.
+    pub fn reserve_hut_supplies(&mut self, village_id: u64) -> Result<bool, String> {
+        let v = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?;
+        let job = v.visual_job.as_ref().ok_or("no active hut construction")?;
+        if v.hut_supplies_reserved { return Ok(false); }
+        if job.cursor != 0 || job.blocked {
+            return Err("unfunded partial/blocked hut needs inspection before any physical work".into());
+        }
+        if v.warehouse_quantity(Good::Wood) < HUT_WOOD_LOGS
+            || v.warehouse_quantity(Good::Stone) < HUT_COBBLESTONE {
+            return Ok(false);
+        }
+        v.warehouse_debit(Good::Wood, HUT_WOOD_LOGS)?;
+        v.warehouse_debit(Good::Stone, HUT_COBBLESTONE)?;
+        v.hut_supplies_reserved = true;
+        Ok(true)
+    }
 
     /// Rotate across loaded, unblocked physical jobs in a deterministic order.
     /// Never let an unloaded first village stall all other civilizations.
@@ -1719,7 +1747,11 @@ impl World {
         if job.cursor != hut_plan(job.origin).len() { return Err("construction incomplete".into()); }
         let origin = job.origin;
         if village.pending_visual_buildings == 0 { return Err("house counter underflow".into()); }
+        if !village.hut_supplies_reserved {
+            return Err("hut cannot complete without proven physical material reservation".into());
+        }
         village.visual_job = None;
+        village.hut_supplies_reserved = false;
         village.visual_sites.push(origin);
         village.pending_visual_buildings -= 1;
         let name = village.name.clone();
@@ -1798,7 +1830,10 @@ impl World {
         let payout = u64::from(good.price()) * u64::from(count);
         if p.coins.checked_add(payout).is_none() { return Err("coin balance overflow".into()); }
         let s = self.settlements.get_mut(&village_id).ok_or("no settlement")?;
-        s.add(good, count);
+        // Real inventory transfer is checked and committed in the adapter.
+        // Do NOT also credit abstract stock: that would count the same item
+        // as both a Minecraft-derived resource and virtual daily production.
+        s.warehouse_credit(good, count)?;
         let p = self.players.get_mut(player_id).ok_or("no player")?;
         p.coins += payout;
         let rep = p.reputation.entry(village_id).or_default();
@@ -1813,7 +1848,7 @@ impl World {
         if p.settlement != Some(village_id) { return Err("join this settlement first".into()); }
         if p.coins < cost { return Err("not enough coins".into()); }
         let s = self.settlements.get_mut(&village_id).ok_or("no settlement")?;
-        if !s.take(good, count) { return Err("settlement stock is insufficient".into()); }
+        s.warehouse_debit(good, count)?;
         self.players.get_mut(player_id).ok_or("no player")?.coins -= cost;
         Ok(cost)
     }
