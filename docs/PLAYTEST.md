@@ -113,10 +113,10 @@ Run [TEST_PLAN](TEST_PLAN.md) steps 60–66, preserving screenshots and
 logs for actual pathfinding evidence. No sleeps/beds or full house
 ownership are claimed; no Actions workflows are used.
 
-## Offline-first local compile (stacked v0.1.10, no GitHub Actions)
+## Offline-first local compile (stacked v0.1.11, no GitHub Actions)
 
-PR #18 is stacked on #17 → #16 → #15. Check out
-`feat/civic-council-priorities-v0110` when testing **all four
+PR #19 is stacked on #18 → #17 → #16 → #15. Check out
+`feat/autonomous-physical-village-v0111` when testing **all five
 features together**, not `main` or the older GitHub Windows artifact.
 
 From PowerShell in the local repository with Rust 1.95.0, Git, Python 3.11+
@@ -167,10 +167,47 @@ as an exact future simulation or a financial ledger.
 
 Instead of manually repeating the Rust and Python commands above, use
 `./scripts/validate-local.ps1 -Format` on a fresh checkout of
-`feat/civic-council-priorities-v0110`, followed by
+`feat/autonomous-physical-village-v0111`, followed by
 `./scripts/validate-local.ps1 -BuildClient` for the pinned native
 integration and executable. Omit `-Format` to refuse unformatted sources
 without modifying them. `-Format` explicitly changes local source files;
 all commands may create `target/` artifacts. Rust 1.95, Python 3.11+,
 Git and enough available disk are required. Native compile needs external
 network access for upstream Git sources; no GitHub Actions are used.
+
+## Full autonomous-village acceptance (v0.1.11, local only)
+
+On the latest **stacked feature branch** create an entirely new,
+disposable world in a relatively flat grassy area. Run
+`/civ found Ashford` once as OP, then do **not** run `/civ actors`,
+`/civ construct` or `/civ farm`. Remain nearby with chunks loaded
+for several game seconds and inspect:
+
+```
+/civ development Ashford
+/civ roster Ashford
+/civ construction Ashford
+/civ farming Ashford
+```
+
+The mod should select its own unclaimed sites and have UUID-linked NPCs
+construct a real starter hut and irrigated crop field. The exact game
+pathfinding and world-block changes **are not validated yet**; if there
+is no activity, inspect the native game logs and report which of the
+four diagnostic commands remains idle.
+
+For property testing, join the settlement if needed. On a natural,
+level 5x5 patch 12..80 blocks from the village center, stand at the
+center and run `/civ buyplot Ashford`. The parcel costs 10 civic
+coins and is protected **against this mod's automatic builders and
+farmers**. You may now build your own blocks, or while still on an
+empty purchased parcel use `/civ commission Ashford` to order an
+NPC-built hut for another 15 civic coins and 8 wood/6 stone taken from
+the settlement stock. Property ownership and treasury survive save
+and reload. A private commissioned hut must not become NPC public
+housing. Do not mistake this for vanilla multiplayer anti-grief.
+
+Run numbered cases 85–98 from [TEST_PLAN](TEST_PLAN.md) before
+calling this a working autonomous town. Existing guild, bakery, roads,
+tree-cutting, auto-founding settlements and real item-economy logistics
+are still independent work.
