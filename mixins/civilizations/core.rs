@@ -29,6 +29,11 @@ pub const LAND_PRICE_COINS: u64 = 10;
 pub const COMMISSION_PRICE_COINS: u64 = 15;
 pub const FINISHED_HUT_PRICE_COINS: u64 = 35;
 pub const MAX_PLAYER_PARCELS: usize = 32;
+/// Bound autonomous founding so exploration does not eventually create
+/// sixty-four always-ticking settlements in one long-lived world. Manual
+/// operator settlements are separate and keep their original rules.
+pub const MAX_NPC_SETTLEMENTS: usize = 8;
+pub const NPC_FOUNDER: &str = "civilizations:npc";
 
 fn autonomous_by_default() -> bool { true }
 
@@ -1828,6 +1833,37 @@ impl World {
         center: [i32; 3],
         founder: &str,
     ) -> Result<u64, String> {
+        self.found_internal(name, dimension, center, founder, true)
+    }
+
+    /// Self-founded NPC community. No authenticated human owns this village:
+    /// no synthetic player record, title, balance, or joining a real player
+    /// to the new settlement. Reuses EXACTLY the manual collision, entity,
+    /// construction and resident invariants via found_internal.
+    pub fn found_autonomous(
+        &mut self,
+        name: &str,
+        dimension: &str,
+        center: [i32; 3],
+    ) -> Result<u64, String> {
+        if dimension != "minecraft:overworld" {
+            return Err("autonomous frontier settlements require the overworld".into());
+        }
+        if self.settlements.values()
+            .filter(|s| s.founder == NPC_FOUNDER).count() >= MAX_NPC_SETTLEMENTS {
+            return Err("autonomous settlement cap reached".into());
+        }
+        self.found_internal(name, dimension, center, NPC_FOUNDER, false)
+    }
+
+    fn found_internal(
+        &mut self,
+        name: &str,
+        dimension: &str,
+        center: [i32; 3],
+        founder: &str,
+        player_founded: bool,
+    ) -> Result<u64, String> {
         if self.settlements.len() >= MAX_SETTLEMENTS {
             return Err("settlement cap reached".into());
         }
@@ -1901,12 +1937,18 @@ impl World {
             farm: None,
         };
         self.settlements.insert(id, settlement);
-        let p = self.players.entry(founder.to_owned()).or_default();
-        p.settlement = Some(id);
-        p.rank = Rank::Lord;
-        p.coins = p.coins.saturating_add(25);
-        p.reputation.insert(id, 50);
-        self.event(format!("{name} founded"));
+        if player_founded {
+            // The old /civ found contract is unchanged: a REAL authenticated
+            // human OP receives the founding title and initial civic coins.
+            let p = self.players.entry(founder.to_owned()).or_default();
+            p.settlement = Some(id);
+            p.rank = Rank::Lord;
+            p.coins = p.coins.saturating_add(25);
+            p.reputation.insert(id, 50);
+            self.event(format!("{name} founded"));
+        } else {
+            self.event(format!("{name} founded by an independent NPC council"));
+        }
         Ok(id)
     }
 
