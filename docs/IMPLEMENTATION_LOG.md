@@ -675,3 +675,33 @@
 - Verified upstream pinned `horizon-client/src/lib.rs` exposes a
   library target compatible with `cargo test --lib`.
 - TEST_PLAN 297–300; no real Rust, native client or gameplay E2E run.
+
+
+## 2026-11-08 — Windows GUI launcher wait and real saved-state diagnostics
+
+- Compared the exact pinned Horizon launcher CLI and README. Its
+  `import-build`, `prepare` and `play` commands are supported, but
+  the launcher is a Windows GUI-subsystem executable. A bare PowerShell
+  `& horizon-launcher` call may return before the process ends, leaving
+  `$LASTEXITCODE` unset/stale. This could start preparation/play before
+  import completed or miss a failure.
+- Changed `scripts/start-windows-playtest.ps1` to pipe launcher output
+  to `Out-Host`, forcing a wait while preserving argument boundaries,
+  resetting the stale exit code first and requiring an actual zero exit
+  status before the next stage. Added Windows launcher source regression.
+- Extended `tools/playtest_evidence.py` to fail when orphaned
+  `world.json.tmp` exists, matching the real native save guard.
+- Inspected the core's custom `entity_uuid_hex` Serde adapter: saved
+  actor UUIDs are canonical 32-character hex strings. The existing
+  read-only UUID parser is correct and was not changed.
+- Added one-shot `actor_recovery_issued` journal validation and
+  `pending_actor_recoveries` counts to saved-state diagnostics.
+  Pending legitimate markers yield warnings; duplicate, unknown or
+  already UUID-bound markers fail; dead unbound tombstones remain valid.
+- Expanded Python evidence tests for interrupted temp writes and
+  pending/invalid/dead NPC recovery markers. Updated PLAYTEST's current
+  branch and acceptance cases 301–306.
+- These are **source changes only**. There is no working Rust toolchain,
+  direct GitHub DNS or Windows PowerShell in the current runner; real
+  Rust/Python full suite, Windows launcher and gameplay E2E not executed.
+  PR Draft, main untouched, Actions not enabled.
