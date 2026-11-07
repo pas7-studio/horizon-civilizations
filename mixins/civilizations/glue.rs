@@ -2201,21 +2201,41 @@ fn autonomous_village_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Resu
         return Ok(());
     }
 
-    // Fetch REAL materials before allocating any physical structure. A
-    // lumberjack needs a leafy oak trunk and a miner needs exposed natural
-    // stone; both require verified empty standing space and UUID identity.
+    // Resource demand MUST include real native barrel contents, saved
+    // incoming deliveries and physically extracted, project-specific
+    // reserves. In v0.1.13 looking at only the incoming queue caused
+    // villagers to gather indefinitely even with filled real barrels.
+    // An unloaded/missing barrel cannot be interpreted as zero stock:
+    // pause surveying until both native block entities can be observed.
     let (wood_needed, stone_needed) = if !village.hall_complete {
         village.hall_materials_missing()
-    } else if village.visual_job.is_some()
-        && !village.hut_supplies_reserved
-        || village.pending_visual_buildings > 0 && village.physical_housing().2 > 0 {
-        (
-            crate::game::civilizations_core::HUT_WOOD_LOGS
-                .saturating_sub(village.warehouse_quantity(Good::Wood)),
-            crate::game::civilizations_core::HUT_COBBLESTONE
-                .saturating_sub(village.warehouse_quantity(Good::Stone)),
-        )
-    } else { (0, 0) };
+    } else {
+        let Some(native_stock) = physical_barrel_stock(game, &dimension, village.center)
+        else { return Ok(()); };
+        let on_shelf = |good: Good| native_stock.iter()
+            .find(|(item, _)| *item == good)
+            .map(|(_, amount)| *amount).unwrap_or(0);
+        let bakery_job = village.bakery.as_ref().filter(|b|
+            b.building.is_some() && !b.supplies_reserved);
+        let hut_job = village.visual_job.is_some() && !village.hut_supplies_reserved
+            || village.pending_visual_buildings > 0 && village.physical_housing().2 > 0;
+        let (wood_goal, stone_goal, escrow_wood, escrow_stone) =
+            if let Some(b) = bakery_job {
+                (crate::game::civilizations_core::BAKERY_WOOD_LOGS,
+                 crate::game::civilizations_core::BAKERY_COBBLESTONE,
+                 b.construction_escrow.get(&Good::Wood).copied().unwrap_or(0),
+                 b.construction_escrow.get(&Good::Stone).copied().unwrap_or(0))
+            } else if hut_job {
+                (crate::game::civilizations_core::HUT_WOOD_LOGS,
+                 crate::game::civilizations_core::HUT_COBBLESTONE,
+                 village.build_escrow.get(&Good::Wood).copied().unwrap_or(0),
+                 village.build_escrow.get(&Good::Stone).copied().unwrap_or(0))
+            } else { (0, 0, 0, 0) };
+        let available = |good: Good, escrow: u32| on_shelf(good)
+            .saturating_add(village.warehouse_quantity(good)).saturating_add(escrow);
+        (wood_goal.saturating_sub(available(Good::Wood, escrow_wood)),
+         stone_goal.saturating_sub(available(Good::Stone, escrow_stone)))
+    };
 
     if village.gather_job.is_none() {
         for (good, need, profession) in [
