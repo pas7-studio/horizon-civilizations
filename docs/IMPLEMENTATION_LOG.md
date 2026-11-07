@@ -184,3 +184,11 @@
   blocks, so the planner does not get a terrain-clearing privilege.
 - Added Rust domain and Python structural contracts; local Rust/native
   compilation and actual playable E2E remain pending, GitHub Actions OFF.
+
+- Added real completed-hut purchase: 35 civic coins to settlement
+  treasury, UUID-owned private land+building, native full-block
+  verification, and public NPC housing eviction/recalculation.
+- Fixed abstract public housing target to exclude sold/commissioned
+  private houses, permitting material-paid replacement over time.
+- Added additional Rust ownership/economy regression and Python source
+  assertions, plus manual gameplay cases 99–102.
