@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 
 GATE = Path(__file__).resolve().parents[1] / "tools" / "first_play_gate.py"
-BRANCH = "chore/first-play-native-validation-v0115"
+BRANCH = "fix/first-play-binary-evidence-v0115"
 
 
 class LocalReleaseGateHarnessTests(unittest.TestCase):
@@ -31,8 +31,27 @@ class LocalReleaseGateHarnessTests(unittest.TestCase):
         (self.repo / "mixins" / "civilizations").mkdir(parents=True)
         (self.repo / "mixins" / "civilizations" / "core.rs").write_text("// fake\n")
         (self.repo / ".gitignore").write_text("/target/\n")
-        for file in ("package.py", "verify_static.py", "native_build.py"):
+        for file in ("package.py", "verify_static.py"):
             (self.repo / "tools" / file).write_text("print('mock only')\n")
+        (self.repo / "compatibility.json").write_text(json.dumps({
+            "horizon_revision": "a" * 40,
+        }))
+        (self.repo / "tools" / "native_build.py").write_text(
+            "import json, os, sys\n"
+            "from pathlib import Path\n"
+            "repo = Path(__file__).resolve().parents[1]\n"
+            "client = repo / 'target' / 'native-check' / 'modded' / 'target' / 'fast' / "
+            "('horizon-client.exe' if os.name == 'nt' else 'horizon-client')\n"
+            "build = '--build-client' in sys.argv\n"
+            "if build and not os.environ.get('MOCK_MISSING_CLIENT'):\n"
+            "    client.parent.mkdir(parents=True, exist_ok=True)\n"
+            "    client.write_bytes(b'X' * 2048)\n"
+            "revision = 'wrong' if os.environ.get('MOCK_WRONG_REVISION') else '" +
+                "a" * 40 + "'\n"
+            "print(json.dumps({'cargo_check': 'PASS', 'horizon_revision': revision, "
+            "'modded_horizon': str(repo / 'target' / 'native-check' / 'modded'), "
+            "'native_client_binary': str(client) if build else 'NOT BUILT'}))\n"
+        )
         self.bin = self.root / "bin"
         self.bin.mkdir()
         self._exe("rustc", '#!/bin/sh\necho "rustc 1.95.0 (mock)"\n')
@@ -99,6 +118,36 @@ class LocalReleaseGateHarnessTests(unittest.TestCase):
         data = self.latest_report()
         self.assertEqual(data["gate"], "READY_FOR_GAMEPLAY_E2E")
         self.assertEqual(len(data["steps"]), 8)
+        self.assertEqual(data["gameplay_e2e"], "NOT_TESTED")
+        self.assertTrue(data["native_build_verified"])
+        self.assertGreater(data["native_client_bytes"], 1024)
+        self.assertEqual(len(data["native_client_sha256"]), 64)
+        self.assertTrue(Path(data["native_client_path"]).is_file())
+
+    def test_mock_native_exit_zero_without_binary_is_blocked(self):
+        result = self.run_gate("--build-client", extra_env={"MOCK_MISSING_CLIENT": "yes"})
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        data = self.latest_report()
+        self.assertEqual(data["gate"], "BLOCKED")
+        self.assertFalse(data["native_build_verified"])
+        self.assertIn("missing or too small", data["blocking_reason"])
+        self.assertEqual(data["steps"][-1]["status"], "FAIL")
+        self.assertIsNone(data["native_client_sha256"])
+
+    def test_native_revision_mismatch_cannot_mark_client_ready(self):
+        result = self.run_gate("--build-client", extra_env={"MOCK_WRONG_REVISION": "yes"})
+        self.assertEqual(result.returncode, 1)
+        data = self.latest_report()
+        self.assertEqual(data["gate"], "BLOCKED")
+        self.assertIn("wrong pinned Horizon revision", data["blocking_reason"])
+
+    def test_native_check_does_not_require_client_binary(self):
+        result = self.run_gate("--native-check")
+        self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
+        data = self.latest_report()
+        self.assertEqual(data["gate"], "SOURCE_AND_NATIVE_CHECK_PASS")
+        self.assertTrue(data["native_build_verified"])
+        self.assertIsNone(data["native_client_path"])
         self.assertEqual(data["gameplay_e2e"], "NOT_TESTED")
 
     def test_first_test_failure_captures_logs_and_blocks(self):
