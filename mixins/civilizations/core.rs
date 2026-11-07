@@ -425,6 +425,12 @@ pub fn inspect_oak_stem(
     if !(3..=4).contains(&stem.height) || stem.cursor >= stem.height {
         return false;
     }
+    // On the first block this is still an actual rooted tree, not a stored
+    // journal claiming that an externally placed timber pole is natural.
+    if stem.cursor == 0
+        && !is_rooted_oak_harvest_origin(stem.root, |pos| read(pos)) {
+        return false;
+    }
     for offset in 0..stem.height {
         let Some(y) = stem.root[1].checked_add(i32::from(offset)) else {
             return false;
