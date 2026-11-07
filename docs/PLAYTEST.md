@@ -95,3 +95,16 @@ nighttime regrouping; guards remain on watch. Farm/build world changes
 must stop outside work hours. This does **not** mean actual sleep,
 bed ownership or collision-safe navigation are implemented. Follow
 manual cases 54–59 of [TEST_PLAN](TEST_PLAN.md).
+
+## Physical homes trial (v0.1.8, local-only)
+
+After completing the first starter hut in a disposable world, call
+`/civ homes Ashford`. One real 5x5 hut provides at most three standing
+destinations; any abstract house provides none. At night
+(`/time set 13000`) the assigned, UUID-bound non-guards should attempt
+to navigate into the hut **only when** its cobblestone floor, empty
+standing cells and two-high doorway are loaded and intact. Move or
+replace a block in a disposable copy to test commons fallback.
+Run [TEST_PLAN](TEST_PLAN.md) steps 60–66, preserving screenshots and
+logs for actual pathfinding evidence. No sleeps/beds or full house
+ownership are claimed; no Actions workflows are used.
