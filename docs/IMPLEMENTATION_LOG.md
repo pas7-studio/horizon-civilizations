@@ -281,3 +281,25 @@
 - This is still **source-only**; native compiler, full test suite,
   in-world pathfinding, container/hopper/ownership hooks and persistence
   crash E2E have not been verified locally. No GitHub Actions enabled.
+
+## 2026-11-07 — unreleased hardening stacked on v0.1.14 (Draft)
+
+- Fixed misplaced `match t.direction` in `World::validate()`: bakery
+  journal validation now has access to the actual `t` record and both
+  branches are checked within its `if let` scope. This is a source-level
+  compile blocker missed by the earlier static checks; not yet built.
+- Added pure physical construction shortfall calculation that sums **both**
+  currently outstanding bakery and hut bills, subtracts their independent
+  saved material escrows, and then applies live native-barrel stock plus
+  confirmed incoming queue once. Avoids starvation of an unfunded hut when
+  a bakery is pending, and avoids considering one escrow as free stock.
+- Native journals (barrel transfers or market purchases) and missing/unloaded
+  barrel block entities prevent fresh construction material survey and
+  gathering decisions until the journal is reconciled. Blocked bakery jobs
+  cannot continue extracting more raw materials.
+- The `/civ warehouse` read-only summary reports an honest unknown demand
+  while native journals are unsettled. Added six core Rust regression cases,
+  five new source-contract assertions; adjusted legacy bakery contracts.
+- Changes were written to GitHub; Rust/Python executable suites, Horizon
+  native compilation and actual Minecraft gameplay were **not run**. No CI
+  activation, no merge, no claim of playable binary.

@@ -1,3 +1,35 @@
+# Current unreleased source stabilization — physical logistics hardening
+
+Branch `feat/physical-logistics-hardening-v0115`, stacked on Draft PR #22 (bakery).
+No new package release is claimed: manifest remains **0.1.14** until a native
+compile and in-game checks pass. GitHub Actions stay **disabled**.
+
+- [x] Corrected a Rust validation scope error: bakery barrel transfer checks
+  now run inside `if let Some(t) = &village.barrel_transfer`. The source
+  error had slipped past string-based static assertions.
+- [x] Resource planning uses `physical_construction_shortfall`: independently
+  subtract bakery and hut escrow from each project's full bill, then count
+  actual native hall barrel stock and the already-confirmed steward delivery
+  queue once. A simultaneous bakery and hut need **44 logs / 58 cobble**
+  before subtracting stock/escrows. Never fund construction from abstract stock.
+- [x] Any unresolved native barrel transfer or market purchase pauses new
+  physical gathering demand; unloaded barrels also stop planning. Blocked
+  bakery construction no longer orders more materials from the barrels.
+- [x] `/civ warehouse NAME` now displays combined pending construction
+  deficit or **unknown** while the journal is unsettled/containers unloaded,
+  instead of implying a single hut deficit is authoritative.
+- [x] Added six Rust domain regression tests and five Python source
+  contracts; all tests are **authored, not executed** here.
+- [ ] **Release blockers:** local `cargo fmt --all --check`, `cargo test`,
+  Python unittest, Clippy, pinned Horizon native build, Windows executable,
+  and real in-game NPC/stock/crash tests. No new GitHub Actions enabled.
+- [ ] Manual quarantine recovery and physical lumber yard/quarry/couriers
+  remain unimplemented; don't present this as full gameplay acceptance.
+
+See TEST_PLAN cases 159–166 and IMPLEMENTATION_LOG for regression details.
+
+---
+
 # Current source branch — v0.1.14 physical bakery and protected public economy
 
 Branch `feat/physical-bakery-economy-v0114`, stacked on #21.
