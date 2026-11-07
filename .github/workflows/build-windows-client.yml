@@ -1,0 +1,46 @@
+name: Windows native Horizon client (no Minecraft assets)
+on:
+  workflow_dispatch:
+  push:
+    branches:
+      - main
+      - ci/windows-client-smoke
+    paths:
+      - '.github/workflows/build-windows-client.yml'
+      - 'mixins/**'
+      - 'compatibility.json'
+      - 'tools/native_build.py'
+      - 'Cargo.toml'
+permissions:
+  contents: read
+jobs:
+  build-windows-client:
+    runs-on: windows-latest
+    timeout-minutes: 120
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust
+        shell: pwsh
+        run: rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy
+      - name: Check development tools
+        shell: pwsh
+        run: |
+          python --version
+          git --version
+          cargo --version
+      - name: Build real native Horizon Windows executable
+        shell: pwsh
+        run: python tools/native_build.py --test --build-client
+      - name: Verify Windows executable exists
+        shell: pwsh
+        run: |
+          $target = 'target/native-check/modded/target/fast/horizon-client.exe'
+          if (-not (Test-Path -Path $target -PathType Leaf)) {
+            throw "Expected native client missing: $target"
+          }
+      - name: Upload Windows binary without copyrighted Minecraft assets
+        uses: actions/upload-artifact@v4
+        with:
+          name: civilizations-windows-client-no-assets
+          path: target/native-check/modded/target/fast/horizon-client.exe
+          if-no-files-found: error
