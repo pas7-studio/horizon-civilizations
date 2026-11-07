@@ -76,6 +76,29 @@ class AutonomousFrontierContracts(unittest.TestCase):
         self.assertLess(tick.index("autonomous_frontier_found(game, state)"),
                         tick.index("autonomous_village_step(game, state)"))
 
+    def test_nearby_is_a_public_command_and_explains_location(self):
+        self.assertIn('"civ nearby"', GLUE)
+        self.assertIn('if action == "nearby" {', GLUE)
+        self.assertIn("/civ list | nearby | info", GLUE)
+        route = GLUE.split('if action == "nearby" {', 1)[1].split(
+            'if action == "hall"', 1
+        )[0]
+        self.assertIn("player.dimension", route)
+        self.assertIn("v.center[0]", route)
+        self.assertIn("v.center[2]", route)
+        self.assertIn("dx.hypot(dz)", route)
+
+    def test_nearby_does_not_modify_authoritative_world_or_inventory(self):
+        route = GLUE.split('if action == "nearby" {', 1)[1].split(
+            'if action == "hall"', 1
+        )[0]
+        self.assertNotIn("state.world.as_mut()", route)
+        self.assertNotIn("native_run_command(", route)
+        self.assertNotIn("native_spawn_mob(", route)
+        self.assertNotIn("save(state)", route)
+        self.assertIn("sort_by(|a, b| a.0.total_cmp", route)
+        self.assertIn(".take(4)", route)
+
     def test_real_rust_regressions_cover_join_limit_and_roundtrip(self):
         tests = CORE.split("mod autonomous_frontier_tests", 1)[1]
         self.assertEqual(tests.count("#[test]"), 5)
