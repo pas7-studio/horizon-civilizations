@@ -1,3 +1,35 @@
+# Latest unreleased source — witnessed physical resource pickup (PR pending)
+
+Branch `feat/source-pickup-witness-v0115`, based on Draft PR #29.
+This is **source code, NOT a native-compiled or gameplay-verified release**.
+Version remains 0.1.14, `main` unchanged, GitHub Actions OFF.
+
+- [x] An issued wood/stone job now has a persisted `pickup_witnessed`
+  flag (serde default false for existing saves). The same UUID-linked,
+  durably assigned resident must be observed at the original loaded work
+  stand, in 3D reach of a confirmed native air source, after issue.
+- [x] The worker is routed back to the town hall **only after** this
+  witnessed source state has been persisted. The subsequent separate
+  3D return to the village releases exactly one receipt to the physical
+  warehouse queue. `confirm_gather` rejects premature/no-witness calls.
+- [x] Each next short oak segment starts **unissued, unwitnessed**, with
+  the same resident ID; crashes/reloads preserve the two-part courier
+  path. Foreign workers and legacy unassigned Issued receipts cannot
+  bypass the checks; blocked jobs no longer route workers to source.
+- [x] Added seven Rust domain tests and ten Python static contracts,
+  updated older source tests and Rust tests to enforce the new transition.
+- [ ] These tests have NOT run: the available container has no cargo/rustc
+  and no direct GitHub checkout. A passing structural check is not a
+  compiled executable or proof that NPC navigation reaches either site.
+- [ ] Real native `ItemStack` custody, physical item pickup/rendering,
+  pathfinding/line-of-sight guarantees, lumberyard/quarry buildings and
+  replanting remain unimplemented. An observed air block is not, by
+  itself, cryptographic evidence the NPC created the block change.
+
+Acceptance: TEST_PLAN cases **234-244**; see PLAYTEST for local commands.
+
+---
+
 # Unreleased: same-resident wood/stone courier receipts (source-only)
 
 Latest stacked branch: `feat/assigned-resource-courier-v0115`, based on

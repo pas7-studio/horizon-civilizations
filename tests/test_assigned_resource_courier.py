@@ -18,7 +18,7 @@ class AssignedGatherWorkerContracts(unittest.TestCase):
     def test_worker_id_defaults_for_legacy_saves(self):
         struct = method(CORE, "pub struct GatherJob {", "\n}")
         self.assertIn("#[serde(default)]\n    pub worker_id: Option<u64>", struct)
-        self.assertIn("worker_id: None, issued: false, blocked: false", CORE)
+        self.assertIn("worker_id: None, issued: false,\n            pickup_witnessed: false, blocked: false", CORE)
 
     def test_binding_requires_living_qualified_citizen_and_single_owner(self):
         assign = method(CORE, "pub fn assign_gather_worker(")
@@ -40,7 +40,7 @@ class AssignedGatherWorkerContracts(unittest.TestCase):
     def test_same_worker_carries_ownership_into_every_tree_segment(self):
         confirm = method(CORE, "pub fn confirm_gather(")
         self.assertIn("let worker_id = job.worker_id", confirm)
-        self.assertIn("worker_id: Some(worker_id), issued: false, blocked: false", confirm)
+        self.assertIn("worker_id: Some(worker_id), issued: false,\n                    pickup_witnessed: false, blocked: false", confirm)
         self.assertIn("v.warehouse_credit(good, 1)?;", confirm)
 
     def test_saved_identity_cannot_reference_stranger_or_wrong_job(self):

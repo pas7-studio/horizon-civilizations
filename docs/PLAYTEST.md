@@ -490,3 +490,25 @@ standing near it. OP `/civ gathercheck NAME` shows the assigned resident.
 Legacy unknown-issued journals must remain quarantined, not granted.
 TEST_PLAN 223-233 documents exact crash/identity tests. This does NOT
 implement a visible item model in the NPC's hands.
+
+## Latest first-play checkpoint: source pickup before return to hall
+
+Newest source branch (still **not compiled or gameplay-verified**):
+`feat/source-pickup-witness-v0115`.
+
+```powershell
+git fetch origin
+git switch feat/source-pickup-witness-v0115
+.\scripts\validate-local.ps1 -Format
+.\scripts\validate-local.ps1 -BuildClient
+```
+
+Keep GitHub Actions OFF. Use only a newly compiled native Horizon game
+client with legitimately owned Minecraft Java assets and a disposable
+world. An issued log/stone gather must wait for its EXACT saved worker
+to witness the now-air source from the real work stand. Only after
+that durable witness does the worker navigate to the town hall, where
+a separate 3D return can release one source-backed resource receipt.
+`/civ gathercheck Ashford` and `/civ diagnose Ashford` now report
+whether pickup was witnessed. See TEST_PLAN 234-244 and retain full
+world/actor/log evidence. No claimed visible carried ItemStack.

@@ -444,3 +444,27 @@
   foreign resident ID, dead workers and crash/restart continuation.
 - Static inspection only. Rust/Python suites/native Horizon compilation
   and actual Minecraft gameplay have NOT been executed.
+
+## 2026-11-08 — source witness gates NPC resource return
+
+- Problem: an assigned, UUID-linked worker could be sent to the hall
+  immediately after `Issued`, without observing its source already
+  changed to air. A save reload or unrelated native removal could
+  otherwise leave source-side work indistinguishable from a carried
+  resource receipt.
+- Added backward-compatible `GatherJob.pickup_witnessed` (false by
+  default). After an issued native block edit, `gather_one_step`
+  demands an actual loaded, linked **same resident** still at the
+  saved 3D source stand, within native eye-to-block reach, while the
+  source block is air. This saves the witness before route return.
+- `guide_actors` sends the bound resource worker home only when
+  `issued && pickup_witnessed`; otherwise they remain at the
+  original source stand. Blocked resource jobs return to ordinary
+  routines rather than repeatedly navigating into quarantined work.
+- A second, independent same-worker 3D hall arrival is still
+  necessary for one item-accounting receipt. Successor short-oak
+  segments reset to unwitnessed/unissued.
+- Added seven Rust tests and ten Python structural source contracts;
+  older tests updated so they cannot skip witnessing.
+- Source-only inspections performed; no Rust compile, Python unittest,
+  native Horizon build or Minecraft E2E. No change to main/Actions.

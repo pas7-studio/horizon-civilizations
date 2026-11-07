@@ -419,6 +419,12 @@ pub struct GatherJob {
     #[serde(default)]
     pub worker_id: Option<u64>,
     pub issued: bool,
+    /// An actual loaded UUID-linked worker has observed the source block
+    /// as air at the original saved work stand AFTER issue. Only then may
+    /// their native route turn toward the village receiving area.
+    /// Old saves default to false and cannot auto-deliver based on mere air.
+    #[serde(default)]
+    pub pickup_witnessed: bool,
     #[serde(default)]
     pub blocked: bool,
 }
@@ -1553,6 +1559,10 @@ impl World {
                         return Err("physical gather worker ID is invalid".into());
                     }
                 }
+                if gather.pickup_witnessed &&
+                    (!gather.issued || gather.worker_id.is_none()) {
+                    return Err("pickup witness without issued identity".into());
+                }
                 let [x, y, z] = gather.position;
                 let [sx, sy, sz] = gather.stand;
                 let walk_dx = i128::from(sx) - i128::from(x);
@@ -2382,7 +2392,8 @@ impl World {
             return Err("natural resource overlaps a building, town hall or player claim".into());
         }
         self.settlements.get_mut(&village_id).unwrap().gather_job = Some(GatherJob {
-            position, stand, good, worker_id: None, issued: false, blocked: false,
+            position, stand, good, worker_id: None, issued: false,
+            pickup_witnessed: false, blocked: false,
         });
         Ok(())
     }
@@ -2450,6 +2461,25 @@ impl World {
         Ok(())
     }
 
+    /// The bridge has just observed the issued source as air AND the same
+    /// UUID-linked worker at the saved loaded source work stand, inside
+    /// actual 3D reach. Do not mark pickup before the native block edit.
+    /// This journal step is saved before the worker gets a return route.
+    pub fn witness_gather_pickup(
+        &mut self, village_id: u64, resident_id: u64,
+    ) -> Result<(), String> {
+        let v = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?;
+        let job = v.gather_job.as_mut().ok_or("no gather job")?;
+        if !job.issued || job.blocked || job.pickup_witnessed {
+            return Err("gather not awaiting a first source pickup witness".into());
+        }
+        if job.worker_id != Some(resident_id) {
+            return Err("source pickup identity does not match assigned worker".into());
+        }
+        job.pickup_witnessed = true;
+        Ok(())
+    }
+
     /// A planned job whose block was removed externally is NOT a harvest:
     /// either player intervention or a crash before issued-state persistence
     /// must fail closed, never credit phantom inventory.
@@ -2490,7 +2520,9 @@ impl World {
     pub fn confirm_gather(&mut self, village_id: u64) -> Result<(), String> {
         let v = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?;
         let job = v.gather_job.as_ref().ok_or("no gather job")?;
-        if !job.issued || job.blocked { return Err("unproven gather cannot be credited".into()); }
+        if !job.issued || !job.pickup_witnessed || job.blocked {
+            return Err("unproven pickup or gather cannot be credited".into());
+        }
         let good = job.good;
         let pos = job.position;
         let worker_id = job.worker_id.ok_or("unassigned gather cannot be credited")?;
@@ -2504,7 +2536,8 @@ impl World {
                 Some((next, GatherJob {
                     position: [stem.root[0], y, stem.root[2]],
                     stand: stem.stand, good: Good::Wood,
-                    worker_id: Some(worker_id), issued: false, blocked: false,
+                    worker_id: Some(worker_id), issued: false,
+                    pickup_witnessed: false, blocked: false,
                 }))
             } else {
                 None
@@ -4567,6 +4600,8 @@ mod civic_hall_warehouse_tests {
         world.assign_gather_worker(id, worker).unwrap();
         world.mark_gather_issued(id).unwrap();
         assert!(world.mark_gather_issued(id).is_err());
+        let world_assigned = world.settlements[&id].gather_job.as_ref().unwrap().worker_id.unwrap();
+        world.witness_gather_pickup(id, world_assigned).unwrap();
         world.confirm_gather(id).unwrap();
         assert_eq!(world.settlements[&id].warehouse_quantity(Good::Wood), 1);
         assert!(world.confirm_gather(id).is_err());
@@ -5308,7 +5343,8 @@ mod native_gather_quarantine_tests {
         // This record is a durable receipt of an issued natural stone edit.
         world.settlements.get_mut(&id).unwrap().gather_job = Some(GatherJob {
             position: [16,70,0], stand: [17,70,0],
-            good: Good::Stone, worker_id: None, issued: true, blocked: true,
+            good: Good::Stone, worker_id: None, issued: true,
+            pickup_witnessed: false, blocked: true,
         });
         world.validate().unwrap();
         let before = world.settlements[&id].warehouse_quantity(Good::Stone);
@@ -5340,7 +5376,8 @@ mod native_gather_quarantine_tests {
         let id = world.found("Ashford", "minecraft:overworld", [0,70,0], "owner").unwrap();
         world.settlements.get_mut(&id).unwrap().gather_job = Some(GatherJob {
             position: [16,70,0], stand: [17,70,0],
-            good: Good::Wood, worker_id: None, issued: false, blocked: true,
+            good: Good::Wood, worker_id: None, issued: false,
+            pickup_witnessed: false, blocked: true,
         });
         assert!(world.abandon_blocked_issued_gather(id).is_err());
         world.settlements.get_mut(&id).unwrap().gather_job.as_mut().unwrap().issued = true;
@@ -5398,6 +5435,8 @@ mod verified_short_oak_stem_tests {
             world.validate().unwrap();
             world.mark_gather_issued(id).unwrap();
             assert!(world.mark_gather_issued(id).is_err());
+            let world_assigned = world.settlements[&id].gather_job.as_ref().unwrap().worker_id.unwrap();
+            world.witness_gather_pickup(id, world_assigned).unwrap();
             world.confirm_gather(id).unwrap();
             assert_eq!(world.settlements[&id].warehouse_quantity(Good::Wood),
                        u32::from(cursor) + 1);
@@ -5412,6 +5451,8 @@ mod verified_short_oak_stem_tests {
     fn crash_reload_preserves_next_segment_and_does_not_reissue_prior_log() {
         let (mut world, id) = world_with_stem();
         world.mark_gather_issued(id).unwrap();
+        let world_assigned = world.settlements[&id].gather_job.as_ref().unwrap().worker_id.unwrap();
+        world.witness_gather_pickup(id, world_assigned).unwrap();
         world.confirm_gather(id).unwrap();
         let json = serde_json::to_string(&world).unwrap();
         let mut replay: World = serde_json::from_str(&json).unwrap();
@@ -5423,6 +5464,8 @@ mod verified_short_oak_stem_tests {
         assert!(replay.confirm_gather(id).is_err());
         replay.mark_gather_issued(id).unwrap();
         assert!(replay.mark_gather_issued(id).is_err());
+        let replay_assigned = replay.settlements[&id].gather_job.as_ref().unwrap().worker_id.unwrap();
+        replay.witness_gather_pickup(id, replay_assigned).unwrap();
         replay.confirm_gather(id).unwrap();
         assert_eq!(replay.settlements[&id].warehouse_quantity(Good::Wood), 2);
     }
@@ -5455,6 +5498,8 @@ mod verified_short_oak_stem_tests {
         world.settlements.get_mut(&id).unwrap()
             .warehouse_credit(Good::Wood, 10_000_000).unwrap();
         world.mark_gather_issued(id).unwrap();
+        let worker = world.settlements[&id].gather_job.as_ref().unwrap().worker_id.unwrap();
+        world.witness_gather_pickup(id, worker).unwrap();
         let snapshot = serde_json::to_value(&world).unwrap();
         assert!(world.confirm_gather(id).is_err());
         assert_eq!(serde_json::to_value(&world).unwrap(), snapshot);
@@ -5465,6 +5510,8 @@ mod verified_short_oak_stem_tests {
     fn abandoning_uncertain_segment_discards_remaining_tree_with_zero_credit() {
         let (mut world, id) = world_with_stem();
         world.mark_gather_issued(id).unwrap();
+        let world_assigned = world.settlements[&id].gather_job.as_ref().unwrap().worker_id.unwrap();
+        world.witness_gather_pickup(id, world_assigned).unwrap();
         world.confirm_gather(id).unwrap();
         world.mark_gather_issued(id).unwrap();
         world.block_gather(id).unwrap();
@@ -5568,6 +5615,8 @@ mod assigned_resource_courier_tests {
         world.assign_gather_worker(id, miner).unwrap();
         world.mark_gather_issued(id).unwrap();
         assert!(world.assign_gather_worker(id, miner).is_err());
+        let world_assigned = world.settlements[&id].gather_job.as_ref().unwrap().worker_id.unwrap();
+        world.witness_gather_pickup(id, world_assigned).unwrap();
         world.confirm_gather(id).unwrap();
         assert_eq!(world.settlements[&id].warehouse_quantity(Good::Stone), 1);
         assert!(world.confirm_gather(id).is_err());
@@ -5600,6 +5649,8 @@ mod assigned_resource_courier_tests {
         world.plan_short_oak_stem(id, [16, 70, 0], [17, 70, 0], 3).unwrap();
         world.assign_gather_worker(id, worker).unwrap();
         world.mark_gather_issued(id).unwrap();
+        let world_assigned = world.settlements[&id].gather_job.as_ref().unwrap().worker_id.unwrap();
+        world.witness_gather_pickup(id, world_assigned).unwrap();
         world.confirm_gather(id).unwrap();
         let mut restored: World =
             serde_json::from_str(&serde_json::to_string(&world).unwrap()).unwrap();
@@ -5610,6 +5661,8 @@ mod assigned_resource_courier_tests {
         assert!(!next.issued);
         assert!(restored.confirm_gather(id).is_err());
         restored.mark_gather_issued(id).unwrap();
+        let restored_assigned = restored.settlements[&id].gather_job.as_ref().unwrap().worker_id.unwrap();
+        restored.witness_gather_pickup(id, restored_assigned).unwrap();
         restored.confirm_gather(id).unwrap();
         assert_eq!(restored.settlements[&id].warehouse_quantity(Good::Wood), 2);
     }
@@ -5651,6 +5704,126 @@ mod assigned_resource_courier_tests {
         world.settlements.get_mut(&id).unwrap().residents.iter_mut()
             .find(|r| r.id == miner).unwrap().alive = false;
         assert!(world.assign_gather_worker(id, miner).is_err());
+        world.validate().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod native_gather_pickup_witness_tests {
+    use super::*;
+
+    fn assigned_stone() -> (World, u64, u64) {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0,70,0], "owner").unwrap();
+        let miner = world.settlements[&id].residents.iter()
+            .find(|r| r.alive && r.job == Job::Miner).unwrap().id;
+        world.plan_gather(id, Good::Stone, [16,70,0], [17,70,0]).unwrap();
+        world.assign_gather_worker(id, miner).unwrap();
+        (world, id, miner)
+    }
+
+    #[test]
+    fn no_stock_credit_between_issue_and_source_pickup_witness() {
+        let (mut world, id, miner) = assigned_stone();
+        assert!(world.witness_gather_pickup(id, miner).is_err());
+        world.mark_gather_issued(id).unwrap();
+        assert!(world.confirm_gather(id).is_err());
+        assert_eq!(world.settlements[&id].warehouse_quantity(Good::Stone), 0);
+        world.witness_gather_pickup(id, miner).unwrap();
+        world.confirm_gather(id).unwrap();
+        assert_eq!(world.settlements[&id].warehouse_quantity(Good::Stone), 1);
+        assert!(world.confirm_gather(id).is_err());
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn other_worker_or_unknown_id_cannot_claim_source_pickup() {
+        let (mut world, id, miner) = assigned_stone();
+        world.mark_gather_issued(id).unwrap();
+        let stranger = world.settlements[&id].residents.iter()
+            .find(|r| r.id != miner).unwrap().id;
+        assert!(world.witness_gather_pickup(id, stranger).is_err());
+        assert!(world.witness_gather_pickup(id, u64::MAX).is_err());
+        assert!(!world.settlements[&id].gather_job.as_ref().unwrap().pickup_witnessed);
+        world.witness_gather_pickup(id, miner).unwrap();
+        assert!(world.witness_gather_pickup(id, miner).is_err());
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn witnessed_pickup_survives_reload_without_duplication() {
+        let (mut world, id, miner) = assigned_stone();
+        world.mark_gather_issued(id).unwrap();
+        world.witness_gather_pickup(id, miner).unwrap();
+        let mut restored: World =
+            serde_json::from_str(&serde_json::to_string(&world).unwrap()).unwrap();
+        restored.validate().unwrap();
+        assert!(restored.settlements[&id].gather_job.as_ref().unwrap().pickup_witnessed);
+        assert!(restored.witness_gather_pickup(id, miner).is_err());
+        restored.confirm_gather(id).unwrap();
+        assert!(restored.confirm_gather(id).is_err());
+        assert_eq!(restored.settlements[&id].warehouse_quantity(Good::Stone), 1);
+    }
+
+    #[test]
+    fn every_new_oak_segment_resets_pickup_until_this_log_is_observed() {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0,70,0], "owner").unwrap();
+        let worker = world.settlements[&id].residents.iter()
+            .find(|r| r.alive && r.job == Job::Lumberjack).unwrap().id;
+        world.plan_short_oak_stem(id, [16,70,0], [17,70,0], 3).unwrap();
+        world.assign_gather_worker(id, worker).unwrap();
+        world.mark_gather_issued(id).unwrap();
+        world.witness_gather_pickup(id, worker).unwrap();
+        world.confirm_gather(id).unwrap();
+        let next = world.settlements[&id].gather_job.as_ref().unwrap();
+        assert_eq!(next.position, [16,71,0]);
+        assert_eq!(next.worker_id, Some(worker));
+        assert!(!next.issued && !next.pickup_witnessed);
+        assert!(world.confirm_gather(id).is_err());
+        world.mark_gather_issued(id).unwrap();
+        assert!(world.confirm_gather(id).is_err());
+        world.witness_gather_pickup(id, worker).unwrap();
+        world.confirm_gather(id).unwrap();
+        assert_eq!(world.settlements[&id].warehouse_quantity(Good::Wood), 2);
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn legacy_missing_witness_does_not_imply_picked_up_from_air() {
+        let (mut world, id, miner) = assigned_stone();
+        world.mark_gather_issued(id).unwrap();
+        let mut value = serde_json::to_value(&world).unwrap();
+        value.get_mut("settlements").unwrap().as_object_mut().unwrap()
+            .get_mut(&id.to_string()).unwrap()
+            .get_mut("gather_job").unwrap().as_object_mut().unwrap()
+            .remove("pickup_witnessed");
+        let mut previous: World = serde_json::from_value(value).unwrap();
+        previous.validate().unwrap();
+        assert!(!previous.settlements[&id].gather_job.as_ref().unwrap().pickup_witnessed);
+        assert!(previous.confirm_gather(id).is_err());
+        previous.witness_gather_pickup(id, miner).unwrap();
+        previous.confirm_gather(id).unwrap();
+        previous.validate().unwrap();
+    }
+
+    #[test]
+    fn corrupted_unissued_witness_is_rejected_by_domain_validation() {
+        let (mut world, id, _) = assigned_stone();
+        world.settlements.get_mut(&id).unwrap()
+            .gather_job.as_mut().unwrap().pickup_witnessed = true;
+        assert!(world.validate().is_err());
+    }
+
+    #[test]
+    fn blocking_uncertain_issued_pickup_must_not_mint_any_resource() {
+        let (mut world, id, miner) = assigned_stone();
+        world.mark_gather_issued(id).unwrap();
+        world.witness_gather_pickup(id, miner).unwrap();
+        world.block_gather(id).unwrap();
+        assert!(world.confirm_gather(id).is_err());
+        world.abandon_blocked_issued_gather(id).unwrap();
+        assert_eq!(world.settlements[&id].warehouse_quantity(Good::Stone), 0);
         world.validate().unwrap();
     }
 }
