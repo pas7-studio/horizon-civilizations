@@ -702,33 +702,60 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
         let mayor = village.residents.iter()
             .find(|r| r.alive && r.job == Job::Merchant)
             .map(|r| r.name.as_str()).unwrap_or("unassigned");
-        let (hall_wood, hall_stone) = village.hall_materials_missing();
-        let (hut_wood, hut_stone) = (
-            crate::game::civilizations_core::HUT_WOOD_LOGS
-                .saturating_sub(village.warehouse_quantity(Good::Wood)),
-            crate::game::civilizations_core::HUT_COBBLESTONE
-                .saturating_sub(village.warehouse_quantity(Good::Stone)),
-        );
         let goods = [Good::Wheat, Good::Bread, Good::Wood, Good::Stone, Good::Iron];
-        let inventory = goods.iter().map(|good| format!(
+        let incoming = goods.iter().map(|good| format!(
             "{}:{}", good.as_str(), village.warehouse_quantity(*good)
         )).collect::<Vec<_>>().join(" / ");
+        let stored = if village.hall_complete {
+            physical_barrel_stock(game, &village.dimension, village.center)
+        } else { None };
+        let physical = stored.as_ref().map(|items| items.iter()
+            .map(|(good, count)| format!("{}:{}", good.as_str(), count))
+            .collect::<Vec<_>>().join(" / "))
+            .unwrap_or_else(|| "unloaded / not constructed".to_owned());
+        let from_barrel = |good: Good| stored.as_ref()
+            .and_then(|items| items.iter().find(|(item, _)| *item == good))
+            .map(|(_, count)| *count).unwrap_or(0);
+        let escrow = goods.iter().map(|good| format!(
+            "{}:{}", good.as_str(), village.build_escrow.get(good).copied().unwrap_or(0)
+        )).collect::<Vec<_>>().join(" / ");
+        let (hall_wood, hall_stone) = village.hall_materials_missing();
+        let (hut_wood, hut_stone) = (
+            crate::game::civilizations_core::HUT_WOOD_LOGS.saturating_sub(
+                from_barrel(Good::Wood).saturating_add(
+                    village.build_escrow.get(&Good::Wood).copied().unwrap_or(0))
+            ),
+            crate::game::civilizations_core::HUT_COBBLESTONE.saturating_sub(
+                from_barrel(Good::Stone).saturating_add(
+                    village.build_escrow.get(&Good::Stone).copied().unwrap_or(0))
+            ),
+        );
+        let transfer = village.barrel_transfer.as_ref().map(|t| format!(
+            "{:?} {:?} {} x{} at {:?}, before {}, phase {:?}",
+            t.direction, t.good, t.good.item(), t.count, t.position,
+            t.before, t.phase
+        )).unwrap_or_else(|| "none".to_owned());
         if action == "warehouse" {
             reply(game, format!(
-                "{} PHYSICAL warehouse [{}]. Current hall needs {} logs, {} cobblestone; next hut needs {} logs, {} cobblestone. Player /civ sell <good> <amount> delivers actual inventory. Abstract daily-production stock is NOT this warehouse.",
-                village.name, inventory, hall_wood, hall_stone, hut_wood, hut_stone
+                "{} ACTUAL BARRELS [{}]. Awaiting steward delivery [{}]. Physically extracted building escrow [{}]. Next hut still needs {} logs / {} cobble. Durable transfer: {}. Physical items in the two native containers are authoritative after the hall is complete; abstract daily stock is separate.",
+                village.name, physical, incoming, escrow,
+                hut_wood, hut_stone, transfer
             ));
         } else {
             let building = village.hall_job.as_ref().map(|job| format!(
                 "{}/{} blocks verified at {:?}, blocked={}",
                 job.cursor, town_hall_plan(job.origin).len(), job.origin, job.blocked
             )).unwrap_or_else(|| "waiting for funded construction".to_owned());
-            let state = if village.hall_complete {
-                "COMPLETED: mayor desk, resource barrels and 2 bulletin signs"
+            let condition = if village.hall_complete {
+                "COMPLETED: native barrel warehouse, mayor desk, 2 information signs"
             } else { "UNDER CONSTRUCTION / UNFUNDED" };
             reply(game, format!(
-                "{} civic center: {}. Mayor: {} (village merchant). {}. Physical goods: [{}]. Need {} logs and {} stone to fund hall. Signs refresh when a complete hall is loaded.",
-                village.name, state, mayor, building, inventory, hall_wood, hall_stone
+                "{} civic center: {}. Mayor: {}. {}. Native stored items [{}], incoming [{}]. Hall funding deficit: {} logs / {} cobble. {}",
+                village.name, condition, mayor, building, physical, incoming,
+                hall_wood, hall_stone,
+                if village.barrel_transfer.is_some() {
+                    "See /civ warehouse for pending or blocked transfer"
+                } else { "Warehouse transfer journal clear" }
             ));
         }
         return;
