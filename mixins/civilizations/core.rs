@@ -420,6 +420,54 @@ pub fn town_hall_plan(origin: [i32; 3]) -> Vec<HutBlock> {
     plan
 }
 
+/// The actual vanilla barrel blocks inside the public town hall, not
+/// surrogate entries in the settlement's JSON. Never allow player parcels
+/// or unverified nearby chests to substitute for these positions.
+pub fn hall_storage_positions(origin: [i32; 3]) -> [[i32; 3]; 2] {
+    [[origin[0] - 1, origin[1], origin[2] + 1],
+     [origin[0] + 1, origin[1], origin[2] + 1]]
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BarrelDirection {
+    /// Saved, verified transit goods become one physical barrel item.
+    ToBarrel,
+    /// One physical barrel item becomes protected build escrow.
+    ToBuilder,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BarrelPhase {
+    Planned,
+    /// Persisted before native mutation: never automatically issue again.
+    Issued,
+    /// Interference/uncertain native result: OP inspection required.
+    Blocked,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct BarrelTransfer {
+    pub position: [i32; 3],
+    pub good: Good,
+    pub direction: BarrelDirection,
+    pub phase: BarrelPhase,
+    /// Exact count of this plain item in this specific barrel before issue.
+    pub before: u32,
+    /// Exact native container slot (required for ToBuilder).
+    pub slot: Option<usize>,
+}
+
+impl BarrelTransfer {
+    pub fn expected_after(&self) -> Option<u32> {
+        match self.direction {
+            BarrelDirection::ToBarrel => self.before.checked_add(1),
+            BarrelDirection::ToBuilder => self.before.checked_sub(1),
+        }
+    }
+}
+
 /// Bulletin signs are real blocks inside the civic hall; the native adapter
 /// supplies validated, bounded sign text after the town hall is complete.
 pub fn hall_board_positions(origin: [i32; 3]) -> [[i32; 3]; 2] {
@@ -752,10 +800,19 @@ pub struct Settlement {
     pub founder: String,
     pub residents: Vec<Resident>,
     pub stock: BTreeMap<Good, u32>,
-    /// Physical goods acquired from verified inventory transfers and
-    /// completed observable harvests. NOT the abstract daily stock.
+    /// Actual player deliveries and confirmed native harvests pending
+    /// placement in the visible hall barrels. NOT virtual daily stock and
+    /// NOT duplicated by a successful barrel deposit.
     #[serde(default)]
     pub warehouse: BTreeMap<Good, u32>,
+    /// Goods already physically removed from a barrel for the current
+    /// construction request. No native items remain in the container.
+    #[serde(default)]
+    pub build_escrow: BTreeMap<Good, u32>,
+    /// Single journalled native barrel operation. Write-ahead state prevents
+    /// repeated external insertion/extraction on crash or reload.
+    #[serde(default)]
+    pub barrel_transfer: Option<BarrelTransfer>,
     /// Active physical civic hall construction; never inferred from a JSON
     /// house counter, and can resume after restarting with observed blocks.
     #[serde(default)]
@@ -1326,6 +1383,8 @@ impl World {
             ]),
             // Founding abstract stock is NOT physical inventory.
             warehouse: BTreeMap::new(),
+            build_escrow: BTreeMap::new(),
+            barrel_transfer: None,
             hall_job: None,
             hall_complete: false,
             gather_job: None,
