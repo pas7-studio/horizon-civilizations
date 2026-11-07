@@ -18,7 +18,7 @@ compile and in-game checks pass. GitHub Actions stay **disabled**.
 - [x] `/civ warehouse NAME` now displays combined pending construction
   deficit or **unknown** while the journal is unsettled/containers unloaded,
   instead of implying a single hut deficit is authoritative.
-- [x] Added four Rust domain regression tests and five Python source
+- [x] Added six Rust domain regression tests and five Python source
   contracts; all tests are **authored, not executed** here.
 - [ ] **Release blockers:** local `cargo fmt --all --check`, `cargo test`,
   Python unittest, Clippy, pinned Horizon native build, Windows executable,
