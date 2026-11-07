@@ -35,9 +35,17 @@ static ACTIVE: Mutex<Option<ActiveWorld>> = Mutex::new(None);
 
 fn load(path: PathBuf) -> ActiveWorld {
     let file = path.join(SAVE);
-    if path.join("world.json.swap").exists() {
-        let message = "interrupted save detected (world.json.swap). Back up the folder, then restore the correct primary world.json manually".to_owned();
-        return ActiveWorld { path, world: None, problem: Some(message), physical_ticks: 0 };
+    // Either artifact signals an interrupted transaction. In particular,
+    // world.json.tmp may be the ONLY persisted bytes of a new settlement
+    // when the very first world save was interrupted before rename. Never
+    // mistake that for an empty world and overwrite the recovery evidence.
+    for remnant in ["world.json.swap", "world.json.tmp"] {
+        if path.join(remnant).exists() {
+            let message = format!(
+                "interrupted save detected ({remnant}). Back up the world folder and inspect primary/backup/temporary save files before restarting"
+            );
+            return ActiveWorld { path, world: None, problem: Some(message), physical_ticks: 0 };
+        }
     }
     let result = match fs::read_to_string(&file) {
         Ok(text) => serde_json::from_str::<World>(&text)
@@ -98,10 +106,10 @@ fn save(active: &ActiveWorld) -> Result<(), String> {
     // A stale swap marks an interrupted save. Refuse it before touching
     // either the previous backup or the next temporary file.
     let swap = active.path.join("world.json.swap");
-    if swap.exists() {
-        return Err("pending world.json.swap from interrupted save; inspect and recover before continuing".into());
-    }
     let temp = active.path.join("world.json.tmp");
+    if swap.exists() || temp.exists() {
+        return Err("pending world.json.swap or world.json.tmp from interrupted save; inspect and recover before continuing".into());
+    }
     let mut file = fs::File::create(&temp).map_err(|e| e.to_string())?;
     file.write_all(&output).map_err(|e| e.to_string())?;
     file.sync_all().map_err(|e| e.to_string())?;
