@@ -2705,6 +2705,109 @@ fn baker_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), St
     Ok(())
 }
 
+/// Natural frontier founding: players may DISCOVER an independent town
+/// without operator commands, but the game never creates one on an unloaded
+/// chunk or modifies the user's immediate base. A successful write only adds
+/// the social record; the existing one-shot guarded actor startup and
+/// resource-backed town hall perform native work on subsequent ticks.
+const FRONTIER_OFFSETS: [[i32; 2]; 8] = [
+    [88, 0], [-88, 0], [0, 88], [0, -88],
+    [64, 64], [-64, 64], [64, -64], [-64, -64],
+];
+const FRONTIER_NAMES: [&str; 8] = [
+    "Oakford", "Stonevale", "Birchmere", "Redmoor",
+    "Rivermark", "Pinewatch", "Ashfield", "Dawnhold",
+];
+
+fn autonomous_frontier_found(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), String> {
+    let dimension = game.dim.id();
+    if dimension != "minecraft:overworld" { return Ok(()); }
+    let Some(world) = state.world.as_ref() else { return Ok(()); };
+    if world.settlements.len() >= crate::game::civilizations_core::MAX_SETTLEMENTS
+        || world.settlements.values().filter(|s|
+            s.founder == crate::game::civilizations_core::NPC_FOUNDER).count()
+            >= crate::game::civilizations_core::MAX_NPC_SETTLEMENTS {
+        return Ok(());
+    }
+
+    // Observe only real authoritative players in the currently ticked
+    // dimension. Include the integrated single-player host, which the
+    // upstream native_server_players() guest-only API intentionally omits.
+    let mut explorers = Vec::new();
+    if let Some(host) = game.player.as_ref() {
+        explorers.push([host.position.x, host.position.y, host.position.z]);
+    }
+    for player in game.native_server_players() {
+        if player.dimension == dimension {
+            explorers.push(player.position);
+        }
+    }
+    let first_direction = (state.physical_ticks / 2_400) as usize % FRONTIER_OFFSETS.len();
+    for explorer in explorers {
+        if !explorer.iter().all(|c| c.is_finite()) { continue; }
+        // Keep the candidate offsets and native block reads inside
+        // Minecraft's world boundary, away from arithmetic wraparound.
+        if explorer[0].abs() > 29_999_000.0
+            || explorer[2].abs() > 29_999_000.0
+            || explorer[1].abs() > 1_900.0 {
+            continue;
+        }
+        let origin = explorer.map(|v| v.floor() as i32);
+        // Do not generate another settlement just because the player is
+        // standing in their own town or has built a base around one.
+        let near_existing = world.settlements.values()
+            .filter(|s| s.dimension == dimension)
+            .any(|v| {
+                let dx = i64::from(v.center[0]) - i64::from(origin[0]);
+                let dz = i64::from(v.center[2]) - i64::from(origin[2]);
+                dx * dx + dz * dz < 192_i64 * 192
+            });
+        if near_existing { continue; }
+
+        for index in 0..FRONTIER_OFFSETS.len() {
+            let offset = FRONTIER_OFFSETS[(index + first_direction) % FRONTIER_OFFSETS.len()];
+            let (Some(x), Some(z)) = (
+                origin[0].checked_add(offset[0]),
+                origin[2].checked_add(offset[1])
+            ) else { continue; };
+            for dy in [0_i32, -1, 1, -2, 2, -3, 3] {
+                let Some(y) = origin[1].checked_add(dy) else { continue; };
+                let candidate = [x, y, z];
+                // The 5x5 site survey rejects trees, player structures,
+                // non-natural ground, unloaded chunks and terrain cliffs.
+                // Do not dig, level, clear or forcibly load ANY blocks.
+                if check_empty_hut_site(game, dimension, candidate).is_err() {
+                    continue;
+                }
+                let id = world.next_id;
+                let name = format!(
+                    "{}_{}", FRONTIER_NAMES[((id - 1) % FRONTIER_NAMES.len() as u64) as usize], id
+                );
+                // Recheck domain constraints against a trial, avoiding an
+                // unnecessary save on name or inter-village collisions.
+                let mut trial = world.clone();
+                if trial.found_autonomous(&name, dimension, candidate).is_err() {
+                    continue;
+                }
+                let before = state.world.as_ref().unwrap().clone();
+                state.world.as_mut().unwrap()
+                    .found_autonomous(&name, dimension, candidate)?;
+                save_autonomous(state, before)?;
+                log::info!(
+                    "[civilizations] independent NPC village {} founded at {:?}; loaded natural plot",
+                    name, candidate
+                );
+                game.native_broadcast(Text::literal(format!(
+                    "Explorers report a new independent settlement: {} near {}, {}. Visit its town hall or use /civ info {}.",
+                    name, x, z, name
+                )));
+                return Ok(());
+            }
+        }
+    }
+    Ok(())
+}
+
 /// One bounded planning step per 100 loaded level ticks. NPCs choose free
 /// natural plots *inside their settlement radius* and start actual physical
 /// jobs. Paid player parcels are hard exclusions in BOTH domain paths.
@@ -3176,6 +3279,18 @@ pub fn level_tick(game: &mut Game<'_>, dimension: &str) {
     let state = guard.as_mut().expect("active initialized");
     if state.problem.is_some() || state.world.is_none() { return; }
     state.physical_ticks = state.physical_ticks.saturating_add(1);
+    // Discover an independent frontier community at most once every
+    // 2,400 loaded overworld ticks. Never call this from a client tick,
+    // never found in the Nether/End or generate while no players are here.
+    if state.physical_ticks % 2_400 == 0 {
+        if let Err(error) = autonomous_frontier_found(game, state) {
+            log::warn!("[civilizations] frontier founding paused: {error}");
+            if error.starts_with("persistence:") {
+                state.problem = Some(error);
+                return;
+            }
+        }
+    }
     // Villages start their own visible work by default, without needing
     // OP construction/field/spawn commands. The planner is bounded and
     // *never* edits a block without the existing worker-aware tick.
