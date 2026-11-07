@@ -498,3 +498,28 @@
   exact-string source contracts for new saved journal fields.
 - Static inspection only (30/30); no Rust/Python runtime tests or
   native Horizon compilation/gameplay evidence. Draft-only.
+
+## 2026-11-08 — working local first-play release gate with evidence
+
+- Created cross-platform `tools/first_play_gate.py` that executes
+  source check and optional pinned native Horizon check/client build in
+  the exact checked-out branch. Verifies Rust 1.95, expected branch,
+  optional SHA and clean Git worktree. No clones except the existing
+  explicitly invoked native_build.py and no CI/web account actions.
+- Every step writes a separate stdout/stderr log, report.json and
+  report.md in `target/first-play-gate/<UTC>`. A failing stage exits
+  nonzero; the report clearly records the first blocker and
+  distinguishes compiled-client readiness from real gameplay.
+- Actually executed 7 Python unittest harness cases using temporary
+  fake cargo/rustc/rustfmt toolchain and local Git repositories.
+  Tests passed 7/7 on Python 3.13/Linux, covering blocked and mock
+  successful outcomes, clean source evidence, wrong SHA/branch/version,
+  dry-run and diagnostic-only dirty mode. These are tests of the
+  checker, **not** native game tests.
+- Real test run discovered Python bytecode in tests directories could
+  incorrectly dirty worktrees. Fixed the harness by disabling bytecode
+  writes for subprocess checks and extended .gitignore for caches.
+  Also records branch and SHA before Rust prerequisite checks so
+  missing toolchain still yields a traceable report.
+- No Rust cargo test, native Horizon compile, or Minecraft E2E run
+  in this environment. Previous source work stays Draft.

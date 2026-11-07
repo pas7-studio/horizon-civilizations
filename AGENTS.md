@@ -1,3 +1,20 @@
+# First-play evidence gate — current newest stacked source
+
+- Branch `chore/first-play-native-validation-v0115`, stacked after
+  PR #31. Keep all Drafts, Actions OFF, main unchanged.
+- Run `py -3 tools/first_play_gate.py --build-client` on networked
+  Windows with exact source, Rust 1.95, Python 3.11+, Git.
+- Read `target/first-play-gate/<UTC>/report.md` and failing stage
+  log. Until real pinned native compile passes, NOT playable.
+  Even native client compilation is NOT a Minecraft-world E2E pass.
+- The release-gate runner itself was tested 7/7 with MOCK binaries
+  on Linux Python 3.13; do not confuse that with Horizon build.
+- Existing physical gather source logic/journals and all previous
+  safety limitations remain; continue fixing the first real
+  compiler/runtime failure before adding speculative features.
+
+---
+
 # Current stacked source — fair gather queue + native proof 2026-11-08
 
 - Latest branch `fix/gather-crash-proof-fair-queue-v0115`, stacked

@@ -831,3 +831,31 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
      corrupted journal data, and warehouse maximum capacity.
      Document native log, block entity count, actual worker UUID and
      save contents. This is NOT proof of rendered carried ItemStacks.
+
+## Local first-play gate harness and native/game readiness (unreleased)
+
+255. On current branch, `py -3 tools/first_play_gate.py --dry-run
+     --build-client` must show the exact commands with no writes
+     to source, network, or output evidence. Check pinned revisions.
+256. On clean exact branch, `py -3 tools/first_play_gate.py --build-client`
+     must record SHA, Rust 1.95, Git branch, command logs, elapsed
+     stage durations and PASS/failure for all source and native steps.
+257. If a real Cargo/Rustfmt/Clippy/Python test fails, gate must STOP
+     immediately, return nonzero, and retain report.json, report.md,
+     stage log and first blocker. Do not misreport ready or playable.
+258. If Git branch or expected SHA does not match, or source files
+     are dirty, refuse release evidence. `--allow-dirty` may still
+     collect diagnostic logs but must NEVER produce a passing gate.
+259. Missing Rust/Python prerequisites must be reported, not silently
+     skipped. Generated target/, Python caches and compiled files
+     must not turn a clean checkout into dirty or alter source.
+260. With successful native client compilation, `READY_FOR_GAMEPLAY_E2E`
+     is allowed only as *ready to launch*, NOT a gameplay PASS. Then
+     manually run the original physical village/multi-study equivalent
+     scenarios (NPC spawn, hall, wood/stone, native barrel, bakery,
+     reload and crash reconciliation) in a disposable MC world;
+     record game logs and original/native item counts.
+261. Execute `python -m unittest tests/test_first_play_gate_cli.py`
+     (or discover) with controlled fake executable stubs. These verify
+     only release-gate correctness; on Linux 7/7 PASS. Repeat on
+     Windows for platform parity, then native-gate with REAL tools.

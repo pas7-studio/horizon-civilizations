@@ -1,3 +1,29 @@
+## Current next gate: reproducible local build evidence (Draft)
+
+The latest stacked source branch is `chore/first-play-native-validation-v0115`.
+It includes all prior village, physical resource and crash-safe receipt code.
+**No native Horizon compilation or real Minecraft gameplay pass has been
+demonstrated for this stack.** Main remains unchanged and GitHub Actions OFF.
+
+On a networked Windows PC with Rust 1.95, Python 3.11+, Git and compatible
+Horizon/Minecraft Java resources:
+
+```powershell
+git fetch origin
+git switch chore/first-play-native-validation-v0115
+py -3 tools/first_play_gate.py --dry-run --build-client
+py -3 tools/first_play_gate.py --build-client
+```
+
+The non-mutating gate records exact Git SHA, clean/dirty checkout, tool
+versions, every first failing source/native build step and its log into
+`target/first-play-gate/<UTC timestamp>/report.md` and `report.json`.
+It refuses the wrong branch, Rust version, or modified source; the optional
+`--allow-dirty` mode is diagnostic only, never a passing release gate.
+It does not enable GitHub Actions or launch the game. Even
+`READY_FOR_GAMEPLAY_E2E` means **client compiled; Minecraft still untested**.
+See [PLAYTEST](docs/PLAYTEST.md) and [TEST_PLAN](docs/TEST_PLAN.md).
+
 # Horizon Civilizations (prototype source)
 
 **Goal:** a Millenaire-like civilization system for [Horizon](https://github.com/horizon-rust/horizon):

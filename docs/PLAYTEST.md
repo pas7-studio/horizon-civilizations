@@ -538,3 +538,24 @@ physical return to hall. Crash immediately after issued/block edit
 but before native confirmation: ZERO auto-credit, OP quarantine.
 Run TEST_PLAN 245–254 with multiple settlements. Real item cargo
 models/animations and full playability still not claimed.
+## One-command local native build evidence (latest branch)
+
+```powershell
+git fetch origin
+git switch chore/first-play-native-validation-v0115
+py -3 tools/first_play_gate.py --dry-run --build-client
+py -3 tools/first_play_gate.py --build-client
+```
+
+Run from repository root on Windows 11 with Rust 1.95, Python 3.11+,
+Git and network to fetch pinned Horizon if not cached. No GitHub
+Actions are involved; the script never edits source or attempts
+Minecraft login. No built executable is provided by this source
+PR. Artifacts/logs stay in ignored `target/first-play-gate/<UTC>/`.
+Review `report.md` and the first-failing step log. If the result is
+`BLOCKED`, correct that exact failure and rerun after recording the
+new source SHA. Only a successful real `--build-client` can reach
+`READY_FOR_GAMEPLAY_E2E`, which STILL requires launching the new
+binary with owned Minecraft Java assets and manual disposable-world
+E2E. Follow TEST_PLAN 255–261 plus previous physical gameplay cases.
+
