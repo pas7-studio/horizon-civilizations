@@ -94,3 +94,15 @@
 - First-time anchor yields no production, backwards clock cannot double pay, catch-up limited to 30 days on a huge forward jump.
 - Added four Rust tests for bootstrap/legacy saves, restarts, rewinds, bounded jumps and i64 extremes.
 - Pending pinned Horizon native compile and disposable-world time/sleep/relaunch E2E.
+
+## 2026-11-07 — v0.1.7 deterministic NPC routines (CI disabled)
+
+- Added a four-phase Horizon-clock routine in pure Rust with deterministic
+  per-resident waypoint offsets and unit tests for day boundaries, rewinds,
+  guard shifts, waypoint bounds and save compatibility.
+- Existing loaded UUID-bound actors receive phase-specific navigation
+  targets; farm and hut construction are limited to the work window.
+- Introduced read-only `/civ schedule NAME` and manual E2E cases.
+- No new persistence schema fields, native mixin hook points or assets.
+- User disabled GitHub Actions. Rust compile/Clippy/native Horizon and
+  actual gameplay are not verified; keep this version experimental.
