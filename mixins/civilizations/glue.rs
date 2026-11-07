@@ -259,7 +259,11 @@ fn guide_actors(game: &mut Game<'_>, world: &World) {
                      f64::from(village.center[2] + offset[2]) + 0.5]
                 }
             } else if phase.on_shift(resident.job) && resident.job == Job::Builder {
-                if let Some(job) = &village.visual_job {
+                if let Some(job) = &village.hall_job {
+                    [f64::from(job.origin[0]) + 0.5,
+                     f64::from(job.origin[1]),
+                     f64::from(job.origin[2] - 4) + 0.5]
+                } else if let Some(job) = &village.visual_job {
                     [f64::from(job.origin[0]) + 0.5,
                      f64::from(job.origin[1]),
                      f64::from(job.origin[2] - 4) + 0.5]
@@ -268,6 +272,13 @@ fn guide_actors(game: &mut Game<'_>, world: &World) {
                      f64::from(village.center[1] + offset[1]),
                      f64::from(village.center[2] + offset[2]) + 0.5]
                 }
+            } else if phase.on_shift(resident.job)
+                && resident.job == Job::Merchant && village.hall_complete {
+                // The merchant is the first civic mayor / warehouse
+                // steward; they visibly attend the central hall by day.
+                [f64::from(village.center[0]) + 0.5,
+                 f64::from(village.center[1]),
+                 f64::from(village.center[2]) + 0.5]
             } else {
                 [f64::from(village.center[0] + offset[0]) + 0.5,
                  f64::from(village.center[1] + offset[1]),
@@ -1403,8 +1414,21 @@ fn autonomous_village_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Resu
         && actors.iter().any(|(known, _)| *known == r.id));
     let has_builder = village.residents.iter().any(|r| r.alive && r.job == Job::Builder
         && actors.iter().any(|(known, _)| *known == r.id));
+    // Town hall is physically assembled first from the verified warehouse
+    // bill of materials; it may remain pending while players deliver goods.
+    // The planner does NOT consume abstract simulation wood/stone.
+    if !village.hall_complete && village.hall_job.is_none() && has_builder {
+        if check_empty_hut_site(game, &dimension, village.center).is_ok() {
+            let before = state.world.as_ref().unwrap().clone();
+            if state.world.as_mut().unwrap().reserve_town_hall(id)? {
+                save_autonomous(state, before)?;
+                log::info!("[civilizations] {} started material-backed civic hall", village.name);
+                return Ok(());
+            }
+        }
+    }
     let need_field = has_farmer && village.farm.is_none();
-    let need_hut = has_builder && village.visual_job.is_none()
+    let need_hut = has_builder && village.hall_complete && village.visual_job.is_none()
         && village.pending_visual_buildings > 0 && village.physical_housing().2 > 0;
     if !need_field && !need_hut { return Ok(()); }
 
@@ -1475,6 +1499,13 @@ pub fn level_tick(game: &mut Game<'_>, dimension: &str) {
         if let Some(world) = &state.world { guide_actors(game, world); }
     }
     if state.physical_ticks % 4 == 0 {
+        if let Err(error) = build_town_hall_one_step(game, state) {
+            log::warn!("[civilizations] civic hall construction paused: {error}");
+            if error.starts_with("persistence:") {
+                state.problem = Some(error);
+                return;
+            }
+        }
         if let Err(error) = build_one_step(game, state) {
             // Unloaded chunks are normal; a player may leave and return.
             if error.contains("unloaded") || error.contains("not loaded") {
