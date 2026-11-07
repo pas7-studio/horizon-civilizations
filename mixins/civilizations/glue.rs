@@ -4087,6 +4087,7 @@ fn quarry_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
     // Only the bound miner digs this pit, and only while standing at it.
     let world = state.world.as_ref().unwrap();
     let village = &world.settlements[&id];
+    let village_name = village.name.clone();
     let linked = loaded_actors(game, world, id);
     let near = village.residents.iter()
         .filter(|r| r.alive && r.id == worker && r.job == Job::Miner)
@@ -4105,7 +4106,7 @@ fn quarry_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
             .plan_gather(id, Good::Stone, position, stand).is_ok()
         {
             save_autonomous(state, before)?;
-            log::info!("[civilizations] {} quarry reached stone at {:?}", village.name, position);
+            log::info!("[civilizations] {village_name} quarry reached stone at {position:?}");
         }
         return Ok(());
     }
