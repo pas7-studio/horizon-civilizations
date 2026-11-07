@@ -1,3 +1,17 @@
+# PR #34 — Windows first-play correctness and recovery evidence
+
+- [x] Source fix for Windows GUI Horizon Launcher: import/prepare/play
+  are awaited with a pipeline and their actual exit statuses checked.
+- [x] Corrected PLAYTEST guide to the current PR #34 branch.
+- [x] Saved-state evidence now recognizes orphaned `world.json.tmp`
+  and persistent NPC recovery markers (including valid dead tombstones).
+- [x] Authored additional Windows launcher and Python saved-state
+  regression cases, with acceptance tests 301–306.
+- [ ] Python full-suite execution, Rust 1.95, Horizon EXE compilation,
+  Windows launcher and Minecraft E2E all remain unverified.
+
+---
+
 # Native Rust test inventory is now required
 
 - [x] The native build runs filtered `civilizations_core::` and
