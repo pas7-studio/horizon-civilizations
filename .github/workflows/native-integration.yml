@@ -2,6 +2,10 @@ name: Horizon native compile gate
 on:
   push:
     branches: [main]
+    paths:
+      - 'mixins/**'
+      - 'tools/native_build.py'
+      - 'compatibility.json'
   workflow_dispatch:
 permissions:
   contents: read
