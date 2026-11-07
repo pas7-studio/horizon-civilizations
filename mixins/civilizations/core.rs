@@ -4636,6 +4636,7 @@ mod civic_hall_warehouse_tests {
         assert!(world.mark_gather_issued(id).is_err()); // unassigned
         world.assign_gather_worker(id, worker).unwrap();
         world.mark_gather_issued(id).unwrap();
+        world.mark_gather_native_edit_confirmed(id).unwrap();
         assert!(world.mark_gather_issued(id).is_err());
         let world_assigned = world.settlements[&id].gather_job.as_ref().unwrap().worker_id.unwrap();
         world.witness_gather_pickup(id, world_assigned).unwrap();
@@ -5471,6 +5472,7 @@ mod verified_short_oak_stem_tests {
             assert_eq!(world.settlements[&id].oak_stem.as_ref().unwrap().cursor, cursor);
             world.validate().unwrap();
             world.mark_gather_issued(id).unwrap();
+            world.mark_gather_native_edit_confirmed(id).unwrap();
             assert!(world.mark_gather_issued(id).is_err());
             let world_assigned = world.settlements[&id].gather_job.as_ref().unwrap().worker_id.unwrap();
             world.witness_gather_pickup(id, world_assigned).unwrap();
@@ -5488,6 +5490,7 @@ mod verified_short_oak_stem_tests {
     fn crash_reload_preserves_next_segment_and_does_not_reissue_prior_log() {
         let (mut world, id) = world_with_stem();
         world.mark_gather_issued(id).unwrap();
+        world.mark_gather_native_edit_confirmed(id).unwrap();
         let world_assigned = world.settlements[&id].gather_job.as_ref().unwrap().worker_id.unwrap();
         world.witness_gather_pickup(id, world_assigned).unwrap();
         world.confirm_gather(id).unwrap();
@@ -5500,6 +5503,7 @@ mod verified_short_oak_stem_tests {
         assert_eq!(replay.settlements[&id].warehouse_quantity(Good::Wood), 1);
         assert!(replay.confirm_gather(id).is_err());
         replay.mark_gather_issued(id).unwrap();
+        replay.mark_gather_native_edit_confirmed(id).unwrap();
         assert!(replay.mark_gather_issued(id).is_err());
         let replay_assigned = replay.settlements[&id].gather_job.as_ref().unwrap().worker_id.unwrap();
         replay.witness_gather_pickup(id, replay_assigned).unwrap();
@@ -5535,6 +5539,7 @@ mod verified_short_oak_stem_tests {
         world.settlements.get_mut(&id).unwrap()
             .warehouse_credit(Good::Wood, 10_000_000).unwrap();
         world.mark_gather_issued(id).unwrap();
+        world.mark_gather_native_edit_confirmed(id).unwrap();
         let worker = world.settlements[&id].gather_job.as_ref().unwrap().worker_id.unwrap();
         world.witness_gather_pickup(id, worker).unwrap();
         let snapshot = serde_json::to_value(&world).unwrap();
@@ -5547,10 +5552,12 @@ mod verified_short_oak_stem_tests {
     fn abandoning_uncertain_segment_discards_remaining_tree_with_zero_credit() {
         let (mut world, id) = world_with_stem();
         world.mark_gather_issued(id).unwrap();
+        world.mark_gather_native_edit_confirmed(id).unwrap();
         let world_assigned = world.settlements[&id].gather_job.as_ref().unwrap().worker_id.unwrap();
         world.witness_gather_pickup(id, world_assigned).unwrap();
         world.confirm_gather(id).unwrap();
         world.mark_gather_issued(id).unwrap();
+        world.mark_gather_native_edit_confirmed(id).unwrap();
         world.block_gather(id).unwrap();
         world.validate().unwrap();
         world.abandon_blocked_issued_gather(id).unwrap();
@@ -5651,6 +5658,7 @@ mod assigned_resource_courier_tests {
             .find(|r| r.alive && r.job == Job::Miner).unwrap().id;
         world.assign_gather_worker(id, miner).unwrap();
         world.mark_gather_issued(id).unwrap();
+        world.mark_gather_native_edit_confirmed(id).unwrap();
         assert!(world.assign_gather_worker(id, miner).is_err());
         let world_assigned = world.settlements[&id].gather_job.as_ref().unwrap().worker_id.unwrap();
         world.witness_gather_pickup(id, world_assigned).unwrap();
@@ -5686,6 +5694,7 @@ mod assigned_resource_courier_tests {
         world.plan_short_oak_stem(id, [16, 70, 0], [17, 70, 0], 3).unwrap();
         world.assign_gather_worker(id, worker).unwrap();
         world.mark_gather_issued(id).unwrap();
+        world.mark_gather_native_edit_confirmed(id).unwrap();
         let world_assigned = world.settlements[&id].gather_job.as_ref().unwrap().worker_id.unwrap();
         world.witness_gather_pickup(id, world_assigned).unwrap();
         world.confirm_gather(id).unwrap();
@@ -5698,6 +5707,7 @@ mod assigned_resource_courier_tests {
         assert!(!next.issued);
         assert!(restored.confirm_gather(id).is_err());
         restored.mark_gather_issued(id).unwrap();
+        restored.mark_gather_native_edit_confirmed(id).unwrap();
         let restored_assigned = restored.settlements[&id].gather_job.as_ref().unwrap().worker_id.unwrap();
         restored.witness_gather_pickup(id, restored_assigned).unwrap();
         restored.confirm_gather(id).unwrap();
@@ -5766,6 +5776,7 @@ mod native_gather_pickup_witness_tests {
         world.mark_gather_issued(id).unwrap();
         assert!(world.confirm_gather(id).is_err());
         assert_eq!(world.settlements[&id].warehouse_quantity(Good::Stone), 0);
+        world.mark_gather_native_edit_confirmed(id).unwrap();
         world.witness_gather_pickup(id, miner).unwrap();
         world.confirm_gather(id).unwrap();
         assert_eq!(world.settlements[&id].warehouse_quantity(Good::Stone), 1);
@@ -5777,6 +5788,7 @@ mod native_gather_pickup_witness_tests {
     fn other_worker_or_unknown_id_cannot_claim_source_pickup() {
         let (mut world, id, miner) = assigned_stone();
         world.mark_gather_issued(id).unwrap();
+        world.mark_gather_native_edit_confirmed(id).unwrap();
         let stranger = world.settlements[&id].residents.iter()
             .find(|r| r.id != miner).unwrap().id;
         assert!(world.witness_gather_pickup(id, stranger).is_err());
@@ -5791,6 +5803,7 @@ mod native_gather_pickup_witness_tests {
     fn witnessed_pickup_survives_reload_without_duplication() {
         let (mut world, id, miner) = assigned_stone();
         world.mark_gather_issued(id).unwrap();
+        world.mark_gather_native_edit_confirmed(id).unwrap();
         world.witness_gather_pickup(id, miner).unwrap();
         let mut restored: World =
             serde_json::from_str(&serde_json::to_string(&world).unwrap()).unwrap();
@@ -5811,6 +5824,7 @@ mod native_gather_pickup_witness_tests {
         world.plan_short_oak_stem(id, [16,70,0], [17,70,0], 3).unwrap();
         world.assign_gather_worker(id, worker).unwrap();
         world.mark_gather_issued(id).unwrap();
+        world.mark_gather_native_edit_confirmed(id).unwrap();
         world.witness_gather_pickup(id, worker).unwrap();
         world.confirm_gather(id).unwrap();
         let next = world.settlements[&id].gather_job.as_ref().unwrap();
@@ -5819,6 +5833,7 @@ mod native_gather_pickup_witness_tests {
         assert!(!next.issued && !next.pickup_witnessed);
         assert!(world.confirm_gather(id).is_err());
         world.mark_gather_issued(id).unwrap();
+        world.mark_gather_native_edit_confirmed(id).unwrap();
         assert!(world.confirm_gather(id).is_err());
         world.witness_gather_pickup(id, worker).unwrap();
         world.confirm_gather(id).unwrap();
@@ -5830,6 +5845,7 @@ mod native_gather_pickup_witness_tests {
     fn legacy_missing_witness_does_not_imply_picked_up_from_air() {
         let (mut world, id, miner) = assigned_stone();
         world.mark_gather_issued(id).unwrap();
+        world.mark_gather_native_edit_confirmed(id).unwrap();
         let mut value = serde_json::to_value(&world).unwrap();
         value.get_mut("settlements").unwrap().as_object_mut().unwrap()
             .get_mut(&id.to_string()).unwrap()
@@ -5856,6 +5872,7 @@ mod native_gather_pickup_witness_tests {
     fn blocking_uncertain_issued_pickup_must_not_mint_any_resource() {
         let (mut world, id, miner) = assigned_stone();
         world.mark_gather_issued(id).unwrap();
+        world.mark_gather_native_edit_confirmed(id).unwrap();
         world.witness_gather_pickup(id, miner).unwrap();
         world.block_gather(id).unwrap();
         assert!(world.confirm_gather(id).is_err());
