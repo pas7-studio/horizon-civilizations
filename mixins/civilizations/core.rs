@@ -667,6 +667,9 @@ pub struct Settlement {
     pub founder: String,
     pub residents: Vec<Resident>,
     pub stock: BTreeMap<Good, u32>,
+    /// Player civic coin payments are transferred here, not silently burned.
+    #[serde(default)]
+    pub treasury_coins: u64,
     pub houses: u32,
     pub building_progress: u32,
     pub starving_days: u32,
@@ -1161,6 +1164,7 @@ impl World {
                 (Good::Wheat, 20), (Good::Bread, 12), (Good::Wood, 12),
                 (Good::Stone, 8), (Good::Iron, 2),
             ]),
+            treasury_coins: 0,
             houses: 2,
             building_progress: 0,
             starving_days: 0,
@@ -1292,6 +1296,8 @@ impl World {
         if p.settlement != Some(village_id) { return Err("join this village before buying land".into()); }
         if p.coins < LAND_PRICE_COINS { return Err("not enough coins to buy a parcel".into()); }
         if v.player_parcels.len() >= MAX_PLAYER_PARCELS { return Err("plot registry is full".into()); }
+        let treasury_after = v.treasury_coins.checked_add(LAND_PRICE_COINS)
+            .ok_or("village treasury overflow")?;
         if i64::from(origin[0]).abs() > 29_999_990 || i64::from(origin[2]).abs() > 29_999_990
             || !(-2048..=2048).contains(&origin[1]) {
             return Err("land outside safe world bounds".into());
@@ -1310,9 +1316,11 @@ impl World {
             }
         }
         self.players.get_mut(player_id).unwrap().coins -= LAND_PRICE_COINS;
-        self.settlements.get_mut(&village_id).unwrap().player_parcels.push(PlayerParcel {
+        let v = self.settlements.get_mut(&village_id).unwrap();
+        v.player_parcels.push(PlayerParcel {
             origin, owner: player_id.to_owned(), commissioned: false
         });
+        v.treasury_coins = treasury_after;
         let name = self.settlements[&village_id].name.clone();
         self.event(format!("{name}: player-owned 5x5 parcel sold at {},{},{}", origin[0], origin[1], origin[2]));
         Ok(LAND_PRICE_COINS)
@@ -1334,6 +1342,8 @@ impl World {
         }
         let houses = village.houses.checked_add(1).ok_or("house count overflow")?;
         let pending = village.pending_visual_buildings.checked_add(1).ok_or("pending job overflow")?;
+        let treasury_after = village.treasury_coins.checked_add(COMMISSION_PRICE_COINS)
+            .ok_or("village treasury overflow")?;
         self.check_visual_house_site_for(village_id, origin, Some(player_id), false)?;
         // All validations above are read-only; all mutations below are in
         // the same save object. The command adapter rolls back on save error.
@@ -1342,6 +1352,7 @@ impl World {
         assert!(village.take(Good::Wood, 8) && village.take(Good::Stone, 6));
         village.houses = houses;
         village.pending_visual_buildings = pending;
+        village.treasury_coins = treasury_after;
         village.player_parcels[parcel_index].commissioned = true;
         village.visual_job = Some(VisualBuildJob { origin, cursor: 0, blocked: false });
         let name = village.name.clone();
@@ -2858,9 +2869,11 @@ mod village_land_and_autonomy_tests {
         let (world, id) = founded();
         assert!(world.settlements[&id].autonomy_enabled);
         let mut legacy = serde_json::to_value(&world).unwrap();
-        let village = legacy["settlements"][id.to_string()].as_object_mut().unwrap();
+        let village = legacy["settlements"].as_object_mut().unwrap()
+            .get_mut(&id.to_string()).unwrap().as_object_mut().unwrap();
         village.remove("autonomy_enabled");
         village.remove("player_parcels");
+        village.remove("treasury_coins");
         let loaded: World = serde_json::from_value(legacy).unwrap();
         loaded.validate().unwrap();
         assert!(loaded.settlements[&id].autonomy_enabled);
@@ -2890,6 +2903,7 @@ mod village_land_and_autonomy_tests {
         let before = world.players["owner"].coins;
         assert_eq!(world.buy_plot("owner", id, [20, 70, 0]), Ok(LAND_PRICE_COINS));
         assert_eq!(world.players["owner"].coins, before - LAND_PRICE_COINS);
+        assert_eq!(world.settlements[&id].treasury_coins, LAND_PRICE_COINS);
         assert_eq!(world.settlements[&id].player_parcels.len(), 1);
         assert!(world.buy_plot("owner", id, [20, 70, 0]).is_err());
         assert!(world.buy_plot("owner", id, [24, 70, 0]).is_err());
@@ -2907,6 +2921,7 @@ mod village_land_and_autonomy_tests {
         assert_eq!(world.players["owner"].coins, 15);
         assert_eq!(world.commission_house("owner", id, [20, 70, 0]), Ok(COMMISSION_PRICE_COINS));
         assert_eq!(world.players["owner"].coins, 0);
+        assert_eq!(world.settlements[&id].treasury_coins, LAND_PRICE_COINS + COMMISSION_PRICE_COINS);
         assert_eq!(world.settlements[&id].quantity(Good::Wood), 4);
         assert_eq!(world.settlements[&id].quantity(Good::Stone), 2);
         assert!(world.commission_house("owner", id, [20, 70, 0]).is_err());
