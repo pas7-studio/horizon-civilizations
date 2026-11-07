@@ -29,14 +29,15 @@ class NativeSourcePickupWitnessContracts(unittest.TestCase):
 
     def test_pickup_is_issued_once_for_same_assigned_worker(self):
         fn = body(CORE, "pub fn witness_gather_pickup(")
-        self.assertIn("!job.issued || job.blocked || job.pickup_witnessed", fn)
+        self.assertIn("!job.issued || !job.native_edit_confirmed", fn)
+        self.assertIn("|| job.blocked || job.pickup_witnessed", fn)
         self.assertIn("job.worker_id != Some(resident_id)", fn)
         self.assertIn("job.pickup_witnessed = true;", fn)
         self.assertNotIn("warehouse_credit(", fn)
 
     def test_saved_witness_must_have_issued_worker_identity(self):
         validate = body(CORE, "pub fn validate(")
-        self.assertIn("if gather.pickup_witnessed &&", validate)
+        self.assertIn("if gather.pickup_witnessed", validate)
         self.assertIn("!gather.issued || gather.worker_id.is_none()", validate)
 
     def test_oak_followup_starts_with_new_unwitnessed_segment(self):
