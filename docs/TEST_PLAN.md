@@ -965,3 +965,9 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
      positions, not the old hard-coded central Y. Verify ten unique UUIDs,
      save/reload, and no repeated batch. Native tests and in-game evidence
      are required; source assertions do not prove gameplay.
+
+288. On the current PR #34 branch, run
+     `py -3 tools/first_play_gate.py --dry-run --build-client` and then
+     the real non-dry-run command. It must identify the current branch
+     rather than the superseded PR #33 branch. With `--expected-sha`,
+     only the exact chosen head may produce a passing build report.
