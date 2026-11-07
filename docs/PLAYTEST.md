@@ -52,3 +52,15 @@ Use **only a disposable world**. From a standing position on the center of flat 
 ## Windows native client build (experimental)
 
 The additional GitHub Actions workflow **Windows native Horizon client (no Minecraft assets)** attempts to produce `horizon-client.exe` by applying our native source bundle to pinned upstream Horizon on a Windows runner. It is also manually dispatchable after merging to main. The build artifact contains **no Minecraft/Mojang resources** and does not establish that in-game features work. Assets must be prepared with the official Horizon launcher and owned Minecraft Java Edition resources. Never use a valuable world for the first test.
+
+## Launch the Windows artifact with the official Horizon launcher
+
+After the Windows native workflow passes, download its exe artifact and verify that it was produced by the selected commit. The pinned Horizon launcher supports importing a locally built program while using prepared resources for the installed Horizon version.
+
+PowerShell commands (run only after inspecting and trusting your own unsigned binary):
+
+    horizon-launcher import-build 'C:\Games\HorizonTest\horizon-client.exe' --trust-unsigned
+    horizon-launcher prepare
+    horizon-launcher play --world Civilizations-Test --creative
+
+The import-build action installs the unsigned program as a separate locally selected build; the prepare step requires your legitimate Minecraft: Java Edition installation or entitled Mojang download. The launcher will not bundle Minecraft assets with this GitHub artifact. If your launcher does not recognize the imported build due to Horizon version drift, install/prepare the matching pinned version rather than patching the player's active world. Use a new disposable world. These are native launcher commands documented in the pinned upstream docs/launcher-commands.md; they have not yet been executed for this mod.
