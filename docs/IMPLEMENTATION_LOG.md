@@ -375,3 +375,30 @@
   Nine new Rust tests and nine new Python source contracts authored.
 - No Rust/Python suite, formatter, Clippy, native game compile or in-world
   execution was possible here. GitHub Actions remain OFF, main unchanged.
+
+## 2026-11-08 — short-oak stem continuation, one physically returned log per receipt
+
+- Added `OakStem {root, stand, height, cursor}` as an optional durable
+  settlement field. Old saves deserialize it to None. Domain validation
+  prevents orphaned/mismatched segment cursors, missing gather job,
+  invalid height or wrong physical source.
+- Native forester measures only a confirmed naturally rooted leaf-bearing
+  oak of 3–4 reachable logs. Extra-tall trees stay intact until an
+  appropriate scaffold/worker mechanic exists; a tree's root log alone is
+  no longer the complete harvest.
+- After the issued Minecraft conditional edit, native observation of air
+  AND actual UUID-bound lumberjack return to the town hall credit exactly
+  one oak log. Only then does the core advance to the next UNISSUED log.
+  Each next log checks the saved air prefix, live oak suffix, crown and
+  current land-ownership claims before any further native edit.
+- The planner previously rolled back only gather_job on save failure.
+  It now preserves the full previous World so the new oak_stem field
+  cannot be stranded without its gather. Quarantined issued receipts
+  remain manual-only and an abandonment yields zero materials.
+- Updated both /civ diagnose and OP /civ gathercheck with current oak
+  step N/total for actual first-play troubleshooting.
+- Eight new Rust tests and nine Python structural checks authored;
+  corrected stale test scopes after adding the OP gather commands.
+  They were NOT executed with Rust/Python toolchains in this environment.
+- Source-only; actual native compile, server tick behavior, loaded chunk
+  logic, legacy save migration and game E2E remain unverified.
