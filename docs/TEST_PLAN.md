@@ -1010,3 +1010,22 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
 296. Close/reopen after a fully successful save: neither temp nor swap
      file should remain, and the identical settlement/UUID bindings should
      reload. Record Rust and real Minecraft evidence before release.
+
+
+## Native Rust suite inventory and zero-match protection (unreleased PR #34)
+
+297. Run pinned `tools/native_build.py --test` with real Rust and the
+     exact Horizon revision. Both `civilizations_core::` and
+     `civilizations_glue::` must enumerate at least one Rust test and
+     pass their actual filtered executions; evidence must show counts.
+298. Simulate a Cargo `--list` success returning `0 tests, 0 benchmarks`
+     for `civilizations_glue::`. It must block native readiness **before**
+     running that empty suite; an exit code of zero alone is insufficient.
+299. Simulate failure of the Cargo test inventory command and ensure
+     that no filtered tests are launched afterward. Preserve the
+     first-failure log in the first-play report.
+300. Simulate native-build exit zero with a valid-looking client binary
+     but missing `civilizations_glue::` evidence, or evidence with a zero
+     discovered count. Both must produce `BLOCKED`, not
+     `READY_FOR_GAMEPLAY_E2E`. Only a real native successful run can
+     certify the build gate, not these mocks.
