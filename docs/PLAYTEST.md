@@ -202,8 +202,10 @@ center and run `/civ buyplot Ashford`. The parcel costs 10 civic
 coins and is protected **against this mod's automatic builders and
 farmers**. You may now build your own blocks, or while still on an
 empty purchased parcel use `/civ commission Ashford` to order an
-NPC-built hut for another 15 civic coins and 8 wood/6 stone taken from
-the settlement stock. Property ownership and treasury survive save
+NPC-built hut for another 15 civic coins. This order queues without
+charging abstract materials: actual building requires 20 physical
+oak logs and 25 cobblestone from the warehouse, reserved once before
+the first block. Property ownership and treasury survive save
 and reload. A private commissioned hut must not become NPC public
 housing. Do not mistake this for vanilla multiplayer anti-grief.
 
