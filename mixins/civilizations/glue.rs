@@ -1131,7 +1131,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             .map(|receipt| format!("#{} day {} ({} crops)",
                 receipt.sequence, receipt.world_day, receipt.crops)).collect();
         reply(game, format!(
-            "{} observed physical harvest evidence: {} recorded batches, {} kept in bounded log. {}. Physical warehouse credits confirmed crops only; no abstract stock or player items credited.",
+            "{} observed physical harvest evidence: {} recorded batches, {} kept in bounded log. {}. Confirmed crops remain with the farmer until hall delivery; steward then inserts real wheat into the public barrels. No abstract or player inventory credit.",
             village.name, farm.harvest_sequence, farm.harvest_receipts.len(),
             if details.is_empty() { "No harvest receipts".to_owned() } else { details.join(" | ") },
         ));
