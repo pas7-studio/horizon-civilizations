@@ -114,6 +114,11 @@ to compile/trust the native mod before the game can run.
 | `/civ schedule NAME`, `/civ homes NAME` | All | Day/night shift and completed-hut physical allocations |
 | `/civ council NAME`, `/civ forecast NAME` | All | Read-only needs and three-day abstract economic outlook |
 | `/civ survey NAME` | All | Propose up to five loaded, unoccupied building sites; never reserves land |
+| `/civ development NAME` | All | Inspect default-on NPC population, real farm/building activity and blockers |
+| `/civ plots NAME` | All | See your bought land and privately owned structures |
+| `/civ buyplot NAME` | Joined players | Purchase a clear 5x5 village parcel for 10 civic coins |
+| `/civ buyhouse NAME` | Joined players | Purchase an intact finished public hut for 35 civic coins |
+| `/civ commission NAME` | Joined plot owners | Pay 15 civic coins + village materials for an NPC-built private hut |
 | `/civ construction NAME`, `/civ farming NAME`, `/civ harvests NAME` | All | Inspect physical build/farm progress and visual-only harvest receipts |
 | `/civ join NAME` | All | Join a settlement |
 | `/civ title`, `/civ promote` | All | View rank/coins; promote if eligible |
@@ -123,6 +128,7 @@ to compile/trust the native mod before the game can run.
 | `/civ actors NAME` | Operators lvl 2 | Spawn named vanilla villager actors once |
 | `/civ construct NAME` | Operators lvl 2 | Approve a safe natural site at your feet for a physical 5x5 hut; requires a pending simulated house |
 | `/civ approvehouse NAME SLOT Y` | Operators lvl 2 | Confirm one numbered housing proposal near the selected plot; real blocks rechecked |
+| `/civ autonomy NAME on/off` | Operators lvl 2 | Optional pause/resume for new NPC site planning (ON by default) |
 | `/civ farm NAME`, `/civ recoverfarm NAME` | Operators lvl 2 | Approve visual crop patch or preflight recovery |
 | `/civ day [1..30]` | Operators lvl 2 | Advance abstract simulation manually |
 | `/civ war A B`, `/civ peace A B` | Operators lvl 2 | Strategic-only conflict state |
