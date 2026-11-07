@@ -1029,3 +1029,26 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
      discovered count. Both must produce `BLOCKED`, not
      `READY_FOR_GAMEPLAY_E2E`. Only a real native successful run can
      certify the build gate, not these mocks.
+
+
+## Windows launcher sequencing and read-only NPC recovery evidence (unreleased PR #34)
+
+301. On Windows PowerShell with the official GUI Horizon Launcher, verify
+     that `import-build` finishes and provides an exit code before
+     `prepare` runs. No unpiped GUI invocation may be treated as success.
+302. Force `import-build` to exit nonzero; `prepare` and `play` must not
+     run. Force `prepare` to exit nonzero; `play` must not run.
+     Capture the exit status without running a valuable Minecraft world.
+303. In read-only `playtest_evidence.py`, leave `world.json.tmp`
+     alongside an otherwise valid save, and then as the ONLY remaining
+     first-save artifact. Both must yield FAIL without editing either file.
+304. Supply a valid, UUID-unbound `actor_recovery_issued` entry for a live
+     resident. The saved-state audit reports pending recovery as a
+     warning and requires reconciliation before any further spawn.
+     A marker for a UUID-bound or nonexistent resident is a hard FAIL.
+305. A dead, unbound resident with a pending one-shot recovery tombstone
+     must remain loadable and must NOT be treated as a new NPC to respawn.
+     The audit reports the unresolved marker, not false corruption.
+306. Confirm that the current PLAYTEST guide selects the same Draft PR #34
+     source as `first_play_gate.py`. Do not reuse a passing old binary;
+     native build and in-game E2E evidence remain mandatory.
