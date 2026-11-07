@@ -1,3 +1,25 @@
+## Independent NPC-founded settlements (Draft PR #34)
+
+The mod now has a **source implementation** of natural frontier founding, not
+only OP-issued `/civ found`. In the Overworld, once every 2,400 loaded ticks
+the authoritative host surveys a small set of sites roughly 88–91 blocks
+from a real explorer, with a minimum 192-block exclusion near existing towns.
+Both a fully natural, loaded 5×5 civic plot **and ten separately safe loaded
+NPC spawn positions** must be available before any settlement is saved.
+No chunk generation, teleporting, block clearing or forced loading occurs.
+
+At most **eight** independently NPC-founded villages may exist in a world.
+They have ten original residents, real-material construction and autonomy
+on by default, but no human founder, invented player title or free player
+coins. The existing manual OP founding flow is unchanged. Players can locate
+independent communities with **`/civ nearby`** (nearest four in their current
+dimension, coordinates and town hall state), talk to residents and join them.
+
+**Assurance:** 5 new Rust domain tests and 11 Python source contracts
+authored; these remain unexecuted by a native Rust/Horizon build in this
+environment. Do not consider automatic world generation or NPC gameplay
+verified until disposable-world E2E.
+
 ## Windows first-play launcher and recovery audit (Draft PR #34)
 
 A Windows GUI-subsystem executable such as Horizon Launcher can return to
