@@ -2,7 +2,7 @@
 // translates server hooks, commands, inventory changes, and native NPC spawns.
 use crate::game::{
     civilizations_core::{farm_plan, hut_plan, inspect_farm, inspect_hut, is_ground,
-        BuildInspection, DailyPhase, FarmBlock, FarmDecision, FarmStage, Good, HomeSlot, Job,
+        BuildInspection, DailyPhase, FarmBlock, FarmDecision, FarmStage, Good, HomeSlot, Job, VisualBuildJob,
         World, inspect_home, HOUSING_PLOT_OFFSETS, MAX_HOUSING_SURVEY_RESULTS,
         MAX_SIM_DAYS},
     native_mobs::NativeSpawn,
@@ -164,7 +164,7 @@ pub fn register(commands: &mut Vec<NativeCommand>) {
         "civ approvehouse <name:word> <slot:integer> <y:integer>",
         "civ autonomy <name:word> <mode:word>",
         "civ farm <name:word>", "civ recoverfarm <name:word>",
-        "civ buyplot <name:word>", "civ commission <name:word>",
+        "civ buyplot <name:word>", "civ buyhouse <name:word>", "civ commission <name:word>",
         "civ war <from:word> <to:word>",
         "civ peace <from:word> <to:word>",
     ] {
@@ -559,7 +559,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
     let actor = format!("{:032x}", player.uuid);
     let action = args.next().unwrap_or("help");
     if action == "help" {
-        reply(game, "Civilizations: /civ list | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | buyplot <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, day [days], construct <name>, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
+        reply(game, "Civilizations: /civ list | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | buyplot <name> | buyhouse <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, day [days], construct <name>, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
         return;
     }
     if action == "list" {
@@ -882,6 +882,44 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             Ok(format!(
                 "Bought a protected 5x5 plot at {:?} in {} for {} civic coins. Build your own blocks there or use /civ commission {} while standing on this lot. /civ plots {}",
                 origin, village.name, price, village.name, village.name
+            ))
+        })(),
+        "buyhouse" => (|| {
+            let name = args.next().ok_or("usage: /civ buyhouse <village>")?;
+            let village = previous.by_name(name).ok_or("unknown settlement")?;
+            if village.dimension != player.dimension {
+                return Err("buy a house from its settlement dimension".into());
+            }
+            if !player.position.iter().all(|x| x.is_finite()) {
+                return Err("invalid player position".into());
+            }
+            let mut available: Vec<_> = village.visual_sites.iter()
+                .filter(|site| !village.player_parcels.iter().any(|plot| {
+                    crate::game::civilizations_core::near_plot_public(plot.origin, **site)
+                }))
+                .filter_map(|site| {
+                    let dx = f64::from(site[0]) + 0.5 - player.position[0];
+                    let dz = f64::from(site[2]) + 0.5 - player.position[2];
+                    let dy = (f64::from(site[1]) - player.position[1]).abs();
+                    (dx * dx + dz * dz <= 12.0 * 12.0 && dy <= 8.0)
+                        .then_some((dx * dx + dz * dz, *site))
+                }).collect();
+            available.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let (_, origin) = available.first().copied().ok_or(
+                "stand beside an available, completed village hut within 12 blocks"
+            )?;
+            // A JSON registry alone does not prove a real structure exists.
+            // Confirm EVERY hut block in the loaded world, no substitutions.
+            let inspection = inspect_hut(&VisualBuildJob {
+                origin, cursor: hut_plan(origin).len(), blocked: false
+            }, |pos| world_block(game, &village.dimension, pos));
+            if inspection != BuildInspection::Complete {
+                return Err("hut has missing/unloaded/modified blocks; no payment taken".into());
+            }
+            let price = state.world.as_mut().unwrap().buy_finished_house(&actor, village.id, origin)?;
+            Ok(format!(
+                "Purchased the physical hut at {:?} from {} for {} civic coins. It is now YOUR property and no longer public NPC housing. /civ plots {}",
+                origin, village.name, price, village.name
             ))
         })(),
         "commission" => (|| {
