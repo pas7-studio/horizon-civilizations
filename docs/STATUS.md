@@ -1,5 +1,14 @@
 # Latest Draft — partial village NPC spawn recovery (source only)
 
+**First-spawn safety hardening (same PR #34):** removed fixed-coordinate
+OP spawning. Both OP `/civ actors` and automatic village initialization now
+require one shared preflight for ten living, unbound residents, absence of
+loaded matching tagged/legacy villagers, and ten surveyed, unoccupied native
+spawn points on loaded natural terrain. Survey fails before the persisted
+`actors_spawned` flag is set. Added four Python source regression contracts
+(16 total in `test_guarded_actor_recovery.py`), plus 17/17 connector-side
+source assertions PASS. No Rust compiler, native client or Minecraft E2E run.
+
 Branch `feat/guarded-partial-villager-recovery-v0115`, stacked on
 PR #33. Main unchanged, GitHub Actions OFF; no native Horizon compile
 or Minecraft playtest has run for this feature.
