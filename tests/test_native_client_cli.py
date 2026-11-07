@@ -20,6 +20,9 @@ class NativeBuildCli(unittest.TestCase):
         self.assertIn("'--profile', 'fast'", script)
         self.assertIn("'native_client_binary'", script)
         self.assertIn("'civilizations_core::'", script)
+        self.assertIn("'civilizations_glue::'", script)
+        self.assertIn("run_filtered_native_tests(", script)
+        self.assertIn("native_mod_tests", script)
         self.assertNotIn("'civilizations_core::tests'", script)
 
 
