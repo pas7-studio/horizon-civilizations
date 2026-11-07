@@ -19,6 +19,8 @@ class NativeBuildCli(unittest.TestCase):
         self.assertIn("if args.build_client:", script)
         self.assertIn("'--profile', 'fast'", script)
         self.assertIn("'native_client_binary'", script)
+        self.assertIn("'civilizations_core::'", script)
+        self.assertNotIn("'civilizations_core::tests'", script)
 
 
 if __name__ == "__main__":
