@@ -154,6 +154,7 @@ pub fn register(commands: &mut Vec<NativeCommand>) {
         "civ council <name:word>", "civ forecast <name:word>",
         "civ plots <name:word>", "civ development <name:word>",
         "civ hall <name:word>", "civ warehouse <name:word>", "civ bakery <name:word>",
+        "civ diagnose <name:word>",
         "civ construction <name:word>", "civ farming <name:word>",
         "civ harvests <name:word>",
         "civ join <name:word>", "civ title", "civ promote", "civ history",
@@ -980,7 +981,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
     let actor = format!("{:032x}", player.uuid);
     let action = args.next().unwrap_or("help");
     if action == "help" {
-        reply(game, "Civilizations: /civ list | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | hall <name> | warehouse <name> | buyplot <name> | buyhouse <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, barrelcheck <name>, resolvebarrel <name> confirm|cancel <observed_count>, day [days], construct <name>, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
+        reply(game, "Civilizations: /civ list | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | hall <name> | warehouse <name> | diagnose <name> | buyplot <name> | buyhouse <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, barrelcheck <name>, resolvebarrel <name> confirm|cancel <observed_count>, day [days], construct <name>, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
         return;
     }
     if action == "list" {
@@ -1061,6 +1062,98 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
                 } else { "Warehouse transfer journal clear" }
             ));
         }
+        return;
+    }
+    if action == "diagnose" {
+        // Read-only first-play troubleshooting. No world save, no player
+        // inventory access, no native mutations and no inferred offscreen NPC.
+        let name = args.next().unwrap_or("");
+        let Some(v) = world.by_name(name) else {
+            error(game, "unknown settlement: /civ diagnose <name>");
+            return;
+        };
+        if v.dimension != player.dimension {
+            reply(game, format!(
+                "{}: visit dimension {} for native actor, block and barrel checks. No cross-world state is assumed.",
+                v.name, v.dimension
+            ));
+            return;
+        }
+        let linked = loaded_actors(game, world, v.id);
+        let loaded_role = |role: Job| v.residents.iter().any(|resident| {
+            resident.alive && resident.job == role
+                && linked.iter().any(|(id, _)| *id == resident.id)
+        });
+        let phase = DailyPhase::at(game.world.day_time);
+        let hall_status = if v.hall_complete {
+            match physical_barrel_stock(game, &v.dimension, v.center) {
+                Some(stock) if v.barrel_transfer.is_none() && v.market_purchase.is_none() => {
+                    let (wood, stone) =
+                        crate::game::civilizations_core::physical_construction_shortfall(v, &stock);
+                    format!("COMPLETE; native barrel snapshot available; current construction gap {wood} logs / {stone} cobble")
+                }
+                Some(_) => "COMPLETE; native journals unresolved, stock needs reconciliation".to_owned(),
+                None => "COMPLETE in save; real native barrels missing or unloaded".to_owned(),
+            }
+        } else if let Some(job) = &v.hall_job {
+            format!("BUILDING {}/{} blocks, blocked={}",
+                job.cursor, town_hall_plan(job.origin).len(), job.blocked)
+        } else {
+            let (wood, stone) = v.hall_materials_missing();
+            format!("UNBUILT; confirmed incoming hall deficit {wood} logs / {stone} cobble")
+        };
+        let bakery_status = match &v.bakery {
+            Some(b) if b.complete => format!(
+                "COMPLETE; wheat escrow {}, bread in transit {}, batches {}",
+                b.wheat_escrow, b.bread_in_transit, b.batches
+            ),
+            Some(b) => format!(
+                "BUILDING; funded={}, cursor={}, blocked={}",
+                b.supplies_reserved,
+                b.building.as_ref().map(|job| job.cursor).unwrap_or(0),
+                b.building.as_ref().is_some_and(|job| job.blocked),
+            ),
+            None => "NOT PLANNED".to_owned(),
+        };
+        let blocker = if !v.autonomy_enabled {
+            "autonomy is PAUSED; OP can enable /civ autonomy NAME on".to_owned()
+        } else if !v.actors_spawned {
+            "villager identity reservation not started; keep center loaded".to_owned()
+        } else if linked.is_empty() {
+            "no UUID-bound resident is currently loaded; inspect /civ roster NAME and chunks".to_owned()
+        } else if v.market_purchase.is_some() {
+            "native player purchase unresolved; inspect /civ warehouse NAME (NO automatic refund)".to_owned()
+        } else if v.barrel_transfer.is_some() {
+            "native barrel journal pending; OP: /civ barrelcheck NAME; never blindly retry".to_owned()
+        } else if v.hall_job.as_ref().is_some_and(|job| job.blocked) {
+            "civic hall construction blocked by modified ground; inspect blocks".to_owned()
+        } else if v.bakery.as_ref().and_then(|b| b.building.as_ref())
+            .is_some_and(|job| job.blocked) {
+            "bakery construction blocked by modified ground; inspect blocks".to_owned()
+        } else if v.gather_job.as_ref().is_some_and(|job| job.blocked) {
+            "natural gathering attempt blocked; planner will discard without credit".to_owned()
+        } else if !loaded_role(Job::Builder) {
+            "no loaded UUID-bound builder; required for real buildings".to_owned()
+        } else if !phase.on_shift(Job::Builder) {
+            "workers are off shift; wait for Minecraft daytime".to_owned()
+        } else if v.hall_complete && physical_barrel_stock(game, &v.dimension, v.center).is_none() {
+            "official hall barrel block entities unavailable; load and inspect both barrels".to_owned()
+        } else if !v.hall_complete && v.hall_materials_missing() != (0, 0) {
+            "hall lacks confirmed physical wood/stone; deliver items or let UUID-bound workers gather".to_owned()
+        } else if v.hall_complete && v.bakery.is_none() && !loaded_role(Job::Baker) {
+            "no loaded UUID-bound baker for first real production workshop".to_owned()
+        } else {
+            "no explicit saved-state blocker; check natural plots, NPC routes and native game logs".to_owned()
+        };
+        reply(game, format!(
+            "{} DIAG: autonomous={} | loaded UUID actors {}/{} | builder={} farmer={} lumberjack={} miner={} baker={} steward={} | shift={} | hall=[{}] | bakery=[{}] | farm={} | gather={} | blocker: {}. This is a read-only snapshot, not a gameplay pass.",
+            v.name, v.autonomy_enabled, linked.len(), v.population(),
+            loaded_role(Job::Builder), loaded_role(Job::Farmer),
+            loaded_role(Job::Lumberjack), loaded_role(Job::Miner),
+            loaded_role(Job::Baker), loaded_role(Job::Merchant),
+            phase.name(), hall_status, bakery_status, v.farm.is_some(),
+            v.gather_job.is_some(), blocker
+        ));
         return;
     }
     if action == "barrelcheck" {
