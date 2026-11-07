@@ -444,3 +444,25 @@ whole-forest renewable production is implemented yet. Follow TEST_PLAN
 
 Older instructions below refer to historical releases and capabilities;
 their previous local/native assurance does NOT carry over to this branch.
+
+## Latest 3D physical-worker safety trial (unreleased source)
+
+To test all stacked changes, check out
+`feat/three-dimensional-native-worker-guards-v0115` on Windows with
+Rust 1.95, Git, Python 3.11+ and legal Minecraft Java resources:
+
+```powershell
+git fetch origin
+git switch feat/three-dimensional-native-worker-guards-v0115
+.\scripts\validate-local.ps1 -Format
+.\scripts\validate-local.ps1 -BuildClient
+```
+
+Do NOT enable GitHub Actions. Inspect any local source formatting changes
+before keeping them. Use only the fresh executable from this exact
+successful build and a disposable new world; source-only .hnmod is NOT a
+compiled mod. For vertical safety proof follow TEST_PLAN cases 212-222:
+a worker in a cave beneath the hall must not count as physically returned.
+A worker at a tree's X/Z without the saved clear work stand and eye-level
+reach may NOT mine it. These checks are implemented only in source until
+a real native gameplay E2E is recorded.
