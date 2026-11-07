@@ -115,9 +115,9 @@ ownership are claimed; no Actions workflows are used.
 
 ## Offline-first local compile (stacked v0.1.12, no GitHub Actions)
 
-PR #19 is stacked on #18 → #17 → #16 → #15. Check out
-`feat/physical-town-hall-warehouse-v0112` when testing **all five
-features together**, not `main` or the older GitHub Windows artifact.
+PR #20 is stacked on #19 → #18 → #17 → #16 → #15. Check out
+`feat/physical-town-hall-warehouse-v0112` when testing **all six
+features together**, not `main` or an older GitHub Windows artifact.
 
 From PowerShell in the local repository with Rust 1.95.0, Git, Python 3.11+
 and sufficient disk/RAM, run:
