@@ -556,3 +556,29 @@
   plus simulated format-only failure that still blocks full PASS.
 - Exact GitHub Python files matched the locally executed source by
   length and weighted checksum. No Rust build or Minecraft E2E run.
+
+## 2026-11-08 — recover a missing citizen without duplicate village spawning
+
+- Audited `auto_spawn_villagers`: it reserves `actors_spawned=true`
+  before creating any NPC, correctly blocking a duplicate whole batch
+  after restart, but partial native spawn leaves some worker IDs
+  permanently unbound with no targeted recovery.
+- Added serde-default `Settlement.actor_recovery_issued`, per-worker
+  durable one-shot recovery reservation. `reserve_actor_recovery`
+  requires original initial batch already reserved, matching living
+  unbound resident, and rejects repeated attempts.
+- `World::bind_actor` clears exactly the newly UUID-bound resident's
+  pending recovery marker, retaining previously recorded UUIDs for
+  every other villager.
+- Added operator-only `recoveractor NAME ID attempt` with explicit
+  confirmation, near-hall/dimension restriction, 96-block loaded
+  region preflight, duplicate name protection, free surveyed spawn
+  point and **save BEFORE native entity creation**. Ambiguous
+  UUID/save failure halts world mutations rather than replaying spawn.
+- Updated roster with resident ID + UUID/unbound/recovery state.
+  Existing `reconcile` may rebind a unique visible original
+  villager without additional spawn; automatic native spawn still
+  performs its original strict ten-safe-point preflight.
+- Added 7 Rust regression tests + 12 Python static tests; manual
+  E2E 272–282. Connector-side 22/22 source checks PASS.
+  Cargo, native Horizon build and game E2E still not executed.
