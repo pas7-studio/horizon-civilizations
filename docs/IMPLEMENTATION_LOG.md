@@ -79,3 +79,10 @@
 - Receipt and Harvesting->Replanting transition mutate the same persisted JSON object.
 - Added /civ harvests NAME inspection and core tests for duplicate completion, bounded rollover, validation and legacy JSON.
 - No economy credits or player item drops from receipts; two-store recovery remains future work.
+
+## 2026-11-07 — fail-closed world lifecycle
+
+- Refused incoming world activation when outgoing world.json persistence fails; old state remains resident and commands/ticks halt with an error.
+- Shutdown now retains in-memory world on save failure instead of clearing the singleton.
+- Stale swap check moved before writes to backup/temp files.
+- Requires native CI and a disk-failure world-switch test with a disposable save; process crash cannot preserve volatile memory.
