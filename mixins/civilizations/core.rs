@@ -3880,11 +3880,18 @@ mod civic_hall_warehouse_tests {
         }
         let abstract_before = world.settlements[&id].quantity(Good::Wheat);
         world.advance_farm(id, FarmDecision::StageComplete).unwrap();
-        assert_eq!(world.settlements[&id].warehouse_quantity(Good::Wheat), 8);
+        assert_eq!(world.settlements[&id].warehouse_quantity(Good::Wheat), 0);
+        assert_eq!(world.settlements[&id].wheat_delivery_pending(), 8);
         assert_eq!(world.settlements[&id].quantity(Good::Wheat), abstract_before);
         assert_eq!(world.settlements[&id].farm.as_ref().unwrap().harvest_sequence, 1);
         assert!(world.advance_farm(id, FarmDecision::StageComplete).is_err());
+        assert_eq!(world.settlements[&id].wheat_delivery_pending(), 8);
+        // The native adapter must first verify a UUID-bound farmer returned
+        // to the hall. This unit test exercises only its domain commit.
+        assert_eq!(world.deliver_farm_wheat(id), Ok(true));
+        assert_eq!(world.deliver_farm_wheat(id), Ok(false));
         assert_eq!(world.settlements[&id].warehouse_quantity(Good::Wheat), 8);
+        assert_eq!(world.settlements[&id].wheat_delivery_pending(), 0);
         let restored: World = serde_json::from_str(&serde_json::to_string(&world).unwrap()).unwrap();
         restored.validate().unwrap();
         assert_eq!(restored.settlements[&id].warehouse_quantity(Good::Wheat), 8);
