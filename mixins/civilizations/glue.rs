@@ -149,7 +149,7 @@ pub fn register(commands: &mut Vec<NativeCommand>) {
         "civ roster <name:word>", "civ schedule <name:word>",
         "civ homes <name:word>", "civ survey <name:word>",
         "civ council <name:word>", "civ forecast <name:word>",
-        "civ plots <name:word>",
+        "civ plots <name:word>", "civ development <name:word>",
         "civ construction <name:word>", "civ farming <name:word>",
         "civ harvests <name:word>",
         "civ join <name:word>", "civ title", "civ promote", "civ history",
@@ -559,7 +559,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
     let actor = format!("{:032x}", player.uuid);
     let action = args.next().unwrap_or("help");
     if action == "help" {
-        reply(game, "Civilizations: /civ list | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | buyplot <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, day [days], construct <name>, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
+        reply(game, "Civilizations: /civ list | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | buyplot <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, day [days], construct <name>, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
         return;
     }
     if action == "list" {
@@ -568,6 +568,32 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             items.push(format!("#{} {} [{}] pop={} houses={}", s.id, s.name, s.culture, s.population(), s.houses));
         }
         reply(game, if items.is_empty() { "No settlements yet. OP: /civ found Ashford".into() } else { items.join(" | ") });
+        return;
+    }
+    if action == "development" {
+        let name = args.next().unwrap_or("");
+        let Some(village) = world.by_name(name) else {
+            error(game, "unknown settlement: /civ development <village>");
+            return;
+        };
+        let linked = loaded_actors(game, world, village.id);
+        let (_, _, homeless) = village.physical_housing();
+        let job = village.visual_job.as_ref().map(|j| format!(
+            "building at {:?}: {}/{} blocks, blocked={}", j.origin,
+            j.cursor, hut_plan(j.origin).len(), j.blocked
+        )).unwrap_or_else(|| "no current build site".to_owned());
+        let field = village.farm.as_ref().map(|farm| format!(
+            "field at {:?}: {:?}, blocked={}, cycles={}", farm.origin,
+            farm.stage, farm.blocked, farm.completed_cycles
+        )).unwrap_or_else(|| "no physical crop field".to_owned());
+        reply(game, format!(
+            "{} development: autonomy={} | actors loaded {}/{} | {} finished PUBLIC huts, {} still without housing, {} abstract huts ready | {} | {} | {} player-owned parcels | treasury {} civic coins. On loaded natural land, workers should propose their own work; see logs if stuck.",
+            village.name,
+            if village.autonomy_enabled { "ON" } else { "OFF" },
+            linked.len(), village.population(), village.public_huts(), homeless,
+            village.pending_visual_buildings, job, field, village.player_parcels.len(),
+            village.treasury_coins
+        ));
         return;
     }
     if action == "plots" {
