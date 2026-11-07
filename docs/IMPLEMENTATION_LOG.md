@@ -298,7 +298,7 @@
   gathering decisions until the journal is reconciled. Blocked bakery jobs
   cannot continue extracting more raw materials.
 - The `/civ warehouse` read-only summary reports an honest unknown demand
-  while native journals are unsettled. Added four core Rust regression cases,
+  while native journals are unsettled. Added six core Rust regression cases,
   five new source-contract assertions; adjusted legacy bakery contracts.
 - Changes were written to GitHub; Rust/Python executable suites, Horizon
   native compilation and actual Minecraft gameplay were **not run**. No CI
