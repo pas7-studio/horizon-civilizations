@@ -89,7 +89,7 @@ class PhysicalBakerySourceContracts(unittest.TestCase):
         self.assertIn("let need_bakery =", method)
         self.assertIn("start_bakery(id, site)?", method)
         self.assertIn("check_empty_hut_site(game, &dimension, site)", method)
-        self.assertIn("has_baker && village.hall_complete", method)
+        self.assertIn("has_builder && village.hall_complete", method)
         self.assertIn("save_autonomous(state, old)?", method)
 
     def test_native_inventory_demand_includes_stored_goods_and_transit(self):

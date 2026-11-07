@@ -15,6 +15,7 @@ use crate::game::{
 use horizon_client::text::{self, Text};
 use horizon_client::items::ItemStack;
 use horizon_core::geometry::Direction;
+use horizon_world::nbt::{Compound, Tag};
 use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
@@ -158,6 +159,7 @@ pub fn register(commands: &mut Vec<NativeCommand>) {
         "civ plots <name:word>", "civ development <name:word>",
         "civ hall <name:word>", "civ warehouse <name:word>", "civ bakery <name:word>",
         "civ posts <name:word>",
+        "civ roles <name:word>",
         "civ diagnose <name:word>",
         "civ construction <name:word>", "civ farming <name:word>",
         "civ harvests <name:word>",
@@ -989,7 +991,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
     let actor = format!("{:032x}", player.uuid);
     let action = args.next().unwrap_or("help");
     if action == "help" {
-        reply(game, "Civilizations: /civ list | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | hall <name> | warehouse <name> | posts <name> | diagnose <name> | buyplot <name> | buyhouse <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, barrelcheck <name>, resolvebarrel <name> confirm|cancel <observed_count>, gathercheck <name>, discardgather <name> intact|empty, day [days], construct <name>, post <name> lumber|quarry, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
+        reply(game, "Civilizations: /civ list | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | hall <name> | warehouse <name> | posts <name> | roles <name> | diagnose <name> | buyplot <name> | buyhouse <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, barrelcheck <name>, resolvebarrel <name> confirm|cancel <observed_count>, gathercheck <name>, discardgather <name> intact|empty, day [days], construct <name>, post <name> lumber|quarry, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
         return;
     }
     if action == "list" {
@@ -1531,6 +1533,18 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             format!("{} has no physical farm yet; UUID-bound farmers automatically select a loaded natural 3x3 plot. OP /civ farm {} remains an optional manual fallback.", settlement.name, settlement.name)
         };
         reply(game, message);
+        return;
+    }
+    if action == "roles" {
+        let name = args.next().unwrap_or("");
+        let Some(s) = world.by_name(name) else { error(game, "unknown settlement"); return; };
+        let seats: Vec<String> = s.workplace_demand().iter()
+            .map(|(job, seats)| format!("{} {}/{}", job.name(), s.count(*job), seats))
+            .collect();
+        reply(game, format!(
+            "{} roles (filled/workplaces): {} | laborers {}",
+            s.name, seats.join(", "), s.count(Job::Laborer)
+        ));
         return;
     }
     if action == "posts" {
@@ -2581,6 +2595,9 @@ fn autonomous_village_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Resu
     if enabled.is_empty() { return Ok(()); }
     let index = (state.physical_ticks / 100) as usize % enabled.len();
     let id = enabled[index];
+    // Roles follow real workplaces. Do this before any planner decision or
+    // the first spawn so residents never hold jobs the village cannot give.
+    staff_village(game, state, id)?;
     if !state.world.as_ref().unwrap().settlements[&id].actors_spawned {
         return auto_spawn_villagers(game, state, id);
     }
@@ -2590,11 +2607,7 @@ fn autonomous_village_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Resu
     }
     let village = state.world.as_ref().unwrap().settlements[&id].clone();
     let actors = loaded_actors(game, state.world.as_ref().unwrap(), id);
-    let has_farmer = village.residents.iter().any(|r| r.alive && r.job == Job::Farmer
-        && actors.iter().any(|(known, _)| *known == r.id));
     let has_builder = village.residents.iter().any(|r| r.alive && r.job == Job::Builder
-        && actors.iter().any(|(known, _)| *known == r.id));
-    let has_baker = village.residents.iter().any(|r| r.alive && r.job == Job::Baker
         && actors.iter().any(|(known, _)| *known == r.id));
     // Recover from a refused/modified extraction without paying any wood or
     // stone; the next planning cycle may choose another untouched source.
@@ -2731,8 +2744,11 @@ fn autonomous_village_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Resu
             }
         }
     }
-    let need_field = has_farmer && village.farm.is_none();
-    let need_bakery = has_builder && has_baker && village.hall_complete
+    // The field and the bakery are the workplaces: reserving one is what
+    // creates its worker seat, so neither waits for a farmer or baker that
+    // could only exist after the site. Roles are staffed every turn.
+    let need_field = village.farm.is_none();
+    let need_bakery = has_builder && village.hall_complete
         && village.bakery.is_none();
     let need_hut = has_builder && village.hall_complete && village.visual_job.is_none()
         && village.pending_visual_buildings > 0 && village.physical_housing().2 > 0;
@@ -2796,6 +2812,14 @@ static BOARD_CACHE: Mutex<BTreeMap<(String, [i32; 3]), String>> = Mutex::new(BTr
 fn sign_data_command(
     dimension: &str, pos: [i32; 3], spec: &crate::game::civilizations_core::SignSpec, rich: bool,
 ) -> String {
+    sign_data_command_for("minecraft:oak_wall_sign", dimension, pos, spec, rich)
+}
+
+/// Same as `sign_data_command` for any sign block (wall or standing).
+fn sign_data_command_for(
+    block: &str, dimension: &str, pos: [i32; 3],
+    spec: &crate::game::civilizations_core::SignSpec, rich: bool,
+) -> String {
     let quote = |s: &str| format!("'{}'", s.replace('\\', "\\\\").replace('\'', "\\'"));
     let messages: Vec<String> = spec.lines.iter().map(|line| {
         if rich {
@@ -2810,9 +2834,86 @@ fn sign_data_command(
     }).collect();
     let [x, y, z] = pos;
     format!(
-        "execute in {dimension} if block {x} {y} {z} minecraft:oak_wall_sign run data merge block {x} {y} {z} {{front_text:{{messages:[{}],color:\"black\",has_glowing_text:{}b}}}}",
+        "execute in {dimension} if block {x} {y} {z} {block} run data merge block {x} {y} {z} {{front_text:{{messages:[{}],color:\"black\",has_glowing_text:{}b}}}}",
         messages.join(","), if spec.glow { 1 } else { 0 }
     )
+}
+
+/// Standing progress board beside every building under construction, which
+/// becomes a short status board once the building is finished. Boards are
+/// only placed on air above natural ground, and a finished board is only
+/// rewritten if this session placed the matching construction board.
+fn refresh_site_boards(game: &mut Game<'_>, world: &World) {
+    use crate::game::civilizations_core::{
+        bakery_plan, render_bakery_ready, render_build_progress, render_hut_ready,
+        site_board_position, SignSpec,
+    };
+    const BLOCK: &str = "minecraft:oak_sign";
+    let dimension = game.dim.id().to_owned();
+    for village in world.settlements.values().filter(|v| v.dimension == dimension) {
+        // (origin, spec, is_construction)
+        let mut boards: Vec<([i32; 3], SignSpec, bool)> = Vec::new();
+        if let Some(job) = village.hall_job.as_ref().filter(|_| !village.hall_complete) {
+            let total = town_hall_plan(job.origin).len();
+            boards.push((job.origin, render_build_progress("HALL", job.cursor, total, job.blocked), true));
+        }
+        if let Some(job) = village.visual_job.as_ref() {
+            let total = hut_plan(job.origin).len();
+            boards.push((job.origin, render_build_progress("HUT", job.cursor, total, job.blocked), true));
+        }
+        if let Some(bakery) = village.bakery.as_ref() {
+            if let Some(job) = bakery.building.as_ref().filter(|_| !bakery.complete) {
+                let total = bakery_plan(job.origin).len();
+                boards.push((bakery.origin, render_build_progress("BAKERY", job.cursor, total, job.blocked), true));
+            } else if bakery.complete {
+                boards.push((bakery.origin, render_bakery_ready(bakery), false));
+            }
+        }
+        for site in &village.visual_sites {
+            let active = village.visual_job.as_ref().is_some_and(|job| job.origin == *site);
+            if !active {
+                boards.push((*site, render_hut_ready(village), false));
+            }
+        }
+        for (origin, spec, construction) in boards {
+            let pos = site_board_position(origin);
+            let [x, y, z] = pos;
+            let key = (dimension.clone(), pos);
+            let present = world_block(game, &dimension, pos).as_deref() == Some(BLOCK);
+            if !present {
+                // Finished boards never create a sign: only a construction
+                // board we placed may turn into one, so old villages stay clean.
+                if !construction { continue; }
+                let on_ground = world_block(game, &dimension, [x, y - 1, z])
+                    .is_some_and(|block| is_ground(&block));
+                if !on_ground
+                    || world_block(game, &dimension, pos).as_deref() != Some("minecraft:air")
+                { continue; }
+                let place = format!(
+                    "execute in {dimension} if block {x} {y} {z} minecraft:air run setblock {x} {y} {z} {BLOCK}[rotation=8] replace"
+                );
+                if !game.native_run_command(&place) {
+                    log::warn!("[civilizations] site sign placement unsupported: {place}");
+                    continue;
+                }
+            } else if !construction && !BOARD_CACHE.lock().unwrap().contains_key(&key) {
+                // A standing sign we did not place this session: leave it alone.
+                continue;
+            }
+            let fingerprint = format!("{:?}{}", spec.lines, spec.glow);
+            if present && BOARD_CACHE.lock().unwrap().get(&key) == Some(&fingerprint) {
+                continue;
+            }
+            let rich = sign_data_command_for(BLOCK, &dimension, pos, &spec, true);
+            let ok = game.native_run_command(&rich)
+                || game.native_run_command(&sign_data_command_for(BLOCK, &dimension, pos, &spec, false));
+            if ok {
+                BOARD_CACHE.lock().unwrap().insert(key, fingerprint);
+            } else {
+                log::warn!("[civilizations] site sign refresh unsupported at {pos:?}");
+            }
+        }
+    }
 }
 
 /// Refresh the civic hall's six native wall signs from live barrel contents
@@ -2890,6 +2991,62 @@ fn refresh_hall_boards(game: &mut Game<'_>, world: &World) {
             }
         }
     }
+}
+
+/// Rename one spawned villager so its tag carries the role it really holds.
+/// Horizon stores CustomName as a plain string, so no component JSON is used.
+fn rename_actor(game: &mut Game<'_>, uuid: u128, name: &str) -> bool {
+    let Some((dimension, id, kind)) = game.native_entity_by_uuid(uuid) else {
+        return false;
+    };
+    if kind != "minecraft:villager" {
+        return false;
+    }
+    let mut nbt = Compound::new();
+    nbt.insert("CustomName".into(), Tag::String(name.into()));
+    nbt.insert("CustomNameVisible".into(), Tag::Byte(1));
+    game.native_merge_entity_nbt(&dimension, id, nbt)
+}
+
+/// Derive this village's roles from the workplaces it really has, persist one
+/// change, and keep the visible name tags in step. Called before the first
+/// spawn so no villager is ever labelled with a job the village cannot
+/// provide. Only saved state and an entity name change here, never a block.
+fn staff_village(game: &mut Game<'_>, state: &mut ActiveWorld, id: u64) -> Result<(), String> {
+    let prior = state.world.as_ref().unwrap().clone();
+    let changed = state
+        .world
+        .as_mut()
+        .ok_or("world unavailable")?
+        .settlements
+        .get_mut(&id)
+        .ok_or("unknown settlement")?
+        .staff_workplaces();
+    if changed.is_empty() {
+        return Ok(());
+    }
+    // Persist the exact roster before renaming anything: a save failure must
+    // not leave a tag that claims a role the save never stored.
+    save_autonomous(state, prior)?;
+    let world = state.world.as_ref().unwrap();
+    let village = world.settlements.get(&id).ok_or("unknown settlement")?;
+    for (resident_id, job) in &changed {
+        let Some(resident) = village.residents.iter().find(|r| r.id == *resident_id)
+        else { continue };
+        log::info!(
+            "[civilizations] {} now works as {} in {}",
+            resident.name, job.name(), village.name
+        );
+        if let Some(uuid) = resident.entity_uuid {
+            if !rename_actor(game, uuid, &village.actor_name(resident)) {
+                log::info!(
+                    "[civilizations] role tag for {} left unchanged; /civ roles {} is authoritative",
+                    resident.name, village.name
+                );
+            }
+        }
+    }
+    Ok(())
 }
 
 /// Place or refresh one readable sign at each work camp. Signs are plain NBT
@@ -3070,10 +3227,16 @@ fn gather_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
     let world = state.world.as_ref().unwrap();
     let v = &world.settlements[&id];
     let profession = if job.good == Good::Wood { Job::Lumberjack } else { Job::Miner };
+    let camp_kind = if job.good == Good::Wood { PostKind::Lumber } else { PostKind::Quarry };
+    // A camp already bound to one resident is serviced by that resident only:
+    // the name on the camp sign and the worker who delivers stay the same.
+    let camp_worker = v.posts.iter().find(|post| post.kind == camp_kind)
+        .and_then(|post| post.worker_id);
     let actors = loaded_actors(game, world, id);
     let selected = v.residents.iter()
         .filter(|r| r.alive && r.job == profession
-            && job.worker_id.is_none_or(|assigned| assigned == r.id))
+            && job.worker_id.is_none_or(|assigned| assigned == r.id)
+            && camp_worker.is_none_or(|bound| bound == r.id))
         .find_map(|r| actors.iter().find_map(|(rid, mob)| {
             if *rid != r.id { return None; }
             game.native_mob(&dimension, *mob).and_then(|actor| {
@@ -3085,14 +3248,10 @@ fn gather_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
     let Some(selected_worker) = selected else { return Ok(()); };
     // The camp keeps the same resident across restarts: delivery credit is
     // checked against that ID at the hall, never against whoever is nearby.
-    if let Some(kind) = match job.good {
-        Good::Wood => Some(PostKind::Lumber),
-        Good::Stone => Some(PostKind::Quarry),
-        _ => None,
-    } {
-        if state.world.as_mut().unwrap().set_post_worker(id, kind, selected_worker).is_err() {
-            log::warn!("[civilizations] camp worker binding skipped for settlement {id}");
-        }
+    if state.world.as_mut().unwrap()
+        .set_post_worker(id, camp_kind, selected_worker).is_err()
+    {
+        log::warn!("[civilizations] camp worker binding skipped for settlement {id}");
     }
     if job.worker_id.is_none() {
         // Save this exact resident ID BEFORE we persist Issued or send the
@@ -3141,6 +3300,7 @@ pub fn level_tick(game: &mut Game<'_>, dimension: &str) {
         }
         if let Some(world) = state.world.as_ref() {
             refresh_post_boards(game, world);
+            refresh_site_boards(game, world);
         }
     }
     if state.physical_ticks % 100 == 0 {

@@ -1,0 +1,77 @@
+"""Source contracts for roles derived from real workplaces, not chance.
+
+A resident may only hold a job the village can physically provide: a farmer
+needs a reserved field, a baker a bakery, a lumberjack or miner a camp (or a
+real material shortage). Everyone else is honestly a laborer. These checks are
+not a Rust compiler or a Horizon game test.
+"""
+from pathlib import Path
+import unittest
+
+ROOT = Path(__file__).resolve().parents[1]
+CORE = (ROOT / "mixins/civilizations/core.rs").read_text()
+GLUE = (ROOT / "mixins/civilizations/glue.rs").read_text()
+
+
+class WorkplaceStaffingContracts(unittest.TestCase):
+    def test_laborer_is_a_real_job_with_a_place(self):
+        self.assertIn("    Laborer,", CORE)
+        self.assertIn('Self::Laborer => "laborer",', CORE)
+        self.assertIn("Self::Laborer => [2, 0, 4],", CORE)
+
+    def test_demand_is_derived_from_sites_that_exist(self):
+        demand = CORE.split("pub fn workplace_demand(&self", 1)[1].split("\n    }", 1)[0]
+        self.assertIn("if self.farm.is_some() {", demand)
+        self.assertIn("if self.bakery.is_some() {", demand)
+        self.assertIn("if self.hall_complete || self.hall_job.is_some() {", demand)
+        self.assertIn("post.kind == PostKind::Lumber", demand)
+        self.assertIn("post.kind == PostKind::Quarry", demand)
+        self.assertIn("self.hall_materials_missing()", demand)
+        self.assertIn("let building = !self.hall_complete || self.hall_job.is_some()", demand)
+        self.assertIn("|| (self.pending_visual_buildings > 0 && self.physical_housing().2 > 0)", demand)
+        self.assertIn("want(Job::Guard, 1);", demand)
+        self.assertIn("want(Job::Builder, 1);", demand)
+        self.assertNotIn("native_run_command", demand)
+        self.assertNotIn("save(", demand)
+
+    def test_staffing_keeps_camp_workers_and_releases_stale_bindings(self):
+        body = CORE.split("pub fn staff_workplaces(&mut self", 1)[1].split("\n    }", 1)[0]
+        self.assertIn("resident.job != job", body)
+        self.assertIn("post.worker_id = None;", body)
+        self.assertIn("job.worker_id.map(|worker|", body)
+        self.assertIn("chosen.insert(worker, job);", body)
+        self.assertNotIn("native_", body)
+        self.assertNotIn("save(", body)
+
+    def test_roles_are_restaffed_before_the_first_spawn(self):
+        method = GLUE.split("fn autonomous_village_step(", 1)[1].split("\n}", 1)[0]
+        self.assertIn("staff_village(game, state, id)?;", method)
+        self.assertLess(method.index("staff_village(game, state, id)?;"),
+                        method.index("auto_spawn_villagers(game, state, id)"))
+
+    def test_name_tag_follows_the_saved_role_not_a_stale_label(self):
+        helper = GLUE.split("fn rename_actor(", 1)[1].split("\n}", 1)[0]
+        self.assertIn("native_entity_by_uuid(uuid)", helper)
+        self.assertIn("CustomName", helper)
+        self.assertIn("\"CustomNameVisible\".into()", helper)
+        self.assertIn("native_merge_entity_nbt", helper)
+        staff = GLUE.split("fn staff_village(", 1)[1].split("\n}", 1)[0]
+        self.assertLess(staff.index("save_autonomous(state, prior)?;"),
+                        staff.index("rename_actor(game, uuid"))
+        self.assertNotIn("native_run_command", staff)
+        self.assertNotIn("setblock", staff)
+
+    def test_a_site_is_reserved_before_its_worker_exists(self):
+        # The field and the bakery are the workplaces, so reserving one cannot
+        # wait for a farmer or baker that only exists after the site.
+        self.assertIn("let need_field = village.farm.is_none();", GLUE)
+        self.assertIn("let need_bakery = has_builder && village.hall_complete", GLUE)
+        bakery = CORE.split("pub fn start_bakery(", 1)[1].split("\n    }", 1)[0]
+        self.assertIn("if village.count(Job::Builder) == 0 {", bakery)
+        self.assertNotIn("count(Job::Baker) == 0", bakery)
+        farm = CORE.split("pub fn start_farm(", 1)[1].split("\n    }", 1)[0]
+        self.assertNotIn("has no farmer", farm)
+
+
+if __name__ == "__main__":
+    unittest.main()

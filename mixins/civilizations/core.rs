@@ -104,7 +104,7 @@ impl Good {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum Job {
     Farmer,
@@ -114,6 +114,9 @@ pub enum Job {
     Builder,
     Guard,
     Merchant,
+    /// No workplace currently needs this resident. A laborer is a real
+    /// role: they are not claimed to farm, bake or mine anything.
+    Laborer,
 }
 
 /// A persistent work camp. Gathering is restricted to its radius so a
@@ -219,6 +222,7 @@ impl Job {
             Self::Builder => "builder",
             Self::Guard => "guard",
             Self::Merchant => "merchant",
+            Self::Laborer => "laborer",
         }
     }
 
@@ -234,6 +238,7 @@ impl Job {
             Self::Builder => [8, 0, -8],
             Self::Guard => [0, 0, -8],
             Self::Merchant => [0, 0, 3],
+            Self::Laborer => [2, 0, 4],
         }
     }
 }
@@ -1024,6 +1029,43 @@ pub fn render_build_progress(title: &str, done: usize, total: usize, blocked: bo
     }
 }
 
+/// Standing site board: on natural ground just outside the front-right
+/// corner of a 5x5 building, clear of the wall, door and foundation.
+pub fn site_board_position(origin: [i32; 3]) -> [i32; 3] {
+    [origin[0] + 2, origin[1], origin[2] - 3]
+}
+
+/// Board for a finished public hut: how many it houses and how many are free.
+pub fn render_hut_ready(village: &Settlement) -> SignSpec {
+    let (capacity, assigned, waiting) = village.physical_housing();
+    SignSpec {
+        lines: [
+            sign_head("VILLAGE HUT"),
+            sl("Finished", SignColor::Good),
+            sl(format!("Homes {capacity}"), SignColor::Black),
+            if waiting > 0 {
+                sl(format!("Homeless {waiting}"), SignColor::Warn)
+            } else {
+                sl(format!("Housed {assigned}"), SignColor::Good)
+            },
+        ],
+        glow: false,
+    }
+}
+
+/// Board for the bakery workshop once it is built.
+pub fn render_bakery_ready(bakery: &BakeryWorkshop) -> SignSpec {
+    SignSpec {
+        lines: [
+            sign_head("BAKERY"),
+            sl(format!("Batches {}", bakery.batches), SignColor::Black),
+            sl(format!("Wheat in {}", bakery.wheat_escrow), SignColor::Black),
+            sl(format!("Bread out {}", bakery.bread_in_transit), SignColor::Black),
+        ],
+        glow: false,
+    }
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VisualBuildJob {
     pub origin: [i32; 3],
@@ -1508,6 +1550,150 @@ impl Settlement {
 
     pub fn population(&self) -> u32 {
         self.residents.iter().filter(|r| r.alive).count() as u32
+    }
+
+    /// How many residents this village can actually employ, by role. Every
+    /// entry is backed by a site that exists in the save: no farmer without a
+    /// farm plot, no baker without a bakery, no lumberjack or miner without a
+    /// camp or a real material shortage. Guards patrol the settlement and the
+    /// builder works the construction the orchestrator keeps open, so both
+    /// keep one seat.
+    pub fn workplace_demand(&self) -> BTreeMap<Job, usize> {
+        let mut demand: BTreeMap<Job, usize> = BTreeMap::new();
+        let mut want = |job: Job, seats: usize| {
+            if seats > 0 {
+                *demand.entry(job).or_insert(0) += seats;
+            }
+        };
+        want(Job::Guard, 1);
+        want(Job::Builder, 1);
+        if self.hall_complete || self.hall_job.is_some() {
+            want(Job::Merchant, 1);
+        }
+        if self.bakery.is_some() {
+            want(Job::Baker, 1);
+        }
+        if self.farm.is_some() {
+            want(Job::Farmer, 1);
+        }
+        let lumber_camps = self.posts.iter()
+            .filter(|post| post.kind == PostKind::Lumber).count();
+        let quarries = self.posts.iter()
+            .filter(|post| post.kind == PostKind::Quarry).count();
+        let (wood_missing, stone_missing) = self.hall_materials_missing();
+        // An active building programme is real work even before the saved
+        // warehouse shows a shortfall: huts, the hall and the bakery are
+        // paid from real barrels, so one camp seat each is justified while
+        // anything is being raised.
+        let building = !self.hall_complete || self.hall_job.is_some()
+            || self.visual_job.is_some()
+            || (self.pending_visual_buildings > 0 && self.physical_housing().2 > 0)
+            || self.bakery.as_ref().is_some_and(|bakery| !bakery.complete);
+        // A shortage alone justifies one seat even before a camp stands: the
+        // orchestrator opens the camp at the first real source the worker
+        // finds. Camps themselves are permanent workplaces.
+        let wood_work = wood_missing > 0 || building || self.oak_stem.is_some()
+            || self.gather_job.as_ref().is_some_and(|job| job.good == Good::Wood);
+        let stone_work = stone_missing > 0 || building
+            || self.gather_job.as_ref().is_some_and(|job| job.good == Good::Stone);
+        want(Job::Lumberjack, lumber_camps.max(usize::from(wood_work)));
+        want(Job::Miner, quarries.max(usize::from(stone_work)));
+        demand
+    }
+
+    /// Recompute every resident's role from the workplaces this village really
+    /// has. Stable across turns: a resident keeps a role while its demand
+    /// lasts, camp workers keep their camp, and only the leftovers become
+    /// laborers. Returns the residents whose role changed so the caller can
+    /// persist once and update their visible name tags. No world edit here.
+    pub fn staff_workplaces(&mut self) -> Vec<(u64, Job)> {
+        let alive: Vec<u64> = self.residents.iter()
+            .filter(|resident| resident.alive).map(|resident| resident.id).collect();
+        let mut remaining = self.workplace_demand();
+        let mut chosen: BTreeMap<u64, Job> = BTreeMap::new();
+        // A harvest already issued to one resident keeps that resident in its
+        // role: re-rolling mid-job would orphan the durable journal entry that
+        // authorizes the native block edit.
+        let harvest_pin = self.gather_job.as_ref().and_then(|job| {
+            job.worker_id.map(|worker| {
+                (worker, match job.good {
+                    Good::Wood => Job::Lumberjack,
+                    _ => Job::Miner,
+                })
+            })
+        });
+        if let Some((worker, job)) = harvest_pin {
+            if alive.contains(&worker) && !chosen.contains_key(&worker) {
+                if let Some(seats) = remaining.get_mut(&job) {
+                    *seats = seats.saturating_sub(1);
+                }
+                chosen.insert(worker, job);
+            }
+        }
+        // 1. A camp keeps the same worker so receipts stay attributable.
+        for post in &self.posts {
+            let Some(worker) = post.worker_id else { continue };
+            if !alive.contains(&worker) || chosen.contains_key(&worker) {
+                continue;
+            }
+            let job = post.kind.job();
+            if let Some(seats) = remaining.get_mut(&job) {
+                if *seats > 0 {
+                    *seats -= 1;
+                    chosen.insert(worker, job);
+                }
+            }
+        }
+        // 2. Keep an existing role while a seat for it remains.
+        for resident in self.residents.iter().filter(|resident| resident.alive) {
+            if chosen.contains_key(&resident.id) || resident.job == Job::Laborer {
+                continue;
+            }
+            if let Some(seats) = remaining.get_mut(&resident.job) {
+                if *seats > 0 {
+                    *seats -= 1;
+                    chosen.insert(resident.id, resident.job);
+                }
+            }
+        }
+        // 3. Fill the remaining seats with unassigned residents, in a fixed
+        // priority order so the same save always produces the same roster.
+        for job in [Job::Guard, Job::Builder, Job::Merchant, Job::Baker,
+                    Job::Farmer, Job::Lumberjack, Job::Miner] {
+            while remaining.get(&job).copied().unwrap_or(0) > 0 {
+                let Some(id) = self.residents.iter()
+                    .filter(|resident| resident.alive && !chosen.contains_key(&resident.id))
+                    .map(|resident| resident.id)
+                    .min() else { break };
+                if let Some(seats) = remaining.get_mut(&job) {
+                    *seats -= 1;
+                }
+                chosen.insert(id, job);
+            }
+        }
+        // 4. Everyone else is honestly unemployed, not a fake specialist.
+        let mut changed = Vec::new();
+        for resident in self.residents.iter_mut() {
+            if !resident.alive {
+                continue;
+            }
+            let job = chosen.get(&resident.id).copied().unwrap_or(Job::Laborer);
+            if resident.job != job {
+                resident.job = job;
+                changed.push((resident.id, job));
+            }
+        }
+        // 5. Never keep a camp bound to a dead or re-roled worker.
+        for post in self.posts.iter_mut() {
+            let Some(worker) = post.worker_id else { continue };
+            let keep = self.residents.iter().any(|resident| {
+                resident.id == worker && resident.alive && resident.job == post.kind.job()
+            });
+            if !keep {
+                post.worker_id = None;
+            }
+        }
+        changed
     }
 
     /// Derived physical housing capacity. Abstract houses are NOT included.
@@ -2297,8 +2483,11 @@ impl World {
             return Err("village needs a completed hall and active autonomy".into());
         }
         if village.bakery.is_some() { return Err("bakery already reserved or constructed".into()); }
-        if village.count(Job::Builder) == 0 || village.count(Job::Baker) == 0 {
-            return Err("bakery requires a living builder and baker".into());
+        // The builder raises the workshop; the baker seat follows the
+        // reserved bakery. Requiring a baker first would deadlock a village
+        // that has never had a bakery, which is exactly the honest state.
+        if village.count(Job::Builder) == 0 {
+            return Err("bakery requires a living builder".into());
         }
         if i64::from(origin[0]).abs() > 29_999_988
             || i64::from(origin[2]).abs() > 29_999_988
@@ -3187,7 +3376,9 @@ impl World {
     pub fn start_farm(&mut self, village_id: u64, origin: [i32; 3]) -> Result<(), String> {
         let village = self.settlements.get(&village_id).ok_or("unknown settlement")?;
         if village.farm.is_some() { return Err("farm already assigned".into()); }
-        if village.count(Job::Farmer) == 0 { return Err("village has no farmer".into()); }
+        // No farmer is required to reserve the plot: the field is the real
+        // workplace, and the orchestrator assigns a farmer once it exists.
+        // Requiring one first would deadlock a village that has none.
         if i64::from(origin[0]).abs() > 29_999_988 || i64::from(origin[2]).abs() > 29_999_988
             || !(-2046..=2046).contains(&origin[1]) {
             return Err("farm outside safe build coordinates".into());
@@ -4647,6 +4838,102 @@ mod work_post_tests {
         let restored: World = serde_json::from_value(value).unwrap();
         assert!(restored.settlements[&id].posts.is_empty());
         restored.validate().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod workplace_staffing_tests {
+    use super::*;
+
+    fn village() -> (World, u64) {
+        let mut world = World::default();
+        let id = world
+            .found("Ashford", "minecraft:overworld", [0, 70, 0], "owner")
+            .unwrap();
+        (world, id)
+    }
+
+    #[test]
+    fn nobody_holds_a_role_without_a_real_workplace() {
+        let (mut world, id) = village();
+        let v = world.settlements.get_mut(&id).unwrap();
+        let changed = v.staff_workplaces();
+        assert_eq!(changed.len(), 6);
+        // No farm plot and no bakery exist yet, so no farmer or baker may be
+        // claimed. Missing wood and stone still justify one camp worker each.
+        assert_eq!(v.count(Job::Farmer), 0);
+        assert_eq!(v.count(Job::Baker), 0);
+        assert_eq!(v.count(Job::Merchant), 0);
+        assert_eq!(v.count(Job::Guard), 1);
+        assert_eq!(v.count(Job::Builder), 1);
+        assert_eq!(v.count(Job::Lumberjack), 1);
+        assert_eq!(v.count(Job::Miner), 1);
+        assert_eq!(v.count(Job::Laborer), 6);
+        assert_eq!(v.population(), 10);
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn a_finished_stocked_village_releases_both_camp_seats() {
+        let (mut world, id) = village();
+        let v = world.settlements.get_mut(&id).unwrap();
+        v.hall_complete = true;
+        v.pending_visual_buildings = 0;
+        v.warehouse.insert(Good::Wood, HALL_WOOD_LOGS + 4);
+        v.warehouse.insert(Good::Stone, HALL_COBBLESTONE + 4);
+        v.staff_workplaces();
+        assert_eq!(v.count(Job::Lumberjack), 0);
+        assert_eq!(v.count(Job::Miner), 0);
+        assert_eq!(v.count(Job::Merchant), 1);
+        assert_eq!(v.count(Job::Guard), 1);
+        assert_eq!(v.count(Job::Builder), 1);
+        assert_eq!(v.count(Job::Laborer), 7);
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn a_pending_build_keeps_one_camp_seat_each_even_with_full_barrels() {
+        let (mut world, id) = village();
+        let v = world.settlements.get_mut(&id).unwrap();
+        v.hall_complete = true;
+        v.pending_visual_buildings = 1;
+        v.warehouse.insert(Good::Wood, HALL_WOOD_LOGS + 4);
+        v.warehouse.insert(Good::Stone, HALL_COBBLESTONE + 4);
+        v.staff_workplaces();
+        assert_eq!(v.count(Job::Lumberjack), 1);
+        assert_eq!(v.count(Job::Miner), 1);
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn staffing_is_stable_and_a_camp_keeps_its_worker() {        let (mut world, id) = village();
+        world.settlements.get_mut(&id).unwrap().staff_workplaces();
+        let lumberjack = world.settlements[&id].residents.iter()
+            .find(|r| r.job == Job::Lumberjack).unwrap().id;
+        world.add_post(id, PostKind::Lumber, [20, 70, 0]).unwrap();
+        assert!(world.set_post_worker(id, PostKind::Lumber, lumberjack).unwrap());
+        // A second pass changes nothing and never rebinds the camp.
+        assert!(world.settlements.get_mut(&id).unwrap().staff_workplaces().is_empty());
+        assert_eq!(world.settlements[&id].posts[0].worker_id, Some(lumberjack));
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn a_dead_camp_worker_leaves_no_fake_role_or_binding() {
+        let (mut world, id) = village();
+        world.settlements.get_mut(&id).unwrap().staff_workplaces();
+        let lumberjack = world.settlements[&id].residents.iter()
+            .find(|r| r.job == Job::Lumberjack).unwrap().id;
+        world.add_post(id, PostKind::Lumber, [20, 70, 0]).unwrap();
+        world.set_post_worker(id, PostKind::Lumber, lumberjack).unwrap();
+        world.settlements.get_mut(&id).unwrap().residents.iter_mut()
+            .find(|r| r.id == lumberjack).unwrap().alive = false;
+        let changed = world.settlements.get_mut(&id).unwrap().staff_workplaces();
+        assert_eq!(changed.len(), 1);
+        assert_eq!(changed[0].1, Job::Lumberjack);
+        assert_eq!(world.settlements[&id].posts[0].worker_id, None);
+        assert_eq!(world.settlements[&id].count(Job::Lumberjack), 1);
+        world.validate().unwrap();
     }
 }
 
@@ -6412,5 +6699,38 @@ mod hall_sign_render_tests {
         assert_eq!(unique.len(), 6);
         // Every board hangs on the front wall directly outside z-2.
         assert!(positions.iter().all(|p| p[2] == 7));
+    }
+}
+
+#[cfg(test)]
+mod site_sign_tests {
+    use super::*;
+
+    #[test]
+    fn site_board_stands_outside_the_building_footprint() {
+        let origin = [10, 64, 10];
+        let [x, y, z] = site_board_position(origin);
+        assert_eq!(y, origin[1]);
+        // The 5x5 shell and foundation span origin +-2; the board is beyond z-2.
+        assert!(z < origin[2] - 2);
+        assert!(x >= origin[0] - 2 && x <= origin[0] + 2);
+    }
+
+    #[test]
+    fn finished_boards_fit_and_report_real_counts() {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0, 70, 0], "op").unwrap();
+        let hut = render_hut_ready(&world.settlements[&id]);
+        assert!(hut.lines.iter().all(|l| l.text.chars().count() <= SIGN_WIDTH));
+        assert_eq!(hut.plain()[1], "Finished");
+        let bakery = BakeryWorkshop {
+            origin: [0, 70, 20], building: None, complete: true, supplies_reserved: true,
+            construction_escrow: Default::default(), wheat_escrow: 3,
+            bread_in_transit: 1, batches: 12,
+        };
+        let board = render_bakery_ready(&bakery);
+        assert_eq!(board.plain()[1], "Batches 12");
+        assert_eq!(board.plain()[2], "Wheat in 3");
+        assert_eq!(board.plain()[3], "Bread out 1");
     }
 }
