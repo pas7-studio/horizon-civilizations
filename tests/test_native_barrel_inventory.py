@@ -61,7 +61,7 @@ class NativeBarrelInventorySourceContracts(unittest.TestCase):
         source = GLUE.split("fn barrel_one_step(", 1)[1].split("\n}", 1)[0]
         self.assertIn("Aggregate counts alone do not identify the reserved slot.", source)
         self.assertIn("entry.slot == selected && entry.can_take", source)
-        self.assertIn("stack.item == transfer.good.item()", source)
+        self.assertIn("stack.item.as_ref() == transfer.good.item()", source)
         self.assertIn("stack.count >= transfer.count", source)
         self.assertIn("block_barrel_transfer(id)?", source)
         validation = source.index("entry.slot == selected && entry.can_take")
