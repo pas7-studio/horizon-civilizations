@@ -322,3 +322,21 @@
 - Added four Rust domain and six Python source tests; no Rust/Python suites
   or live Horizon/Minecraft E2E were executed. Do not use on real worlds
   until compile, migration, operator recovery and crash fault tests pass.
+
+## 2026-11-08 — First-play diagnostic milestone (unreleased source)
+
+- Added `/civ diagnose NAME` (ordinary users, read-only) to report actual
+  loaded UUID-linked roles, current daytime shift, civic hall construction,
+  native warehouse availability, bakery escrow/batches, planned gathering
+  and the first saved-state blocker. No native item transfer, block mutation
+  or persistent world change from the command.
+- Combined supply deficit in this command uses the same native barrel
+  snapshot and dual-project helper as warehouse planning, rather than the
+  abstract economy. Missing/unloaded vanilla block entities are reported
+  as unavailable, not as empty.
+- Fixed PLAYTEST quickstart guidance to use the newest stacked branch instead
+  of obsolete v0.1.9 checkout and to distinguish old native CI from this
+  unbuilt v0.1.14 source stack.
+- Added six Python source contracts and first-play acceptance tests 175–181.
+  Local executable Rust/Python tests, native compile and in-game verification
+  remain unperformed here. No GitHub Actions or merge.
