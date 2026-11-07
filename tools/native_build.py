@@ -97,9 +97,11 @@ def main():
     run('cargo', 'check', '--manifest-path', str(out / 'Cargo.toml'),
         '--locked', '-p', 'horizon-client', '--no-default-features')
     if args.test:
+        # Match all nested civilizations_core test modules (not only ::tests):
+        # identity, host clock, farms, NPC schedules, homes, proposals, council.
         run('cargo', 'test', '--manifest-path', str(out / 'Cargo.toml'),
             '--locked', '-p', 'horizon-client', '--lib', '--no-default-features',
-            'civilizations_core::tests')
+            'civilizations_core::')
     executable = None
     if args.build_client:
         # The 'fast' profile is documented by Horizon for iterating on native
