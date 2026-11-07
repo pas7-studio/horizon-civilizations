@@ -22,8 +22,11 @@ def inspect_save(world_dir: Path, *, settlement: str | None = None,
     source = mod_dir / "world.json"
     failures: list[str] = []
     warnings: list[str] = []
-    if (mod_dir / "world.json.swap").exists():
-        failures.append("stale world.json.swap exists: stop and manually inspect recovery files")
+    for remnant in ("world.json.swap", "world.json.tmp"):
+        if (mod_dir / remnant).exists():
+            failures.append(
+                f"stale {remnant} exists: stop and manually inspect recovery files"
+            )
     if not source.is_file():
         failures.append("world.json missing: the game may not have saved the mod world")
         return {"evidence_kind": "saved-state-only", "status": "FAIL",
