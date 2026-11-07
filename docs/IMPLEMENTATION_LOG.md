@@ -221,3 +221,36 @@
 - Crucial follow-up: real vanilla barrel container contents are NOT
   transactionally connected; these are physical service markers for a
   separate authoritative save ledger. Native/gameplay tests NOT RUN.
+
+## 2026-11-07 — v0.1.13 real native barrel storage and worker couriers
+
+- Discovered and inspected the pinned upstream Horizon API 48:
+  `native_container_slots`, `native_extract_item` and
+  `insert_stack_through`. Replaced barrel-as-marker with actual native
+  inventory reads and writes in the game bridge, without adding item NBT
+  commands for inventory manipulation.
+- Added strict official hall barrel positions, durable Planned/Issued/
+  Blocked transfer records for bounded 1–8 item batches, and native slot
+  count reconciliation before retiring the incoming item receipt.
+- Added builder escrow only for physically extracted real barrel materials;
+  corrected the navigation/reservation deadlock so workers fetch supplies
+  at the hall BEFORE walking to the plot.
+- Lumberjack/miner returns and farmer wheat receipts now require nearby
+  live UUID-linked actors to reach the hall before goods enter the
+  steward's delivery queue. The steward inserts them into real barrels.
+- Player buy after hall creation precharges coins and saves a market
+  order before one verified native barrel extraction/player inventory grant;
+  any ambiguity becomes quarantined rather than automatically repeated.
+  Trades require proximity to the actual village center.
+- Added Horizon API 233 native block inventory-opening hook for the two
+  village-owned barrels; ordinary players cannot loot them without trade.
+  This adds a seventh native injection, with packaging validations updated.
+- Rewired signs and /civ hall/warehouse status to inspect real native
+  barrel stock, pending deliveries, builder escrow and market journals.
+- Added structural source contracts and Rust transaction regression
+  cases. No cargo, native build, Python test execution or live game E2E
+  was available in this remote environment; GitHub Actions remain OFF.
+- Known pending: physical hopper/external mod access, vanilla block-break
+  hooks, atomicity across game chunks and world.json, manual quarantine
+  recovery, actual courier held-item animations, quarry/lumberyard/workshop
+  archetypes and town self-founding.
