@@ -58,6 +58,34 @@ class EvidenceTests(unittest.TestCase):
             self.assertEqual(report["status"], "FAIL")
             self.assertEqual(len(report["failures"]), 2)
 
+    def test_stale_first_save_tmp_blocks_false_green_report(self):
+        with tempfile.TemporaryDirectory() as path:
+            root = Path(path)
+            fixture(root)
+            pending = root / "horizon-civilizations" / "world.json.tmp"
+            pending.write_bytes(b"recoverable newer state")
+            report = mod.inspect_save(root, settlement="Ashford", min_linked=10)
+            self.assertEqual(report["status"], "FAIL")
+            self.assertTrue(any("world.json.tmp" in reason
+                                for reason in report["failures"]))
+            self.assertEqual(pending.read_bytes(), b"recoverable newer state")
+            self.assertFalse(report["gameplay_verified"])
+
+    def test_only_tmp_without_primary_does_not_look_like_empty_new_world(self):
+        with tempfile.TemporaryDirectory() as path:
+            root = Path(path)
+            mod_dir = root / "horizon-civilizations"
+            mod_dir.mkdir()
+            (mod_dir / "world.json.tmp").write_bytes(b"first interrupted write")
+            report = mod.inspect_save(root)
+            self.assertEqual(report["status"], "FAIL")
+            self.assertTrue(any("world.json.tmp" in reason
+                                for reason in report["failures"]))
+            self.assertTrue(any("world.json missing" in reason
+                                for reason in report["failures"]))
+            self.assertEqual((mod_dir / "world.json.tmp").read_bytes(),
+                             b"first interrupted write")
+
     def test_invalid_and_duplicate_uuid_fail(self):
         with tempfile.TemporaryDirectory() as path:
             root = Path(path)
