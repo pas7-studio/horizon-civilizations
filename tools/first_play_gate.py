@@ -41,13 +41,18 @@ class StepResult:
 
 
 def planned_steps(root: Path, native_check: bool, build_client: bool) -> list[Step]:
-    steps = [Step("cargo-fmt", ["cargo", "fmt", "--all", "--check"])]
+    # Compiler errors are actionable earlier than large rustfmt diffs.
+    # Keep format and Clippy strict: successful compilation alone never
+    # produces PASS if formatting or lint checks fail. No format mutations.
+    steps = [
+        Step("cargo-test", ["cargo", "test"], 1800),
+        Step("clippy", ["cargo", "clippy", "--all-targets", "--", "-D", "warnings"], 1800),
+        Step("cargo-fmt", ["cargo", "fmt", "--all", "--check"]),
+    ]
     for file in sorted((root / "mixins/civilizations").glob("*.rs")):
         steps.append(Step("rustfmt-" + file.stem,
                           ["rustfmt", "--edition", "2024", "--check", str(file)]))
     steps += [
-        Step("clippy", ["cargo", "clippy", "--all-targets", "--", "-D", "warnings"], 1800),
-        Step("cargo-test", ["cargo", "test"], 1800),
         Step("python-unittest", [sys.executable, "-m", "unittest", "discover",
                                  "-s", "tests", "-p", "test_*.py", "-v"], 1200),
         Step("source-package", [sys.executable, "tools/package.py"]),
