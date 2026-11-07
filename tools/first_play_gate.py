@@ -19,7 +19,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-DEFAULT_BRANCH = "chore/first-play-native-validation-v0115"
+DEFAULT_BRANCH = "fix/first-play-binary-evidence-v0115"
 
 
 @dataclass(frozen=True)
