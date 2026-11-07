@@ -55,3 +55,7 @@ Design caveats:
 - Rust tests were *added* for deterministic plan, legacy saves and construction progress/recovery but **cannot run here**, because Rust toolchain and network downloads are unavailable.
 - Python packaging/structure suite: **4/4 passed**; `.hnmod` reproducible. No Rust compile, mixin transform, server launch, in-game placement or load test has run. This is NOT a player-ready release.
 - Critical remaining risk: engine/mod JSON and Minecraft chunk saves are independent; the recheck reduces but cannot prove atomic consistency. Native pathfinding and console command behavior need real E2E on the pinned Horizon revision.
+
+## GitHub CI observations (2026-11-07)
+
+The first run stopped at rustfmt; an automated formatting capture gate followed. Clippy then requested `u64::is_multiple_of(4)` and the native mixin stage rejected upstream's `CLAUDE.md` symlink. These two defects are corrected in source but must pass a new CI run. Gameplay E2E remains unverified.

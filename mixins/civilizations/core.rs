@@ -614,7 +614,7 @@ impl World {
             for (a, b) in pairs {
                 let a_power = self.settlements[&a].count(Job::Guard) + self.settlements[&a].quantity(Good::Iron) / 8;
                 let b_power = self.settlements[&b].count(Job::Guard) + self.settlements[&b].quantity(Good::Iron) / 8;
-                if self.day % 4 == 0 {
+                if self.day.is_multiple_of(4) {
                     let target = if a_power >= b_power { b } else { a };
                     let s = self.settlements.get_mut(&target).expect("known settlement");
                     s.morale = (s.morale - 3).max(-100);

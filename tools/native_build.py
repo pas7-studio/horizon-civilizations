@@ -36,6 +36,19 @@ def checkout_repo(url: str, directory: Path, revision: str) -> None:
         raise RuntimeError(f'dirty checkout at {directory}; refused')
 
 
+def prepare_pristine_source(checkout: Path, staged: Path) -> None:
+    """Make a symlink-free copy for horizon-mixins without touching pinned Git."""
+    if staged.exists():
+        shutil.rmtree(staged)
+    shutil.copytree(
+        checkout, staged, symlinks=False,
+        ignore=shutil.ignore_patterns('.git', 'target'),
+    )
+    links = [str(path.relative_to(staged)) for path in staged.rglob('*') if path.is_symlink()]
+    if links:
+        raise RuntimeError(f'unresolved symlinks in native stage: {links}')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--test', action='store_true', help='run Horizon library tests after cargo check')
@@ -44,15 +57,17 @@ def main():
         if not shutil.which(name):
             raise SystemExit(f'{name} not installed. Install Rust 1.95 and Git first.')
     source = NATIVE / 'horizon'
+    staged_source = NATIVE / 'horizon-stage'
     transformer = NATIVE / 'horizon-mixins'
     out = NATIVE / 'modded'
     plan = NATIVE / 'plan.json'
     checkout_repo(COMPAT['horizon_repository'], source, COMPAT['horizon_revision'])
     checkout_repo(COMPAT['horizon_mixins_repository'], transformer, COMPAT['horizon_mixins_revision'])
+    prepare_pristine_source(source, staged_source)
     run('cargo', 'build', '--locked', '--manifest-path', str(transformer / 'Cargo.toml'),
         '-p', 'horizon-mixins-cli')
     binary = transformer / 'target/debug' / ('horizon-mixins.exe' if os.name == 'nt' else 'horizon-mixins')
-    common = ['--workspace', str(source), '--mods', str(ROOT / 'mixins')]
+    common = ['--workspace', str(staged_source), '--mods', str(ROOT / 'mixins')]
     run(str(binary), 'plan', *common, '--out', str(plan))
     if out.exists():
         shutil.rmtree(out)
