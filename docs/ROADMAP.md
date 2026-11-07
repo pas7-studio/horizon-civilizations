@@ -273,3 +273,31 @@ play. That was a **product gap**, not cosmetic polish.
   actual graphical carried-stack/delivery animations.
 - [ ] Warehousing ownership policies, physical bakery, lumberyard/quarry,
   walkable roads and pathfinding under actual world conditions.
+
+## v0.1.14 functional bakery and village inventory protection
+
+- [x] Autonomously reserve a real protected bakery plot at a safe loaded
+  5×5 natural site after a town hall and living, UUID-bound workers exist.
+- [x] Original physical bakery blueprint: crafting table + smoker, full
+  hut foundation/walls/roof/door, crash-reconciled native block placement.
+- [x] Builders first fetch 24 actual logs and 33 cobble from public hall
+  barrels through the saved native transfer journal, then travel and build.
+- [x] Bakers first withdraw three actual native wheat items, work near
+  an intact completed bakery, consume the exact recipe and return one
+  bread receipt to a physical hall steward for native barrel insertion.
+- [x] Source-based village supply planning now includes physical native
+  barrel counts + incoming receipts + held construction materials; avoids
+  gathering indefinitely from already-filled real storage.
+- [x] Native hopper move event blocks transfer to/from civic barrels;
+  native block-break event protects public structures and private bought
+  parcels while preserving owner's land-edit rights and OP recovery.
+- [x] /civ bakery read-only diagnostics expose physical building progress,
+  ingredient escrow, bread in transit and batch counter.
+- [ ] Run all Rust/Python tests and native Horizon build locally; verify
+  real NPC routes, block placement, actual barrel contents, hoopers and
+  protection semantics in disposable Minecraft worlds.
+- [ ] Manual recovery for interrupted multi-file native transactions and
+  proper engine-level atomicity, real NPC carried-stack visual, workshop
+  GUI, logistics carts/roads, bread consumption and connected economy.
+- [ ] Next physical workshops: lumberyard/replanting, mine/quarry,
+  blacksmith and market with native item recipes; autonomous worldgen.
