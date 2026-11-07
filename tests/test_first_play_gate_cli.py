@@ -77,7 +77,8 @@ class LocalReleaseGateHarnessTests(unittest.TestCase):
             if name == "cargo":
                 text = ('@echo off\n'
                         'if "%1"=="test" if "%FAIL_TEST%"=="yes" exit /b 9\n'
-                        'if "%1"=="test" if "%COMPILER_DIAGNOSTIC%"=="yes" (echo error[E0425]: unknown value in native actor code& exit /b 101)\n'
+                        'if "%1"=="test" if "%COMPILER_DIAGNOSTIC%"=="yes" echo error[E0425]: unknown value in native actor code\n'
+                        'if "%1"=="test" if "%COMPILER_DIAGNOSTIC%"=="yes" exit /b 101\n'
                         'if "%1"=="fmt" if "%FAIL_FORMAT%"=="yes" exit /b 8\n'
                         'echo cargo 1.95.0 (mock)\n')
             elif name == "rustc":
