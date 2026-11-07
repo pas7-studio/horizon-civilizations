@@ -1,3 +1,48 @@
+## Real bread meals for villagers (Draft PR #35 — native E2E pending)
+
+The village's ten residents now have a **physical meal service** after
+their town hall opens. Each living, UUID-linked villager walks to the
+public dining/warehouse entrance. The real steward must also be nearby.
+One day permits one real native `minecraft:bread` per resident, removed
+only from a loaded official barrel via the existing Planned → Issued →
+observed/Blocked write-ahead journal. No abstract food, unseen mob,
+or unauthenticated name can substitute for a native receipt.
+
+A missed meal day increases a separate consecutive shortage counter and
+lowers morale by 2. Fully served days clear the shortage and recover 1
+morale. Existing abstract hunger stays distinct. Use **`/civ meals NAME`**,
+the Treasury sign in the town hall to
+see actual physical feeding status. An already-issued external extraction
+is never reissued on restart; an unissued intent can safely be abandoned
+if the recipient dies or leaves before it is sent.
+
+Nine Rust domain tests and fifteen Python source contracts have been
+written for this feature. **They have not been run against a native
+Horizon build here.** Visible bread-eating animations and full
+survival-related death mechanics are still future work.
+
+## Independent NPC-founded settlements (Draft PR #35)
+
+The mod now has a **source implementation** of natural frontier founding, not
+only OP-issued `/civ found`. In the Overworld, once every 2,400 loaded ticks
+the authoritative host surveys a small set of sites roughly 88–91 blocks
+from a real explorer, with a minimum 192-block exclusion near existing towns.
+Both a fully natural, loaded 5×5 civic plot **and ten separately safe loaded
+NPC spawn positions** must be available before any settlement is saved.
+No chunk generation, teleporting, block clearing or forced loading occurs.
+
+At most **eight** independently NPC-founded villages may exist in a world.
+They have ten original residents, real-material construction and autonomy
+on by default, but no human founder, invented player title or free player
+coins. The existing manual OP founding flow is unchanged. Players can locate
+independent communities with **`/civ nearby`** (nearest four in their current
+dimension, coordinates and town hall state), talk to residents and join them.
+
+**Assurance:** 6 new Rust domain tests and 11 Python source contracts
+authored; these remain unexecuted by a native Rust/Horizon build in this
+environment. Do not consider automatic world generation or NPC gameplay
+verified until disposable-world E2E.
+
 ## Windows first-play launcher and recovery audit (Draft PR #34)
 
 A Windows GUI-subsystem executable such as Horizon Launcher can return to
