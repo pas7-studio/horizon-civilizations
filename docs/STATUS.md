@@ -11,8 +11,12 @@ GitHub Actions remain deliberately disabled.
   blockers. Includes aggregate bakery + hut real-resource requirements.
 - [x] No new world mutation path, saved state, external item transfer or
   worldgen side effects introduced by this diagnostic.
-- [x] Six Python source-contract tests authored; runtime execution not
-  performed. Tests do not prove live NPC navigation.
+- [x] Bounded real-bread restocking: baker stops requesting wheat or crafting
+  once native barrel bread plus confirmed pending delivery reaches two loaves
+  per living resident (max 64). Unavailable barrels pause production; full
+  bread buffer does not block unrelated warehouse deposits.
+- [x] Three Rust domain tests and eleven Python source contracts written;
+  executable and native gameplay verification still pending.
 - [ ] Local Rust/Python suites, pinned native Horizon compilation, Windows
   executable and disposable game E2E required. Use latest branch; an old
   `main` executable does NOT include this diagnostic or warehouse changes.
