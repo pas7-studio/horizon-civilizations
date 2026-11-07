@@ -61,7 +61,8 @@ class OperatorWarehouseRecoveryContracts(unittest.TestCase):
         self.assertIn("physical_construction_shortfall(village, &stored)", boards)
         self.assertIn("village.barrel_transfer.is_some()", boards)
         self.assertIn("village.market_purchase.is_some()", boards)
-        self.assertIn('"PENDING TX".to_owned()', boards)
+        self.assertIn("journal_unsettled", boards)
+        self.assertIn('sl("Trade pending"', CORE)
         self.assertNotIn("HUT_WOOD_LOGS", boards)
 
 

@@ -16,7 +16,7 @@ class CivicHallWarehouseContracts(unittest.TestCase):
     def test_hall_is_distinct_from_abstract_houses(self):
         self.assertIn("pub fn town_hall_plan(origin:", CORE)
         self.assertIn("pub fn inspect_town_hall(", CORE)
-        for block in ("minecraft:barrel", "minecraft:oak_sign", "minecraft:lectern"):
+        for block in ("minecraft:barrel", "minecraft:oak_wall_sign", "minecraft:lectern"):
             self.assertIn(block, CORE)
         self.assertIn("pub hall_job: Option<VisualBuildJob>", CORE)
         self.assertIn("pub hall_complete: bool", CORE)
@@ -109,12 +109,15 @@ class CivicHallWarehouseContracts(unittest.TestCase):
 
     def test_real_signs_show_mayor_and_material_shortages(self):
         self.assertIn("pub fn hall_board_positions(", CORE)
+        self.assertIn("pub fn hall_all_board_positions(", CORE)
+        self.assertIn("pub fn render_hall_boards(", CORE)
         self.assertIn("fn refresh_hall_boards(", GLUE)
-        self.assertIn("minecraft:oak_sign", GLUE)
-        self.assertIn("MAYOR {mayor}", GLUE)
-        self.assertIn("WOOD -{wood_missing}", GLUE)
-        self.assertIn("STONE -{stone_missing}", GLUE)
-        self.assertIn("NO HOME {homeless}", GLUE)
+        self.assertIn("minecraft:oak_wall_sign", GLUE)
+        # Text now comes from the pure, unit-tested renderer in the core.
+        self.assertIn("render_hall_boards(&HallBoardInput", GLUE)
+        for text in ('"Town Hall"', 'format!("Mayor {mayor}")', '"VILLAGE NEEDS"',
+                     'format!("{label} {} -{missing}"', 'format!("Homeless {homeless}")'):
+            self.assertIn(text, CORE)
         self.assertIn("front_text:", GLUE)
         self.assertIn('if action == "hall" || action == "warehouse"', GLUE)
 

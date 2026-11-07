@@ -4,7 +4,7 @@ use crate::game::{
     civilizations_core::{farm_plan, hut_plan, town_hall_plan, bakery_plan, hall_storage_positions,
         BarrelDirection, BarrelPhase, inspect_farm, inspect_hut, inspect_town_hall, inspect_bakery, is_ground,
         is_rooted_oak_harvest_origin, short_oak_stem_height, inspect_oak_stem,
-        native_worker_near, native_worker_reaches_block,
+        native_worker_near, native_worker_reaches_block, PostKind, POST_RADIUS,
         BuildInspection, DailyPhase, FarmBlock, FarmDecision, FarmStage, Good, HomeSlot, Job, VisualBuildJob,
         World, inspect_home, hall_board_positions, HOUSING_PLOT_OFFSETS, MAX_HOUSING_SURVEY_RESULTS,
         MAX_SIM_DAYS},
@@ -15,6 +15,7 @@ use crate::game::{
 use horizon_client::text::{self, Text};
 use horizon_client::items::ItemStack;
 use horizon_core::geometry::Direction;
+use std::collections::BTreeMap;
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
@@ -156,6 +157,7 @@ pub fn register(commands: &mut Vec<NativeCommand>) {
         "civ council <name:word>", "civ forecast <name:word>",
         "civ plots <name:word>", "civ development <name:word>",
         "civ hall <name:word>", "civ warehouse <name:word>", "civ bakery <name:word>",
+        "civ posts <name:word>",
         "civ diagnose <name:word>",
         "civ construction <name:word>", "civ farming <name:word>",
         "civ harvests <name:word>",
@@ -168,6 +170,7 @@ pub fn register(commands: &mut Vec<NativeCommand>) {
         "civ found <name:word>", "civ actors <name:word>",
         "civ reconcile <name:word>",
         "civ day [days:integer]", "civ construct <name:word>",
+        "civ post <name:word> <kind:word>",
         "civ approvehouse <name:word> <slot:integer> <y:integer>",
         "civ autonomy <name:word> <mode:word>",
         "civ barrelcheck <name:word>",
@@ -455,8 +458,14 @@ fn build_town_hall_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Res
                 }));
             if !near { return Ok(()); }
             let [x, y, z] = position;
+            // Plans store the block NAME because that is what a world read
+            // returns; a wall sign still needs an explicit facing to place.
+            let placed: &'static str = match new_block {
+                "minecraft:oak_wall_sign" => "minecraft:oak_wall_sign[facing=north]",
+                other => other,
+            };
             let cmd = format!(
-                "execute in {dimension} if block {x} {y} {z} {old_block} run setblock {x} {y} {z} {new_block} replace"
+                "execute in {dimension} if block {x} {y} {z} {old_block} run setblock {x} {y} {z} {placed} replace"
             );
             if !game.native_run_command(&cmd) {
                 log::warn!("[civilizations] civic hall block command refused: {cmd}");
@@ -980,7 +989,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
     let actor = format!("{:032x}", player.uuid);
     let action = args.next().unwrap_or("help");
     if action == "help" {
-        reply(game, "Civilizations: /civ list | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | hall <name> | warehouse <name> | diagnose <name> | buyplot <name> | buyhouse <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, barrelcheck <name>, resolvebarrel <name> confirm|cancel <observed_count>, gathercheck <name>, discardgather <name> intact|empty, day [days], construct <name>, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
+        reply(game, "Civilizations: /civ list | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | hall <name> | warehouse <name> | posts <name> | diagnose <name> | buyplot <name> | buyhouse <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, barrelcheck <name>, resolvebarrel <name> confirm|cancel <observed_count>, gathercheck <name>, discardgather <name> intact|empty, day [days], construct <name>, post <name> lumber|quarry, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
         return;
     }
     if action == "list" {
@@ -1524,6 +1533,23 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
         reply(game, message);
         return;
     }
+    if action == "posts" {
+        let name = args.next().unwrap_or("");
+        let Some(s) = world.by_name(name) else { error(game, "unknown settlement"); return; };
+        let text = if s.posts.is_empty() {
+            format!("{} has no work camps yet. OP: stand at a clear spot 8..80 blocks from center and /civ post {} lumber|quarry", s.name, s.name)
+        } else {
+            let list: Vec<String> = s.posts.iter().map(|post| {
+                let worker = post.worker_id
+                    .and_then(|id| s.residents.iter().find(|r| r.id == id && r.alive))
+                    .map(|r| r.name.clone()).unwrap_or_else(|| "unassigned".into());
+                format!("{} at {:?} ({worker})", post.kind.name(), post.origin)
+            }).collect();
+            format!("{} camps: {}", s.name, list.join(" | "))
+        };
+        reply(game, text);
+        return;
+    }
     if action == "construction" {
         let name = args.next().unwrap_or("");
         let Some(s) = world.by_name(name) else { error(game, "unknown settlement"); return; };
@@ -1818,6 +1844,30 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
                 village.name, site, village.name
             ))
         })(),
+        "post" if player.permission >= 2 => (|| {
+            let name = args.next().ok_or("usage: /civ post <name> lumber|quarry")?;
+            let kind = PostKind::parse(args.next().ok_or("kind: lumber or quarry")?)
+                .ok_or("kind must be lumber or quarry")?;
+            let s = previous.by_name(name).ok_or("unknown settlement")?;
+            if s.dimension != player.dimension {
+                return Err("enter the settlement dimension".into());
+            }
+            let site = player.position.map(|v| v.floor() as i32);
+            let below = world_block(game, &s.dimension, [site[0], site[1] - 1, site[2]])
+                .ok_or("camp site not loaded")?;
+            if !is_ground(&below) {
+                return Err(format!("stand on natural ground, found {below}"));
+            }
+            let at = world_block(game, &s.dimension, site).ok_or("camp site not loaded")?;
+            if at != "minecraft:air" {
+                return Err(format!("camp cell is blocked by {at}"));
+            }
+            state.world.as_mut().unwrap().add_post(s.id, kind, site)?;
+            Ok(format!(
+                "{} {} camp reserved at {:?}; workers gather within {} blocks. Use /civ posts {}.",
+                s.name, kind.name(), site, POST_RADIUS, name
+            ))
+        })(),
         "construct" if player.permission >= 2 => (|| {
             let name = args.next().ok_or("usage: /civ construct <name>")?;
             let s = previous.by_name(name).ok_or("unknown settlement")?;
@@ -2015,7 +2065,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
                 Ok(format!("Spawned and UUID-linked {spawned} villagers. Reopen world and verify /civ roster {name}."))
             }
         })(),
-        "found" | "day" | "war" | "peace" | "actors" | "construct" | "approvehouse" | "autonomy" | "farm" | "recoverfarm" | "reconcile" | "barrelcheck" | "resolvebarrel" | "gathercheck" | "discardgather" => Err("requires server operator level 2".into()),
+        "found" | "day" | "war" | "peace" | "actors" | "construct" | "post" | "approvehouse" | "autonomy" | "farm" | "recoverfarm" | "reconcile" | "barrelcheck" | "resolvebarrel" | "gathercheck" | "discardgather" => Err("requires server operator level 2".into()),
         _ => Err("unknown subcommand. Use /civ help".into()),
     };
     match result {
@@ -2597,21 +2647,44 @@ fn autonomous_village_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Resu
             // Inspect at most 320 of 1,681 X/Z candidates per planner
             // turn, with up to 6 nearby Y levels. Never scan thousands of
             // chunks at once; rotate to visit new places on later turns.
+            // A work camp turns ad-hoc gathering into a fixed, visible post.
+            // Without one, the first found natural source reserves a camp at
+            // the worker stand; later scans stay inside its radius.
+            let camp_kind = if good == Good::Wood { PostKind::Lumber } else { PostKind::Quarry };
+            let camp = village.posts.iter().find(|post| post.kind == camp_kind).map(|post| post.origin);
+            let (base_x, base_y, base_z) = {
+                let base = camp.unwrap_or(village.center);
+                (base[0], base[1], base[2])
+            };
             let candidates = 41_usize * 41;
             let start = ((state.physical_ticks / 100) as usize * 101) % candidates;
             for step in 0..320_usize {
                 let index = (start + step) % candidates;
                 let dx = (index / 41) as i32 * 2 - 40;
                 let dz = (index % 41) as i32 * 2 - 40;
+                if camp.is_some() && (dx.abs() > POST_RADIUS || dz.abs() > POST_RADIUS) {
+                    continue;
+                }
                     let (Some(x), Some(z)) = (
-                        village.center[0].checked_add(dx),
-                        village.center[2].checked_add(dz)
+                        base_x.checked_add(dx),
+                        base_z.checked_add(dz)
                     ) else { continue; };
                     for dy in [-2_i32, -1, 0, 1, 2, 3] {
-                        let Some(y) = village.center[1].checked_add(dy) else { continue; };
+                        let Some(y) = base_y.checked_add(dy) else { continue; };
                         let position = [x, y, z];
                         if !seems_natural_resource(game, &dimension, position, good) { continue; }
                         let Some(stand) = gather_stand(game, &dimension, position) else { continue; };
+                        // No camp yet: reserve this stand as the camp and let
+                        // the next planner turn pick the actual resource.
+                        if camp.is_none() {
+                            let prior = state.world.as_ref().unwrap().clone();
+                            if state.world.as_mut().unwrap().add_post(id, camp_kind, stand).is_ok() {
+                                save_autonomous(state, prior)?;
+                                log::info!("[civilizations] {} opened a {} camp at {:?}",
+                                    village.name, camp_kind.name(), stand);
+                                return Ok(());
+                            }
+                        }
                         // Preserve the full pre-image, not merely the
                         // former one-block GatherJob. A stem plan also
                         // mutates oak_stem; both fields must roll back if
@@ -2713,67 +2786,155 @@ fn autonomous_village_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Resu
     Ok(())
 }
 
-/// Refresh two actual native Minecraft sign tile entities with readable
-/// information. Only the mod's expected signs in a COMPLETED hall qualify.
-/// No change to stock, players or civic JSON is made by this operation.
+/// Last text written to each hall board, so an unchanged board costs no
+/// command. Keyed by dimension and position; a missing sign block always
+/// forces a rewrite regardless of this cache.
+static BOARD_CACHE: Mutex<BTreeMap<(String, [i32; 3]), String>> = Mutex::new(BTreeMap::new());
+
+/// SNBT for one sign face. `rich` colors each line; the plain form is the
+/// fallback for game versions whose sign NBT rejects text components.
+fn sign_data_command(
+    dimension: &str, pos: [i32; 3], spec: &crate::game::civilizations_core::SignSpec, rich: bool,
+) -> String {
+    let quote = |s: &str| format!("'{}'", s.replace('\\', "\\\\").replace('\'', "\\'"));
+    let messages: Vec<String> = spec.lines.iter().map(|line| {
+        if rich {
+            format!(
+                "{{text:{},color:\"{}\"{}}}",
+                quote(&line.text), line.color.name(),
+                if line.bold { ",bold:1b" } else { "" }
+            )
+        } else {
+            quote(&line.text)
+        }
+    }).collect();
+    let [x, y, z] = pos;
+    format!(
+        "execute in {dimension} if block {x} {y} {z} minecraft:oak_wall_sign run data merge block {x} {y} {z} {{front_text:{{messages:[{}],color:\"black\",has_glowing_text:{}b}}}}",
+        messages.join(","), if spec.glow { 1 } else { 0 }
+    )
+}
+
+/// Refresh the civic hall's six native wall signs from live barrel contents
+/// and saved village state. Only COMPLETED halls qualify. No stock, player
+/// or civic JSON is changed by this operation.
 fn refresh_hall_boards(game: &mut Game<'_>, world: &World) {
+    use crate::game::civilizations_core::{
+        hall_all_board_positions, legacy_hall_board_positions, render_hall_boards, HallBoardInput,
+    };
     let dimension = game.dim.id().to_owned();
-    let mut commands = Vec::new();
     for village in world.settlements.values()
         .filter(|v| v.dimension == dimension && v.hall_complete)
     {
-        let mayor = village.residents.iter()
-            .find(|r| r.alive && r.job == Job::Merchant)
-            .map(|r| r.name.as_str()).unwrap_or("NONE");
-        let (_, _, homeless) = village.physical_housing();
-        // Never print legacy JSON stock as though it is a visible barrel.
         // If a container is missing or unloaded, keep the signs unchanged.
         let Some(stored) = physical_barrel_stock(game, &dimension, village.center) else {
             continue;
         };
-        // Signs use the SAME combined physical-demand routine as the actual
-        // gather planner. Never display stale "0 needed" while an external
-        // native receipt may still be pending or the barrel is unavailable.
+        // Same combined physical-demand routine as the gather planner.
         let journal_unsettled = village.barrel_transfer.is_some()
             || village.market_purchase.is_some();
         let (wood_missing, stone_missing) =
             crate::game::civilizations_core::physical_construction_shortfall(village, &stored);
-        let [mayor_sign, needs_sign] = hall_board_positions(village.center);
-        for (pos, lines) in [
-            (mayor_sign, [
-                "TOWN HALL".to_owned(), village.name.clone(),
-                format!("MAYOR {mayor}"), format!("POP {}", village.population()),
-            ]),
-            (needs_sign, if journal_unsettled {
-                ["STOCK CHECK".to_owned(),
-                 "PENDING TX".to_owned(),
-                 "SEE WAREHOUSE".to_owned(),
-                 format!("NO HOME {homeless}")]
-            } else {
-                ["VILLAGE NEEDS".to_owned(),
-                 format!("WOOD -{wood_missing}"),
-                 format!("STONE -{stone_missing}"),
-                 format!("NO HOME {homeless}")]
-            }),
-        ] {
-            if world_block(game, &dimension, pos).as_deref() != Some("minecraft:oak_sign") {
+        let specs = render_hall_boards(&HallBoardInput {
+            village, stored: &stored, wood_missing, stone_missing, journal_unsettled,
+        });
+        let positions = hall_all_board_positions(village.center);
+        let legacy = legacy_hall_board_positions(village.center);
+        for (index, (pos, spec)) in positions.iter().zip(specs.iter()).enumerate() {
+            let pos = *pos;
+            let [x, y, z] = pos;
+            let mut commands = Vec::new();
+            let present = world_block(game, &dimension, pos).as_deref()
+                == Some("minecraft:oak_wall_sign");
+            if !present {
+                if index < 2 {
+                    // A hall completed before wall boards existed still carries
+                    // standing signs on its floor: clear them first.
+                    let [ox, oy, oz] = legacy[index];
+                    if world_block(game, &dimension, legacy[index]).as_deref()
+                        == Some("minecraft:oak_sign")
+                    {
+                        commands.push(format!(
+                            "execute in {dimension} if block {ox} {oy} {oz} minecraft:oak_sign run setblock {ox} {oy} {oz} minecraft:air replace"
+                        ));
+                    }
+                } else if world_block(game, &dimension, [x, y, z + 1]).as_deref()
+                    != Some("minecraft:oak_planks")
+                {
+                    // Extra boards need the real wall behind them.
+                    continue;
+                }
+                commands.push(format!(
+                    "execute in {dimension} if block {x} {y} {z} minecraft:air run setblock {x} {y} {z} minecraft:oak_wall_sign[facing=north] replace"
+                ));
+            }
+            let fingerprint = format!("{:?}{}", spec.lines, spec.glow);
+            let key = (dimension.clone(), pos);
+            if present && BOARD_CACHE.lock().unwrap().get(&key) == Some(&fingerprint) {
                 continue;
             }
-            // All printed inputs originate from names constrained to ASCII
-            // letters/digits/underscore and bounded integer counters.
-            let json_lines: Vec<String> = lines.iter().map(|line| {
-                format!("'{}'", serde_json::json!({"text": line}).to_string())
-            }).collect();
-            let [x, y, z] = pos;
+            for command in &commands {
+                if !game.native_run_command(command) {
+                    log::warn!("[civilizations] town hall sign placement unsupported: {command}");
+                }
+            }
+            let rich = sign_data_command(&dimension, pos, spec, true);
+            let ok = game.native_run_command(&rich) || {
+                log::warn!("[civilizations] colored sign text refused, using plain text");
+                game.native_run_command(&sign_data_command(&dimension, pos, spec, false))
+            };
+            if ok {
+                BOARD_CACHE.lock().unwrap().insert(key, fingerprint);
+            } else {
+                log::warn!("[civilizations] town hall sign refresh unsupported at {pos:?}");
+            }
+        }
+    }
+}
+
+/// Place or refresh one readable sign at each work camp. Signs are plain NBT
+/// strings; the world shows them verbatim, so no component JSON is written.
+fn refresh_post_boards(game: &mut Game<'_>, world: &World) {
+    let dimension = game.dim.id().to_owned();
+    let mut commands = Vec::new();
+    for village in world.settlements.values()
+        .filter(|v| v.dimension == dimension && !v.posts.is_empty())
+    {
+        for post in &village.posts {
+            let worker = post.worker_id
+                .and_then(|id| village.residents.iter().find(|r| r.id == id && r.alive))
+                .map(|r| r.name.clone())
+                .unwrap_or_else(|| "NO WORKER".into());
+            let lines = [
+                post.kind.label().to_owned(),
+                worker,
+                format!("RADIUS {}", POST_RADIUS),
+                post.kind.good().as_str().to_uppercase(),
+            ];
+            let quoted: Vec<String> = lines
+                .iter()
+                .map(|line| format!("'{}'", line.replace('\\', "\\\\").replace('\'', "\\'")))
+                .collect();
+            let [x, y, z] = post.origin;
+            // The camp cell itself stays air for the worker; the sign stands
+            // one block beside it when that cell is clear.
+            let [sx, sy, sz] = [x + 1, y, z];
+            let free = world_block(game, &dimension, [sx, sy, sz])
+                .is_some_and(|block| block == "minecraft:air");
+            if free {
+                commands.push(format!(
+                    "execute in {dimension} if block {sx} {sy} {sz} minecraft:air run setblock {sx} {sy} {sz} minecraft:oak_sign replace"
+                ));
+            }
             commands.push(format!(
-                "execute in {dimension} if block {x} {y} {z} minecraft:oak_sign run data merge block {x} {y} {z} {{front_text:{{messages:[{}]}}}}",
-                json_lines.join(",")
+                "execute in {dimension} if block {sx} {sy} {sz} minecraft:oak_sign run data merge block {sx} {sy} {sz} {{front_text:{{messages:[{}],color:\"black\",has_glowing_text:0b}}}}",
+                quoted.join(",")
             ));
         }
     }
     for command in commands {
         if !game.native_run_command(&command) {
-            log::warn!("[civilizations] town hall sign refresh unsupported: {command}");
+            log::warn!("[civilizations] camp sign refresh unsupported: {command}");
         }
     }
 }
@@ -2922,6 +3083,17 @@ fn gather_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
             })
         }));
     let Some(selected_worker) = selected else { return Ok(()); };
+    // The camp keeps the same resident across restarts: delivery credit is
+    // checked against that ID at the hall, never against whoever is nearby.
+    if let Some(kind) = match job.good {
+        Good::Wood => Some(PostKind::Lumber),
+        Good::Stone => Some(PostKind::Quarry),
+        _ => None,
+    } {
+        if state.world.as_mut().unwrap().set_post_worker(id, kind, selected_worker).is_err() {
+            log::warn!("[civilizations] camp worker binding skipped for settlement {id}");
+        }
+    }
     if job.worker_id.is_none() {
         // Save this exact resident ID BEFORE we persist Issued or send the
         // native edit. A different miner at the hall cannot claim delivery.
@@ -2966,6 +3138,9 @@ pub fn level_tick(game: &mut Game<'_>, dimension: &str) {
     if state.physical_ticks % 400 == 0 {
         if let Some(world) = state.world.as_ref() {
             refresh_hall_boards(game, world);
+        }
+        if let Some(world) = state.world.as_ref() {
+            refresh_post_boards(game, world);
         }
     }
     if state.physical_ticks % 100 == 0 {

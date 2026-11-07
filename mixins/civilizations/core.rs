@@ -116,6 +116,64 @@ pub enum Job {
     Merchant,
 }
 
+/// A persistent work camp. Gathering is restricted to its radius so a
+/// villager has a real, visible workplace instead of roaming the whole map.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum PostKind {
+    Lumber,
+    Quarry,
+}
+
+impl PostKind {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Lumber => "lumber",
+            Self::Quarry => "quarry",
+        }
+    }
+    pub fn parse(text: &str) -> Option<Self> {
+        match text {
+            "lumber" | "lumberjack" | "wood" => Some(Self::Lumber),
+            "quarry" | "stone" | "mine" => Some(Self::Quarry),
+            _ => None,
+        }
+    }
+    pub fn good(self) -> Good {
+        match self {
+            Self::Lumber => Good::Wood,
+            Self::Quarry => Good::Stone,
+        }
+    }
+    pub fn job(self) -> Job {
+        match self {
+            Self::Lumber => Job::Lumberjack,
+            Self::Quarry => Job::Miner,
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Lumber => "LUMBER CAMP",
+            Self::Quarry => "QUARRY",
+        }
+    }
+}
+
+/// A camp is one saved site with an optional assigned resident. It is a
+/// site, not an inventory: goods still arrive only through real receipts.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct WorkPost {
+    pub kind: PostKind,
+    pub origin: [i32; 3],
+    /// Stable citizen ID assigned so the same worker services this camp.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub worker_id: Option<u64>,
+}
+
+/// How far from its camp a worker may search for natural resources.
+pub const POST_RADIUS: i32 = 24;
+pub const MAX_POSTS: usize = 4;
+
 /// Physical actor presence is an authoritative 3D observation, not an
 /// X/Z-only check. A villager in a cave below the hall is not a courier.
 /// The target is the native block coordinate (centered in X/Z), while the
@@ -580,13 +638,21 @@ pub fn town_hall_plan(origin: [i32; 3]) -> Vec<HutBlock> {
     for (dx, dz, block) in [
         (-1, 1, "minecraft:barrel"),
         (1, 1, "minecraft:barrel"),
-        (-1, -1, "minecraft:oak_sign"),
-        (1, -1, "minecraft:oak_sign"),
         (0, 1, "minecraft:lectern"),
     ] {
         plan.push(HutBlock {
             pos: [origin[0] + dx, origin[1], origin[2] + dz],
             block, floor: false,
+        });
+    }
+    // Two readable wall signs flank the front door on the OUTSIDE of the
+    // north wall, at eye height. Standing signs on the floor were unreadable
+    // from outside and occupied the hall's own interior.
+    for dx in [-1, 1] {
+        plan.push(HutBlock {
+            pos: [origin[0] + dx, origin[1] + 1, origin[2] - 3],
+            block: "minecraft:oak_wall_sign",
+            floor: false,
         });
     }
     plan
@@ -707,8 +773,255 @@ pub struct BakeryWorkshop {
 /// Bulletin signs are real blocks inside the civic hall; the native adapter
 /// supplies validated, bounded sign text after the town hall is complete.
 pub fn hall_board_positions(origin: [i32; 3]) -> [[i32; 3]; 2] {
+    [[origin[0] - 1, origin[1] + 1, origin[2] - 3],
+     [origin[0] + 1, origin[1] + 1, origin[2] - 3]]
+}
+
+/// Where the pre-0.1.16 hall boards stood (standing signs inside the hall).
+/// Kept only so a completed hall can be migrated to wall signs in place.
+pub fn legacy_hall_board_positions(origin: [i32; 3]) -> [[i32; 3]; 2] {
     [[origin[0] - 1, origin[1], origin[2] - 1],
      [origin[0] + 1, origin[1], origin[2] - 1]]
+}
+
+/// All six civic-hall boards, in `render_hall_boards` order. The first two
+/// are part of the construction plan; the other four are added to already
+/// completed halls by the native adapter only where the wall behind exists.
+/// Row y+1: land, mayor, (door), needs, diplomacy. Row y+2: treasury, council.
+pub fn hall_all_board_positions(origin: [i32; 3]) -> [[i32; 3]; 6] {
+    let [x, y, z] = origin;
+    [[x - 1, y + 1, z - 3], [x + 1, y + 1, z - 3],
+     [x - 2, y + 1, z - 3], [x + 2, y + 1, z - 3],
+     [x - 1, y + 2, z - 3], [x + 1, y + 2, z - 3]]
+}
+
+/// A real sign line holds about 15 characters of the vanilla font.
+pub const SIGN_WIDTH: usize = 15;
+
+/// Semantic sign colors, chosen to stay readable on oak planks.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SignColor {
+    Black,
+    Heading,
+    Good,
+    Warn,
+    Alert,
+    Muted,
+}
+
+impl SignColor {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Black => "black",
+            Self::Heading => "dark_blue",
+            Self::Good => "dark_green",
+            Self::Warn => "#9A5B00",
+            Self::Alert => "dark_red",
+            Self::Muted => "dark_gray",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SignLine {
+    pub text: String,
+    pub color: SignColor,
+    pub bold: bool,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SignSpec {
+    pub lines: [SignLine; 4],
+    /// Glowing ink is reserved for alerts that need attention.
+    pub glow: bool,
+}
+
+impl SignSpec {
+    /// The same sign as four plain strings (no colors), for versions whose
+    /// sign NBT rejects rich text and for tests.
+    pub fn plain(&self) -> [&str; 4] {
+        [&self.lines[0].text, &self.lines[1].text, &self.lines[2].text, &self.lines[3].text]
+    }
+}
+
+/// Bounded single-line text: control characters removed, width limited.
+pub fn sign_fit(text: &str) -> String {
+    text.chars().filter(|c| !c.is_control()).take(SIGN_WIDTH).collect()
+}
+
+fn sl(text: impl AsRef<str>, color: SignColor) -> SignLine {
+    SignLine { text: sign_fit(text.as_ref()), color, bold: false }
+}
+
+fn sign_head(text: impl AsRef<str>) -> SignLine {
+    SignLine { text: sign_fit(text.as_ref()), color: SignColor::Heading, bold: true }
+}
+
+fn sign_blank() -> SignLine {
+    sl("", SignColor::Black)
+}
+
+/// ASCII progress bar such as `[#####-----]`, safe in every font.
+pub fn sign_bar(done: u32, total: u32, width: usize) -> String {
+    let filled = if total == 0 {
+        0
+    } else {
+        ((u64::from(done.min(total)) * width as u64) / u64::from(total)) as usize
+    };
+    format!("[{}{}]", "#".repeat(filled), "-".repeat(width - filled))
+}
+
+/// Verified inputs for the civic-hall boards. `stored` is the live snapshot
+/// of the two native hall barrels, never the abstract daily stock.
+pub struct HallBoardInput<'a> {
+    pub village: &'a Settlement,
+    pub stored: &'a [(Good, u32)],
+    pub wood_missing: u32,
+    pub stone_missing: u32,
+    pub journal_unsettled: bool,
+}
+
+/// Render the six hall boards. Pure and read-only: no ledger, block or save
+/// state is touched, so it can be called every refresh and unit tested.
+pub fn render_hall_boards(input: &HallBoardInput<'_>) -> [SignSpec; 6] {
+    let v = input.village;
+    let have = |good: Good| input.stored.iter()
+        .find(|(g, _)| *g == good).map_or(0, |(_, n)| *n);
+    let mayor = v.residents.iter().find(|r| r.alive && r.job == Job::Merchant)
+        .map_or("none", |r| r.name.as_str());
+    let (capacity, _, homeless) = v.physical_housing();
+    let shortage = input.wood_missing > 0 || input.stone_missing > 0;
+
+    let identity = SignSpec {
+        lines: [
+            sign_head(&v.name),
+            sl("Town Hall", SignColor::Black),
+            sl(format!("Mayor {mayor}"), SignColor::Black),
+            sl(format!("Pop {} Mood {}", v.population(), v.morale), SignColor::Muted),
+        ],
+        glow: false,
+    };
+
+    let needs = if input.journal_unsettled {
+        SignSpec {
+            lines: [
+                sign_head("WAREHOUSE"),
+                sl("Trade pending", SignColor::Warn),
+                sl("Check barrels", SignColor::Warn),
+                sl(format!("Homeless {homeless}"), SignColor::Muted),
+            ],
+            glow: true,
+        }
+    } else {
+        let resource_line = |label: &str, good: Good, missing: u32| {
+            if missing > 0 {
+                sl(format!("{label} {} -{missing}", have(good)), SignColor::Alert)
+            } else {
+                sl(format!("{label} {} OK", have(good)), SignColor::Good)
+            }
+        };
+        SignSpec {
+            lines: [
+                sign_head(if shortage { "VILLAGE NEEDS" } else { "STOCK OK" }),
+                resource_line("Wood", Good::Wood, input.wood_missing),
+                resource_line("Stone", Good::Stone, input.stone_missing),
+                if homeless > 0 {
+                    sl(format!("Homeless {homeless}"), SignColor::Warn)
+                } else {
+                    sl(format!("Homes {capacity} OK"), SignColor::Good)
+                },
+            ],
+            glow: shortage,
+        }
+    };
+
+    let forecast = v.forecast_abstract_days(COUNCIL_FORECAST_DAYS);
+    let hunger = forecast.iter().find(|d| d.starving_days > 0).map(|d| d.offset);
+    let food_line = if v.starving_days > 0 {
+        sl("STARVING NOW", SignColor::Alert)
+    } else if let Some(day) = hunger {
+        sl(format!("Hunger in {day}d"), SignColor::Warn)
+    } else {
+        sl("Food OK", SignColor::Good)
+    };
+    let treasury = SignSpec {
+        lines: [
+            sign_head("TREASURY"),
+            sl(format!("Coins {}", v.treasury_coins), SignColor::Black),
+            sl(format!("Bread {} Wht {}", have(Good::Bread), have(Good::Wheat)), SignColor::Black),
+            food_line,
+        ],
+        glow: v.starving_days > 0,
+    };
+
+    let council = match v.council_priorities().into_iter().next() {
+        Some(top) => {
+            let color = if top.urgency >= 90 { SignColor::Alert }
+                else if top.urgency >= 50 { SignColor::Warn } else { SignColor::Good };
+            SignSpec {
+                lines: [
+                    sign_head("COUNCIL SAYS"),
+                    sl(top.need.label().to_uppercase(), color),
+                    sl(format!("Urgency {}", top.urgency), color),
+                    sl("see /civ council", SignColor::Muted),
+                ],
+                glow: top.urgency >= 90,
+            }
+        }
+        None => SignSpec {
+            lines: [
+                sign_head("COUNCIL SAYS"),
+                sl("All calm", SignColor::Good),
+                sl("No urgent need", SignColor::Muted),
+                sign_blank(),
+            ],
+            glow: false,
+        },
+    };
+
+    let land = SignSpec {
+        lines: [
+            sign_head("LAND OFFICE"),
+            sl(format!("Plot {} coins", LAND_PRICE_COINS), SignColor::Black),
+            sl(format!("Sold {}/{}", v.player_parcels.len(), MAX_PLAYER_PARCELS), SignColor::Muted),
+            sl("/civ buyplot", SignColor::Muted),
+        ],
+        glow: false,
+    };
+
+    let wars = v.active_wars.len();
+    let friends = v.relationships.values().filter(|r| **r > 0).count();
+    let rivals = v.relationships.values().filter(|r| **r < 0).count();
+    let diplomacy = SignSpec {
+        lines: [
+            sign_head("DIPLOMACY"),
+            if wars > 0 {
+                sl(format!("AT WAR x{wars}"), SignColor::Alert)
+            } else {
+                sl("PEACE", SignColor::Good)
+            },
+            sl(format!("Friends {friends}"), SignColor::Black),
+            sl(format!("Rivals {rivals}"), SignColor::Black),
+        ],
+        glow: wars > 0,
+    };
+
+    [identity, needs, land, diplomacy, treasury, council]
+}
+
+/// Construction progress board text: `done` of `total` plan blocks.
+pub fn render_build_progress(title: &str, done: usize, total: usize, blocked: bool) -> SignSpec {
+    let total32 = total.min(u32::MAX as usize) as u32;
+    let done32 = done.min(u32::MAX as usize) as u32;
+    SignSpec {
+        lines: [
+            sign_head(format!("BUILDING {title}")),
+            sl(sign_bar(done32, total32, 10), if blocked { SignColor::Alert } else { SignColor::Good }),
+            sl(format!("Step {done}/{total}"), SignColor::Black),
+            if blocked { sl("BLOCKED", SignColor::Alert) } else { sign_blank() },
+        ],
+        glow: blocked,
+    }
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -1126,6 +1439,9 @@ pub struct Settlement {
     /// Optional one-field living crop simulation, retained across saves.
     #[serde(default)]
     pub farm: Option<FarmPlot>,
+    /// Lumber camps and quarries. Old saves load with none.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub posts: Vec<WorkPost>,
 }
 
 /// Compute *combined* outstanding construction demand using verified native
@@ -1710,6 +2026,29 @@ impl World {
             if village.visual_sites.len() as u32 > village.houses.saturating_sub(village.pending_visual_buildings) {
                 return Err("visual building count exceeds housing".into());
             }
+            if village.posts.len() > MAX_POSTS {
+                return Err("camp limit exceeded".into());
+            }
+            let mut camp_sites = BTreeSet::new();
+            for post in &village.posts {
+                if i64::from(post.origin[0]).abs() > 29_999_990
+                    || i64::from(post.origin[2]).abs() > 29_999_990
+                    || !(-2048..=2048).contains(&post.origin[1])
+                {
+                    return Err("camp outside world bounds".into());
+                }
+                if !camp_sites.insert(post.origin) {
+                    return Err("duplicate camp site".into());
+                }
+                if let Some(worker) = post.worker_id {
+                    let resident = village.residents.iter()
+                        .find(|r| r.id == worker && r.alive)
+                        .ok_or("camp worker is not an active resident")?;
+                    if resident.job != post.kind.job() {
+                        return Err("camp worker has the wrong job".into());
+                    }
+                }
+            }
             let mut unique_sites = BTreeSet::new();
             for site in &village.visual_sites {
                 if i64::from(site[0]).abs() > 29_999_990 || i64::from(site[2]).abs() > 29_999_990
@@ -1866,6 +2205,7 @@ impl World {
             visual_job: None,
             hut_supplies_reserved: false,
             farm: None,
+            posts: Vec::new(),
         };
         self.settlements.insert(id, settlement);
         let p = self.players.entry(founder.to_owned()).or_default();
@@ -2599,6 +2939,64 @@ impl World {
         let name = village.name.clone();
         self.event(format!("{name}: autonomous construction {}", if enabled { "enabled" } else { "paused" }));
         Ok(())
+    }
+
+    /// Reserve a permanent work camp. Sites are validated against the world
+    /// by the native adapter before this is called; this only keeps the
+    /// domain bounded and unique.
+    pub fn add_post(
+        &mut self, village_id: u64, kind: PostKind, origin: [i32; 3],
+    ) -> Result<(), String> {
+        let village = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?;
+        if village.posts.len() >= MAX_POSTS {
+            return Err("camp limit reached".into());
+        }
+        if village.posts.iter().any(|post| post.kind == kind) {
+            return Err("this village already has that camp".into());
+        }
+        if village.posts.iter().any(|post| post.origin == origin) {
+            return Err("a camp already stands here".into());
+        }
+        let dx = i64::from(origin[0]) - i64::from(village.center[0]);
+        let dz = i64::from(origin[2]) - i64::from(village.center[2]);
+        let distance = dx * dx + dz * dz;
+        if !(8 * 8..=80 * 80).contains(&distance) {
+            return Err("camp must be 8..80 blocks from the village center".into());
+        }
+        if i64::from(origin[0]).abs() > 29_999_990
+            || i64::from(origin[2]).abs() > 29_999_990
+            || !(-2048..=2048).contains(&origin[1])
+        {
+            return Err("camp outside safe world bounds".into());
+        }
+        village.posts.push(WorkPost { kind, origin, worker_id: None });
+        Ok(())
+    }
+
+    pub fn post_origin(&self, village_id: u64, kind: PostKind) -> Option<[i32; 3]> {
+        self.settlements.get(&village_id)?
+            .posts.iter().find(|post| post.kind == kind).map(|post| post.origin)
+    }
+
+    /// Bind the camp to one resident, once. A different worker is refused so
+    /// delivery evidence stays attributable to a single UUID-bound actor.
+    pub fn set_post_worker(
+        &mut self, village_id: u64, kind: PostKind, worker: u64,
+    ) -> Result<bool, String> {
+        let village = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?;
+        let resident = village.residents.iter()
+            .find(|r| r.id == worker && r.alive)
+            .ok_or("unknown or inactive resident")?;
+        if resident.job != kind.job() {
+            return Err("resident does not hold that camp's job".into());
+        }
+        let post = village.posts.iter_mut()
+            .find(|post| post.kind == kind).ok_or("no such camp")?;
+        match post.worker_id {
+            Some(existing) if existing == worker => Ok(false),
+            Some(_) => Err("camp is already assigned to another worker".into()),
+            None => { post.worker_id = Some(worker); Ok(true) }
+        }
     }
 
     /// A purchased 5x5 parcel is the player's local build right in this mod.
@@ -4183,6 +4581,76 @@ mod safe_housing_proposal_tests {
 }
 
 #[cfg(test)]
+mod work_post_tests {
+    use super::*;
+
+    fn village() -> (World, u64) {
+        let mut world = World::default();
+        let id = world
+            .found("Ashford", "minecraft:overworld", [0, 70, 0], "owner")
+            .unwrap();
+        (world, id)
+    }
+
+    #[test]
+    fn camps_are_bounded_unique_and_need_real_distance() {
+        let (mut world, id) = village();
+        assert!(world.add_post(id, PostKind::Lumber, [2, 70, 0]).is_err());
+        world.add_post(id, PostKind::Lumber, [20, 70, 0]).unwrap();
+        assert!(world.add_post(id, PostKind::Lumber, [24, 70, 0]).is_err());
+        assert!(world.add_post(id, PostKind::Quarry, [20, 70, 0]).is_err());
+        world.add_post(id, PostKind::Quarry, [-24, 70, 0]).unwrap();
+        assert_eq!(world.post_origin(id, PostKind::Lumber), Some([20, 70, 0]));
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn a_camp_binds_only_the_matching_living_resident_once() {
+        let (mut world, id) = village();
+        world.add_post(id, PostKind::Lumber, [20, 70, 0]).unwrap();
+        let lumberjack = world.settlements[&id].residents.iter()
+            .find(|r| r.job == Job::Lumberjack).unwrap().id;
+        let baker = world.settlements[&id].residents.iter()
+            .find(|r| r.job == Job::Baker).unwrap().id;
+        assert!(world.set_post_worker(id, PostKind::Lumber, baker).is_err());
+        assert!(world.set_post_worker(id, PostKind::Lumber, lumberjack).unwrap());
+        assert!(!world.set_post_worker(id, PostKind::Lumber, lumberjack).unwrap());
+        let other = world.settlements[&id].residents.iter()
+            .find(|r| r.job == Job::Lumberjack && r.id != lumberjack);
+        assert!(other.is_none());
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn corrupted_camp_worker_or_site_fails_closed_on_load() {
+        let (mut world, id) = village();
+        world.add_post(id, PostKind::Quarry, [0, 70, 24]).unwrap();
+        world.settlements.get_mut(&id).unwrap().posts[0].worker_id = Some(u64::MAX);
+        assert!(world.validate().is_err());
+        world.settlements.get_mut(&id).unwrap().posts[0].worker_id = None;
+        world.settlements.get_mut(&id).unwrap().posts[0].origin = [0, 70, 1];
+        world.validate().unwrap();
+        world.settlements.get_mut(&id).unwrap().posts.push(WorkPost {
+            kind: PostKind::Lumber,
+            origin: [0, 70, 1],
+            worker_id: None,
+        });
+        assert!(world.validate().is_err());
+    }
+
+    #[test]
+    fn legacy_save_without_camps_still_loads() {
+        let (mut world, id) = village();
+        world.add_post(id, PostKind::Lumber, [20, 70, 0]).unwrap();
+        let mut value = serde_json::to_value(&world).unwrap();
+        value["settlements"][id.to_string()].as_object_mut().unwrap().remove("posts");
+        let restored: World = serde_json::from_value(value).unwrap();
+        assert!(restored.settlements[&id].posts.is_empty());
+        restored.validate().unwrap();
+    }
+}
+
+#[cfg(test)]
 mod civic_council_tests {
     use super::*;
 
@@ -4502,9 +4970,12 @@ mod civic_hall_warehouse_tests {
         assert_eq!(hall.len(), sites.len());
         assert_eq!(hall.iter().filter(|b| b.floor).count(), 25);
         assert_eq!(hall.iter().filter(|b| b.block == "minecraft:barrel").count(), 2);
-        assert_eq!(hall.iter().filter(|b| b.block == "minecraft:oak_sign").count(), 2);
+        assert_eq!(hall.iter().filter(|b| b.block == "minecraft:oak_wall_sign").count(), 2);
         assert_eq!(hall.iter().filter(|b| b.block == "minecraft:lectern").count(), 1);
-        assert_eq!(hall_board_positions(origin), [[-1,70,-1], [1,70,-1]]);
+        assert_eq!(hall_board_positions(origin), [[-1, 71, -3], [1, 71, -3]]);
+        // Readable from outside the front door, one block past the north wall.
+        assert!(hall.iter().any(|b| b.pos == [-1, 71, -3]));
+        assert!(hall.iter().any(|b| b.pos == [1, 71, -3]));
         assert_eq!(hall, town_hall_plan(origin));
     }
 
@@ -5841,5 +6312,105 @@ mod native_gather_pickup_witness_tests {
         world.abandon_blocked_issued_gather(id).unwrap();
         assert_eq!(world.settlements[&id].warehouse_quantity(Good::Stone), 0);
         world.validate().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod hall_sign_render_tests {
+    use super::*;
+
+    fn founded() -> (World, u64) {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0, 70, 0], "op").unwrap();
+        (world, id)
+    }
+
+    fn render(world: &World, id: u64, wood: u32, stone: u32, journal: bool) -> [SignSpec; 6] {
+        let stored = [(Good::Wood, 12), (Good::Stone, 0), (Good::Bread, 6), (Good::Wheat, 9)];
+        render_hall_boards(&HallBoardInput {
+            village: &world.settlements[&id],
+            stored: &stored,
+            wood_missing: wood,
+            stone_missing: stone,
+            journal_unsettled: journal,
+        })
+    }
+
+    #[test]
+    fn every_line_of_every_board_fits_a_real_sign() {
+        let (mut world, id) = founded();
+        world.settlements.get_mut(&id).unwrap().name = "A_Very_Long_Village_Name".into();
+        for journal in [false, true] {
+            for (wood, stone) in [(0, 0), (8, 25), (4_000_000_000, 4_000_000_000)] {
+                for board in render(&world, id, wood, stone, journal) {
+                    for line in &board.lines {
+                        assert!(line.text.chars().count() <= SIGN_WIDTH, "{:?}", line.text);
+                    }
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn shortage_is_red_glowing_and_stock_ok_is_green() {
+        let (world, id) = founded();
+        let short = render(&world, id, 8, 0, false);
+        assert!(short[1].glow);
+        assert_eq!(short[1].lines[0].text, "VILLAGE NEEDS");
+        assert_eq!(short[1].lines[1].text, "Wood 12 -8");
+        assert_eq!(short[1].lines[1].color, SignColor::Alert);
+        let ok = render(&world, id, 0, 0, false);
+        assert!(!ok[1].glow);
+        assert_eq!(ok[1].lines[0].text, "STOCK OK");
+        assert_eq!(ok[1].lines[2].color, SignColor::Good);
+    }
+
+    #[test]
+    fn unsettled_journal_overrides_numeric_shortage() {
+        let (world, id) = founded();
+        let board = &render(&world, id, 8, 25, true)[1];
+        assert_eq!(board.plain()[1], "Trade pending");
+        assert!(board.glow);
+    }
+
+    #[test]
+    fn treasury_and_land_office_show_real_values() {
+        let (mut world, id) = founded();
+        world.settlements.get_mut(&id).unwrap().treasury_coins = 140;
+        let boards = render(&world, id, 0, 0, false);
+        assert_eq!(boards[4].plain()[1], "Coins 140");
+        assert_eq!(boards[4].plain()[2], "Bread 6 Wht 9");
+        assert_eq!(boards[2].plain()[1], format!("Plot {} coins", LAND_PRICE_COINS));
+    }
+
+    #[test]
+    fn war_state_is_visible_on_diplomacy_board() {
+        let (mut world, id) = founded();
+        assert_eq!(render(&world, id, 0, 0, false)[3].plain()[1], "PEACE");
+        world.settlements.get_mut(&id).unwrap().active_wars.insert(99);
+        let board = &render(&world, id, 0, 0, false)[3];
+        assert_eq!(board.plain()[1], "AT WAR x1");
+        assert!(board.glow);
+    }
+
+    #[test]
+    fn progress_bar_is_bounded_and_blocked_is_alert() {
+        assert_eq!(sign_bar(0, 0, 10), "[----------]");
+        assert_eq!(sign_bar(20, 40, 10), "[#####-----]");
+        assert_eq!(sign_bar(99, 40, 10), "[##########]");
+        let blocked = render_build_progress("HUT", 5, 40, true);
+        assert!(blocked.glow);
+        assert_eq!(blocked.plain()[3], "BLOCKED");
+    }
+
+    #[test]
+    fn board_positions_are_unique_and_plan_signs_stay_first() {
+        let positions = hall_all_board_positions([10, 64, 10]);
+        let plan = hall_board_positions([10, 64, 10]);
+        assert_eq!(positions[..2], plan);
+        let unique: std::collections::BTreeSet<_> = positions.iter().collect();
+        assert_eq!(unique.len(), 6);
+        // Every board hangs on the front wall directly outside z-2.
+        assert!(positions.iter().all(|p| p[2] == 7));
     }
 }
