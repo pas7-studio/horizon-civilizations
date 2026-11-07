@@ -1845,14 +1845,23 @@ fn refresh_hall_boards(game: &mut Game<'_>, world: &World) {
             .find(|r| r.alive && r.job == Job::Merchant)
             .map(|r| r.name.as_str()).unwrap_or("NONE");
         let (_, _, homeless) = village.physical_housing();
-        let (wood_missing, stone_missing) = if village.hall_complete {
-            let next = if village.visual_job.is_some() || village.pending_visual_buildings > 0 {
-                (crate::game::civilizations_core::HUT_WOOD_LOGS,
-                 crate::game::civilizations_core::HUT_COBBLESTONE)
-            } else { (0, 0) };
-            (next.0.saturating_sub(village.warehouse_quantity(Good::Wood)),
-             next.1.saturating_sub(village.warehouse_quantity(Good::Stone)))
-        } else { village.hall_materials_missing() };
+        // Never print legacy JSON stock as though it is a visible barrel.
+        // If a container is missing or unloaded, keep the signs unchanged.
+        let Some(stored) = physical_barrel_stock(game, &dimension, village.center) else {
+            continue;
+        };
+        let count = |good: Good| stored.iter()
+            .find(|(item, _)| *item == good).map(|(_, amount)| *amount).unwrap_or(0);
+        let next = if village.visual_job.is_some() || village.pending_visual_buildings > 0 {
+            (crate::game::civilizations_core::HUT_WOOD_LOGS,
+             crate::game::civilizations_core::HUT_COBBLESTONE)
+        } else { (0, 0) };
+        let (wood_missing, stone_missing) = (
+            next.0.saturating_sub(count(Good::Wood).saturating_add(
+                village.build_escrow.get(&Good::Wood).copied().unwrap_or(0))),
+            next.1.saturating_sub(count(Good::Stone).saturating_add(
+                village.build_escrow.get(&Good::Stone).copied().unwrap_or(0))),
+        );
         let [mayor_sign, needs_sign] = hall_board_positions(village.center);
         for (pos, lines) in [
             (mayor_sign, [
