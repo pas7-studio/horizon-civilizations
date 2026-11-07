@@ -792,3 +792,31 @@ native menu-hook integration. The NPC food and frontier source was
 ported onto that code rather than restoring obsolete menus. Meal
 status remains available through `/civ meals` and hall signs; the
 native menu is deliberately not claimed. Native compilation/E2E pending.
+
+
+## 2026-11-08 — physical sand/dirt couriers and bounded dining shifts (PR #35)
+
+- Inspected the actual post planner, movement adapter and durable gather
+  journal. Found a concrete unfinished end-to-end route: Sand/Dirt are
+  correctly assigned to Job::Digger in Good::job, but the core
+  assign_gather_worker gate previously rejected them, core save
+  validation treated their bound worker as a Miner, and two native
+  gather stages plus actor navigation also selected a Miner. This could
+  strand pit jobs and reject a correctly bound Digger save on reload.
+- Unified all three authorization sites around the existing Good::job
+  mapping. Diggers now follow the same loaded-actor, natural-source,
+  saved native-edit acknowledgement, source-pickup witness and return
+  receipt path as wood/stone. No free sand/dirt or new world-save fields.
+- Prevented a self-sufficiency deadlock: hungry villagers previously
+  routed to the hall on every tick and overrode work even when there
+  was no physical bread. Unserved NPCs now request meals during Dawn
+  and Evening, freeing Work and Night for existing activity.
+- Authored two domain Rust regression cases covering both natural pit
+  goods, wrong-worker refusal, mandatory pickup witness, serialization,
+  restart, and one receipt; added eight Python source contracts.
+  Extended live acceptance to TEST_PLAN 345-352.
+- **Source changes only:** no cargo/rustc or native Horizon build
+  available in this environment. These regressions were authored,
+  not yet executed; actual pathfinding, physical item movement,
+  loaded-world correctness and Minecraft gameplay remain unproven.
+- Work remained on Draft PR #35. main and GitHub Actions unchanged.
