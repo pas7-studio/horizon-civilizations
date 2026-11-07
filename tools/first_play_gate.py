@@ -11,6 +11,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -71,6 +72,33 @@ def git_value(root: Path, *args: str) -> str:
                                    stderr=subprocess.PIPE, timeout=20).strip()
 
 
+_DIAGNOSTIC_LINE = re.compile(
+    r"(?i)(?:\\berror(?:\\[[a-z0-9]+\\])?:|\\bfatal error\\b|"
+    r"^\\s*(?:FAIL:|FAILED\\b|ERROR:|Traceback\\b|Caused by:|"
+    r"ModuleNotFoundError:|AssertionError:|FileNotFoundError:))"
+)
+_ANSI_COLOR = re.compile(r"\\x1b\\[[0-9;]*m")
+
+
+def first_stage_error(log_path: Path) -> str:
+    """Summarize the first actionable failing line from a subprocess log.
+
+    Only called after a stage has failed. Keep memory bounded even when a
+    native compiler emits gigabytes of diagnostics; the full log remains
+    available alongside report.md.
+    """
+    last_output = None
+    with log_path.open("r", encoding="utf-8", errors="replace") as stream:
+        for raw_line in stream:
+            line = _ANSI_COLOR.sub("", raw_line).strip()
+            if not line or line.startswith("COMMAND:"):
+                continue
+            last_output = line[:400]
+            if _DIAGNOSTIC_LINE.search(line):
+                return line[:400]
+    return last_output or "nonzero exit without diagnostic output"
+
+
 def run_step(root: Path, output: Path, step: Step) -> StepResult:
     log_path = output / (step.name + ".log")
     started = time.monotonic()
@@ -89,6 +117,8 @@ def run_step(root: Path, output: Path, step: Step) -> StepResult:
             problem = f"timeout after {step.timeout_seconds} seconds"
         except OSError as exc:
             problem = f"could not start: {exc}"
+    if code not in (None, 0) and problem is None:
+        problem = first_stage_error(log_path)
     return StepResult(step.name, step.argv, "PASS" if code == 0 else "FAIL",
                       code, round(time.monotonic() - started, 3),
                       str(log_path.relative_to(root)), problem)
