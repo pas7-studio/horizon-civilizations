@@ -1,8 +1,65 @@
+## Real NPC meal cycle — first in-game acceptance
+
+Run only on a disposable world **after** a successful native Rust/client
+build. Complete a real town hall and load its public barrels. Have ten
+UUID-linked living residents and a real merchant/steward on site.
+
+- Put exactly ten plain `minecraft:bread` items in a hall barrel by
+  a supported, auditable player delivery. Run `/civ meals NAME`.
+  Watch each distinct villager walk to the entrance; every confirmed
+  native extraction must reduce the real barrel count by one and mark
+  only that resident's ID fed.
+- Reload halfway through a meal day: the meal journal, UUID identity
+  and native barrel count must survive without repeat extraction or
+  another portion for an already-fed citizen.
+- With no physical bread, abstract/virtual bread must not count.
+  Advance the real world clock, then inspect the food-shortage counter,
+  morale and treasury food sign; a fully fed next day should clear the
+  shortage. `/civ meals` is read-only.
+- Interrupt an Issued meal between saved journal and inventory mutation;
+  verify one-shot behavior, later observed-count confirmation or Blocked
+  manual reconciliation. Do NOT resume by blindly extracting again.
+- Have a citizen walk away or die before Planned becomes Issued: that
+  unissued intent must be safely canceled without consuming bread.
+  An already-issued dead-recipient journal must remain loadable.
+- Test offline chunks and worlds without residents: no imaginary
+  dining from stale JSON counts or default mob-name matching.
+
+See TEST_PLAN 332–344. These are **acceptance criteria, not PASS claims**.
+
+## Natural village discovery acceptance (new Draft PR #35 feature)
+
+Use a **throwaway Minecraft/Horizon world**. Do not copy a valuable save
+until real native build and gameplay are verified.
+
+1. In a fresh Overworld area with loaded natural, flat ground, move away
+   from existing towns, remain active for more than 2,400 loaded server
+   ticks (~2 minutes at 20 TPS), then use `/civ nearby`.
+2. A successful site must be ~88–91 blocks from an explorer, have 5×5
+   naturally suitable ground and enough safe positions for **ten** NPCs;
+   no new settlement should appear on a blocked or unloaded site.
+3. `/civ info NAME`, `/civ roster NAME`, `/civ hall NAME` and
+   `/civ warehouse NAME` must reveal the independent town's actual
+   saved state. Speak to an NPC, then `/civ join NAME` to become a
+   citizen. No player account becomes a lord from natural founding.
+4. Follow actual NPCs to resources, inspect the funding of the physical
+   town hall, confirm working signs/barrels, then restart mid-build.
+5. Revisit the same area and verify NO duplicate city, UUID or building.
+   Move 192+ blocks beyond all existing towns to discover another;
+   no more than eight independent NPC towns should be founded.
+6. In the Nether/End or when no players are present, verify no natural
+   town is founded. A partial/unloaded candidate must not be persisted.
+7. `/civ nearby` is read-only, shows only current-dimension towns,
+   nearest first with coordinates, and never generates/loads chunks.
+
+**Do not mark these steps passed based on Rust/Python source contracts.**
+The local build report and recorded native Minecraft evidence are required.
+
 # Local Horizon Civilizations playtest
 
 **Current assurance:** an older pinned Horizon native branch previously passed
-`cargo check` and embedded Rust tests. The latest v0.1.14 stacked source in
-`feat/guarded-partial-villager-recovery-v0115` (Draft PR #34) has **not**
+`cargo check` and embedded Rust tests. The new worldgen is isolated in
+`feat/independent-npc-towns-v0115` (Draft PR #35) and has **not**
 passed native compile or Minecraft E2E. Do not reuse an old binary as evidence for this stack.
 
 ## Build on your own development PC
@@ -542,7 +599,7 @@ models/animations and full playability still not claimed.
 
 ```powershell
 git fetch origin
-git switch feat/guarded-partial-villager-recovery-v0115
+git switch feat/independent-npc-towns-v0115
 py -3 tools/first_play_gate.py --dry-run --build-client
 py -3 tools/first_play_gate.py --build-client
 ```
@@ -603,8 +660,8 @@ On a networked Windows build machine:
 
 ```powershell
 git fetch origin
-git switch feat/guarded-partial-villager-recovery-v0115
-py -3 tools/first_play_gate.py --expected-branch feat/guarded-partial-villager-recovery-v0115 --build-client
+git switch feat/independent-npc-towns-v0115
+py -3 tools/first_play_gate.py --expected-branch feat/independent-npc-towns-v0115 --build-client
 ```
 
 On a disposable Minecraft world: `/civ roster Ashford` now includes
