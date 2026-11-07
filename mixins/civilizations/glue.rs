@@ -1447,6 +1447,197 @@ fn auto_spawn_villagers(
     Ok(())
 }
 
+/// A native barrel is the authoritative on-site storage after the civic
+/// hall completes. Only plain item stacks count (never damaged/NBT-bearing
+/// equipment that a trader might have placed in the container).
+fn plain_barrel_count(game: &Game<'_>, dimension: &str, pos: [i32; 3], good: Good) -> Option<u32> {
+    if world_block(game, dimension, pos).as_deref() != Some("minecraft:barrel") {
+        return None;
+    }
+    let slots = game.native_container_slots(dimension, pos, Direction::Up)?;
+    slots.iter().filter_map(|entry| entry.stack.as_ref())
+        .filter(|stack| stack.item == good.item() && stack.damage == 0 && stack.extra.is_none())
+        .try_fold(0_u32, |total, stack| total.checked_add(stack.count))
+}
+
+/// Reads exactly the two village hall barrels, never a nearby player chest.
+fn physical_barrel_stock(
+    game: &Game<'_>, dimension: &str, center: [i32; 3]
+) -> Option<Vec<(Good, u32)>> {
+    let mut values = Vec::new();
+    for good in [Good::Wheat, Good::Bread, Good::Wood, Good::Stone, Good::Iron] {
+        let mut count = 0_u32;
+        for pos in hall_storage_positions(center) {
+            count = count.checked_add(plain_barrel_count(game, dimension, pos, good)?)?;
+        }
+        values.push((good, count));
+    }
+    Some(values)
+}
+
+/// A transfer has to be serviced by a real, UUID-linked NPC in the same
+/// loaded village. The merchant deposits; builders collect their materials.
+fn storage_worker_near(game: &mut Game<'_>, world: &World, id: u64, role: Job) -> bool {
+    let v = &world.settlements[&id];
+    let linked = loaded_actors(game, world, id);
+    v.residents.iter().filter(|r| r.alive && r.job == role).any(|r| {
+        linked.iter().any(|(known, mob)| *known == r.id
+            && game.native_mob(&v.dimension, *mob).is_some_and(|actor| {
+                let dx = actor.pos[0] - f64::from(v.center[0]);
+                let dz = actor.pos[2] - f64::from(v.center[2]);
+                dx * dx + dz * dz <= 8.0 * 8.0
+            }))
+    })
+}
+
+/// Never re-issue a native operation marked Issued in saved world.json.
+/// An uncertain barrel result becomes Blocked rather than being replayed.
+/// The first attempt saves Issued *before* mutating a native inventory.
+fn barrel_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), String> {
+    let dimension = game.dim.id().to_owned();
+    let ids: Vec<u64> = state.world.as_ref().unwrap().settlements.values()
+        .filter(|v| v.dimension == dimension && v.hall_complete)
+        .map(|v| v.id).collect();
+    for id in ids {
+        let village = state.world.as_ref().unwrap().settlements[&id].clone();
+        if let Some(transfer) = village.barrel_transfer {
+            if transfer.phase == BarrelPhase::Blocked { continue; }
+            let Some(actual) = plain_barrel_count(game, &dimension, transfer.position, transfer.good)
+            else { continue; }; // unloaded, missing block entity: no mutation
+            let before = state.world.as_ref().unwrap().clone();
+            if transfer.phase == BarrelPhase::Issued {
+                if transfer.expected_after() == Some(actual) {
+                    state.world.as_mut().unwrap().confirm_barrel_transfer(id, actual)?;
+                } else {
+                    state.world.as_mut().unwrap().block_barrel_transfer(id)?;
+                    log::warn!(
+                        "[civilizations] {} barrel transfer discrepancy: expected {:?}, observed {}, requires inspection",
+                        village.name, transfer.expected_after(), actual
+                    );
+                }
+                save_autonomous(state, before)?;
+                return Ok(());
+            }
+            if actual != transfer.before {
+                state.world.as_mut().unwrap().block_barrel_transfer(id)?;
+                save_autonomous(state, before)?;
+                return Ok(());
+            }
+            // Mark issued and durably save BEFORE the external inventory edit.
+            state.world.as_mut().unwrap().issue_barrel_transfer(id)?;
+            save_autonomous(state, before)?;
+            let success = match transfer.direction {
+                BarrelDirection::ToBarrel => {
+                    let item = ItemStack {
+                        item: transfer.good.item().into(),
+                        count: transfer.count, damage: 0, extra: None,
+                    };
+                    game.insert_stack_through(transfer.position, Direction::Up, item).is_none()
+                }
+                BarrelDirection::ToBuilder => {
+                    let Some(slot) = transfer.slot else {
+                        return Err("native barrel extraction has no recorded slot".into());
+                    };
+                    let taken = game.native_extract_item(
+                        &dimension, transfer.position, Direction::Up, slot, transfer.count
+                    );
+                    taken.is_some_and(|stack| {
+                        stack.item == transfer.good.item() && stack.count == transfer.count
+                            && stack.damage == 0 && stack.extra.is_none()
+                    })
+                }
+            };
+            if !success {
+                let before = state.world.as_ref().unwrap().clone();
+                state.world.as_mut().unwrap().block_barrel_transfer(id)?;
+                save_autonomous(state, before)?;
+                log::warn!("[civilizations] {} failed native barrel transfer; no blind retry", village.name);
+            }
+            return Ok(());
+        }
+
+        let can_collect = village.visual_job.is_some()
+            && !village.hut_supplies_reserved
+            && DailyPhase::at(game.world.day_time).on_shift(Job::Builder)
+            && storage_worker_near(game, state.world.as_ref().unwrap(), id, Job::Builder);
+        if can_collect {
+            for (good, target) in [
+                (Good::Wood, crate::game::civilizations_core::HUT_WOOD_LOGS),
+                (Good::Stone, crate::game::civilizations_core::HUT_COBBLESTONE),
+            ] {
+                let in_hand = village.build_escrow.get(&good).copied().unwrap_or(0);
+                let missing = target.saturating_sub(in_hand);
+                if missing == 0 { continue; }
+                for position in hall_storage_positions(village.center) {
+                    if world_block(game, &dimension, position).as_deref() != Some("minecraft:barrel") {
+                        continue;
+                    }
+                    let Some(slots) = game.native_container_slots(&dimension, position, Direction::Up)
+                    else { continue; };
+                    let Some((slot, available)) = slots.iter().find_map(|entry| {
+                        let stack = entry.stack.as_ref()?;
+                        (entry.can_take && stack.item == good.item()
+                            && stack.damage == 0 && stack.extra.is_none()
+                            && stack.count > 0).then_some((entry.slot, stack.count))
+                    }) else { continue; };
+                    let Some(before) = plain_barrel_count(game, &dimension, position, good) else {
+                        continue;
+                    };
+                    let quantity = missing.min(available).min(8);
+                    let prior = state.world.as_ref().unwrap().clone();
+                    state.world.as_mut().unwrap().plan_barrel_transfer(
+                        id, position, good, BarrelDirection::ToBuilder,
+                        before, quantity, Some(slot)
+                    )?;
+                    save_autonomous(state, prior)?;
+                    return Ok(());
+                }
+            }
+        }
+
+        // Delivery into actual Minecraft barrels is served by the real
+        // village merchant/steward; no player-owned inventory is silently
+        // consumed, and source goods came from prior verified receipts.
+        if !storage_worker_near(game, state.world.as_ref().unwrap(), id, Job::Merchant) {
+            continue;
+        }
+        for good in [Good::Wood, Good::Stone, Good::Wheat, Good::Bread, Good::Iron] {
+            let waiting = village.warehouse_quantity(good);
+            if waiting == 0 { continue; }
+            let spots = hall_storage_positions(village.center);
+            let preferred = if matches!(good, Good::Wood | Good::Stone) {
+                spots
+            } else { [spots[1], spots[0]] };
+            for position in preferred {
+                if world_block(game, &dimension, position).as_deref() != Some("minecraft:barrel") {
+                    continue;
+                }
+                let Some(slots) = game.native_container_slots(&dimension, position, Direction::Up)
+                else { continue; };
+                let space: u32 = slots.iter().map(|entry| match &entry.stack {
+                    None => 64,
+                    Some(stack) if stack.item == good.item()
+                        && stack.damage == 0 && stack.extra.is_none() =>
+                        64_u32.saturating_sub(stack.count),
+                    _ => 0,
+                }).sum();
+                let count = waiting.min(space).min(8);
+                if count == 0 { continue; }
+                let Some(before) = plain_barrel_count(game, &dimension, position, good) else {
+                    continue;
+                };
+                let prior = state.world.as_ref().unwrap().clone();
+                state.world.as_mut().unwrap().plan_barrel_transfer(
+                    id, position, good, BarrelDirection::ToBarrel, before, count, None
+                )?;
+                save_autonomous(state, prior)?;
+                return Ok(());
+            }
+        }
+    }
+    Ok(())
+}
+
 /// One bounded planning step per 100 loaded level ticks. NPCs choose free
 /// natural plots *inside their settlement radius* and start actual physical
 /// jobs. Paid player parcels are hard exclusions in BOTH domain paths.
