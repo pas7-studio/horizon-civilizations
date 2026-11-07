@@ -1152,6 +1152,18 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
         } else {
             "no explicit saved-state blocker; check natural plots, NPC routes and native game logs".to_owned()
         };
+        let gather_state = if let Some(stem) = &v.oak_stem {
+            format!("oak log {}/{} at {:?}, issued={}, blocked={}",
+                stem.cursor + 1, stem.height,
+                v.gather_job.as_ref().map(|job| job.position),
+                v.gather_job.as_ref().is_some_and(|job| job.issued),
+                v.gather_job.as_ref().is_some_and(|job| job.blocked))
+        } else {
+            v.gather_job.as_ref().map(|job| format!(
+                "{:?} at {:?}, issued={}, blocked={}",
+                job.good, job.position, job.issued, job.blocked
+            )).unwrap_or_else(|| "idle".to_owned())
+        };
         reply(game, format!(
             "{} DIAG: autonomous={} | loaded UUID actors {}/{} | builder={} farmer={} lumberjack={} miner={} baker={} steward={} | shift={} | hall=[{}] | bakery=[{}] | farm={} | gather={} | blocker: {}. This is a read-only snapshot, not a gameplay pass.",
             v.name, v.autonomy_enabled, linked.len(), v.population(),
@@ -1159,7 +1171,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             loaded_role(Job::Lumberjack), loaded_role(Job::Miner),
             loaded_role(Job::Baker), loaded_role(Job::Merchant),
             phase.name(), hall_status, bakery_status, v.farm.is_some(),
-            v.gather_job.is_some(), blocker
+            gather_state, blocker
         ));
         return;
     }
@@ -1182,10 +1194,14 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             return;
         };
         let observed = world_block(game, &v.dimension, job.position);
+        let stem_progress = v.oak_stem.as_ref().map(|stem| format!(
+            " Short oak stem log {}/{} rooted at {:?}; one durable delivery per segment.",
+            stem.cursor + 1, stem.height, stem.root
+        )).unwrap_or_default();
         reply(game, format!(
-            "{} gather audit: {:?} at {:?}, worker stand {:?}, planned native block {}, issued={}, blocked={}, live native block {:?}. Blocked ISSUED receipts are quarantined. Inspect world save and original block before OP /civ discardgather {} intact|empty; abandonment provides ZERO materials.",
+            "{} gather audit: {:?} at {:?}, worker stand {:?}, planned native block {}, issued={}, blocked={}, live native block {:?}.{} Blocked ISSUED receipts are quarantined. Inspect world save and original block before OP /civ discardgather {} intact|empty; abandonment provides ZERO materials.",
             v.name, job.good, job.position, job.stand, job.source_block(),
-            job.issued, job.blocked, observed, v.name
+            job.issued, job.blocked, observed, stem_progress, v.name
         ));
         return;
     }
