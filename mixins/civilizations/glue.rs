@@ -1404,6 +1404,19 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             let good = Good::parse(args.next().ok_or("good required")?).ok_or("unknown good")?;
             let count = parse_amount(args.next())?;
             let village_id = own_settlement(&previous, &actor)?;
+            let village = &previous.settlements[&village_id];
+            if village.dimension != player.dimension {
+                return Err("trade from within the settlement dimension".into());
+            }
+            if !player.position.iter().all(|component| component.is_finite()) {
+                return Err("invalid player trading location".into());
+            }
+            let dx = player.position[0] - f64::from(village.center[0]);
+            let dz = player.position[2] - f64::from(village.center[2]);
+            if dx * dx + dz * dz > 12.0 * 12.0
+                || (player.position[1] - f64::from(village.center[1])).abs() > 8.0 {
+                return Err("trade within 12 blocks of the actual village hall".into());
+            }
             let item = good.item();
             if action == "sell" {
                 if game.native_count_items(item) < count { return Err(format!("you need {count} {item}")); }
