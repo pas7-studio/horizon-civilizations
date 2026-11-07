@@ -311,3 +311,21 @@ inventory ownership. Its housing recommendation may direct an OP to
 `/civ approvehouse` after real loaded-world block checks. Every previous
 trade/harvest caveat continues to apply. No gameplay E2E was performed
 for this version; GitHub Actions remain deliberately disabled.
+
+### Local validation without GitHub Actions
+
+On Windows 11, the repository includes a local-only PowerShell validator:
+
+```powershell
+.\scripts\validate-local.ps1 -Format
+.\scripts\validate-local.ps1 -BuildClient
+```
+
+The first command explicitly reformats local Rust sources and then runs fmt,
+Clippy, Cargo tests, all Python tests, packaging and static checks. The second
+also fetches the pinned Horizon source and builds a local Windows client.
+Run these from the **v0.1.10 stacked feature branch** when ready. A normal
+`validate-local.ps1` run checks formatting without changing source code;
+all variants may write generated files under `target/`. None trigger or
+reenable GitHub Actions. Even a successful local executable build does **not**
+prove in-world gameplay safety.
