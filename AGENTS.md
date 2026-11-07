@@ -145,7 +145,7 @@
 - Branch `feat/three-dimensional-native-worker-guards-v0115` now contains
   all prior short-oak, journal, warehouse and bakery work. PR is Draft,
   main unchanged, Actions OFF. 3D code is not a native/game PASS.
-- `native_worker_near` in core.rs rejects vertical cave/sky mismatch;
+- `native_worker_near` in `core/jobs.rs` rejects vertical cave/sky mismatch;
   `native_worker_reaches_block` bounds eye-to-block 3D distance.
   Always check the saved worker stand is loaded, two-high air, supported
   on walkable native ground BEFORE issuing any world edit.
@@ -216,10 +216,15 @@ texture packs or any Minecraft resources into this MIT repository.
 ## Current state
 
 - This is **prototype source**, not validated as running in Horizon.
-- `mixins/civilizations/core.rs` is a standalone Cargo lib with unit tests.
-- `mixins/civilizations/glue.rs` is a Horizon game adapter using native hooks.
+- `mixins/civilizations/core/mod.rs` is a standalone Cargo lib root; domain types
+  live in `core/*.rs`, one `impl World` per domain in `core/world/`, unit tests in
+  `core/tests/`.
+- `mixins/civilizations/glue/` is a Horizon game adapter using native hooks
+  (`commands` setup, `reports` read-only, `actions` mutating).
 - The pinned Horizon SHA is in `compatibility.json`.
-- `tools/package.py` builds a SOURCE-ONLY `.hnmod`; it does not compile Rust.
+- `tools/package.py` builds a SOURCE-ONLY `.hnmod`; it does not compile Rust, and
+  `tools/mixin_sources.py` flattens the module tree into the single payload each
+  support module must be.
 
 ## Local execution priorities
 
