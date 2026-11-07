@@ -1974,6 +1974,81 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             }
             Ok(format!("Reconciled {linked} legacy actors; {ambiguous} ambiguous/conflicting skipped. /civ roster {name}. Missing actors are not spawned automatically."))
         })(),
+        "recoveractor" if player.permission >= 2 => (|| {
+            let name = args.next().ok_or("usage: /civ recoveractor <name> <resident-id> attempt")?;
+            let resident_id = args.next().ok_or("resident ID required; /civ roster <name>")?
+                .parse::<u64>().map_err(|_| "invalid resident ID")?;
+            if args.next() != Some("attempt") || args.next().is_some() {
+                return Err("explicit OP confirmation required: /civ recoveractor <name> <resident-id> attempt".into());
+            }
+            let village = previous.by_name(name).ok_or("unknown settlement")?;
+            if !village.actors_spawned {
+                return Err("initial actor batch has not yet been reserved".into());
+            }
+            if village.dimension != player.dimension {
+                return Err("go to this settlement dimension first".into());
+            }
+            let dx = i64::from(village.center[0]) - player.position[0].floor() as i64;
+            let dz = i64::from(village.center[2]) - player.position[2].floor() as i64;
+            if dx * dx + dz * dz > 32 * 32 {
+                return Err("stand within 32 blocks of the settlement center".into());
+            }
+            let resident = village.residents.iter()
+                .find(|r| r.id == resident_id && r.alive && r.entity_uuid.is_none())
+                .ok_or("resident missing, dead or already UUID-linked; inspect /civ roster")?;
+            if village.actor_recovery_issued.contains(&resident_id) {
+                return Err("a recovery spawn was already issued for this resident; inspect and reconcile before any further action".into());
+            }
+            let exact_name = village.actor_name(resident);
+            let legacy_name = format!("{} [{}]", resident.name, village.name);
+            // Never spawn while a tagged old entity is visible in the
+            // current loaded native dimension, even if its UUID was lost.
+            if game.mobs.iter().any(|mob|
+                mob.alive() && mob.kind.id == "minecraft:villager"
+                    && (mob.custom_name.as_deref() == Some(exact_name.as_str())
+                        || mob.custom_name.as_deref() == Some(legacy_name.as_str()))) {
+                return Err("matching native actor is already loaded: use /civ reconcile, do not spawn a duplicate".into());
+            }
+            // Recover only at surveyed natural ground with two blocks
+            // of air, never on occupied NPC coordinates.
+            let position = safe_actor_spawn_points(game, village).into_iter()
+                .find(|point| !game.mobs.iter().any(|mob| {
+                    let dx = mob.position.x - point[0];
+                    let dy = mob.position.y - point[1];
+                    let dz = mob.position.z - point[2];
+                    mob.alive() && dx * dx + dy * dy + dz * dz < 9.0
+                })).ok_or("no safe unoccupied loaded actor spawn point")?;
+            // Durable at-most-once reservation BEFORE native side effects.
+            state.world.as_mut().unwrap().reserve_actor_recovery(village.id, resident_id)?;
+            save(state)?;
+            already_saved = true;
+            let options = NativeSpawn {
+                name: Some(exact_name), ..NativeSpawn::default()
+            };
+            let Some(entity_id) = game.native_spawn_mob(
+                &village.dimension, "minecraft:villager", position, &options
+            ) else {
+                return Ok(format!(
+                    "One recovery attempt was reserved for #{resident_id} but native spawn was refused. Do NOT retry blindly. OP: /civ roster {name} then /civ reconcile {name}."
+                ));
+            };
+            let link = game.native_entity(entity_id)
+                .and_then(|handle| game.native_entity_uuid(handle))
+                .ok_or_else(|| "spawned entity UUID is unavailable".to_owned())
+                .and_then(|uuid| state.world.as_mut().unwrap()
+                    .bind_actor(village.id, resident_id, uuid).map(|_| ()))
+                .and_then(|_| save(state));
+            if let Err(e) = link {
+                state.problem = Some(format!("native actor recovery identity halted: {e}"));
+                log::error!("[civilizations] recovered actor without durable UUID identity: {e}");
+                return Ok(format!(
+                    "Recovery may have spawned resident #{resident_id}, but UUID persistence FAILED: {e}. World actions halted; inspect saved journal and native actor. Do NOT respawn."
+                ));
+            }
+            Ok(format!(
+                "Recovered one UUID-linked villager #{resident_id} in {name}. Other residents unchanged. /civ roster {name}."
+            ))
+        })(),
         "actors" if player.permission >= 2 => (|| {
             let name = args.next().ok_or("usage: /civ actors <name>")?;
             let s = previous.by_name(name).ok_or("unknown settlement")?;
