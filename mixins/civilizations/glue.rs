@@ -1764,6 +1764,22 @@ fn barrel_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
             && DailyPhase::at(game.world.day_time).on_shift(Job::Builder)
             && storage_worker_near(game, state.world.as_ref().unwrap(), id, Job::Builder);
         if can_collect {
+            // A builder must finish collecting their bill at the town hall
+            // and have it durably reserved BEFORE routing to the build plot.
+            // Otherwise the old build_one_step near-plot check would deadlock
+            // with the new hall-first worker navigation.
+            let wood_ready = village.build_escrow.get(&Good::Wood).copied().unwrap_or(0)
+                >= crate::game::civilizations_core::HUT_WOOD_LOGS;
+            let stone_ready = village.build_escrow.get(&Good::Stone).copied().unwrap_or(0)
+                >= crate::game::civilizations_core::HUT_COBBLESTONE;
+            if wood_ready && stone_ready {
+                let prior = state.world.as_ref().unwrap().clone();
+                if state.world.as_mut().unwrap().reserve_hut_supplies(id)? {
+                    save_autonomous(state, prior)?;
+                    log::info!("[civilizations] {} builder collected real hut materials at the public warehouse", village.name);
+                    return Ok(());
+                }
+            }
             for (good, target) in [
                 (Good::Wood, crate::game::civilizations_core::HUT_WOOD_LOGS),
                 (Good::Stone, crate::game::civilizations_core::HUT_COBBLESTONE),
