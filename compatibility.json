@@ -1,0 +1,9 @@
+{
+  "horizon_revision": "18840db9146b2521dd46ad52a4559a49be180f8f",
+  "horizon_repository": "https://github.com/horizon-rust/horizon",
+  "horizon_mixins_revision": "d9c83d7096b7ea5b83678da2efdfd6161f74997e",
+  "horizon_mixins_repository": "https://github.com/horizon-rust/horizon-mixins",
+  "mixin_schema": 6,
+  "observed_utc": "2026-11-07",
+  "verification": "SOURCE INSPECTED; NOT COMPILED OR GAMEPLAY TESTED"
+}

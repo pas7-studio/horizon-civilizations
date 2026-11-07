@@ -1,0 +1,9 @@
+/target/
+/.local/
+*.hnmod
+*.log
+*.bak
+*.tmp
+/.idea/
+/.vscode/
+.DS_Store

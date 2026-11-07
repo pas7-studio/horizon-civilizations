@@ -1,0 +1,57 @@
+# Verification status (2026-11-07)
+
+The sources were authored here from documented Horizon APIs and the publicly
+available official SMP native mod. **No game has been launched and no Rust
+compiler is available in this environment.** Packaging/static checks were run.
+
+| Gate | Status |
+| --- | --- |
+| Files created | PASS |
+| JSON / TOML structural checks | PASS |
+| Source-only .hnmod archive | PASS |
+| Rust formatting, lint, cargo unit tests | NOT RUN - toolchain unavailable |
+| Horizon mixin transform on pinned upstream | NOT RUN |
+| Horizon native binary build | NOT RUN |
+| NPC appears in game | NOT RUN |
+| Trade, save, relog, time progression E2E | NOT RUN |
+| Player-ready recommendation | **NOT YET** |
+
+Design caveats:
+
+- Actors are actual vanilla villagers summoned on command, but their physical
+  motions are **not** linked to simulated jobs yet.
+- Houses are numeric civilization state, **not** blocks in the world yet.
+- Wars and titles are a minimal domain demonstration; no army combats or courts.
+- Cross-boundary inventory/world JSON trade is not a fully atomic transaction.
+- Native mod compatibility is pinned to a particular Horizon SHA, not a promise
+  of working against future Nightlies.
+
+## 0.1.2 reliability increment (source only)
+
+- Save load now validates settlement IDs, diplomacy, symmetrical wars, references and limits, not just JSON syntax.
+- An automatic day that cannot persist reverts memory to the previous snapshot and stops advancing until the world is repaired/reopened.
+- Actor names contain deterministic `(settlement ID, resident ID)` tags; loaded villagers are located again by name after world reopen, with ambiguous duplicates skipped rather than commanded. Legacy 0.1.0 actor names are recognized too.
+- Profession-aware navigation targets have been added for loaded villagers. **These are walking routes, not actual farming, mining or material transfer.** No offscreen entities are spawned.
+- `/civ roster NAME` reports recognized loaded villagers and occupations. `/civ actors` never blindly repeats a previously attempted spawn.
+- Abstract house count now has a population-based cap; new load-validation, 20-village load and identity tests have been authored but **not run using Rust**.
+- Risk remaining for this historical v0.1.1 revision: actor name is not a secure persistent entity UUID; physical build/combat not implemented; selling/buying physical items plus separate JSON cannot be guaranteed crash-atomic. Do not use with valuable world/inventory data.
+
+## Gate commands
+
+- `python3 -m unittest discover -s tests -p 'test_*.py' -v` — packaging/structure smoke tests; ran successfully in this environment.
+- `cargo test && cargo clippy --all-targets` — **not run** (Rust toolchain unavailable here).
+- `python3 tools/native_build.py --test` — **not run** (requires Git, Rust and internet on build host).
+- In-game testing — **not run**; see `docs/TEST_PLAN.md`.
+
+## v0.1.2 physical construction (code authored; gameplay not executed)
+
+- Added a deterministic 5x5 hut plan in the pure Rust core: cobblestone foundation, oak walls/roof, front doorway, glass windows.
+- Added optional save fields to maintain v0.1.1 JSON compatibility: `visual_job` with progress cursor and `visual_sites` of finished houses.
+- Added `/civ construct NAME` (operator only), `/civ construction NAME`, strict site preflight and an explicit 12..80 block village radius.
+- Construction uses the authoritative `native_level_tick_post` hook rather than ambiguous server tick world context. Builder NPC must be loaded and near the site.
+- Each block command is conditional on the current state (natural ground for foundation; air elsewhere). No world edit happens from the player command hook. The cursor advances only after observing the intended Minecraft block on a later tick.
+- Before each new action the adapter rechecks all completed steps, to recover when the JSON save got ahead of Minecraft chunk persistence. Unexpected blocks stop the project; it does not blindly overwrite another builder's blocks.
+- Save path works around Windows rename-over-existing by keeping `.bak` plus a temporary `.swap` staging file. A stale `.swap` refuses loading until manually inspected.
+- Rust tests were *added* for deterministic plan, legacy saves and construction progress/recovery but **cannot run here**, because Rust toolchain and network downloads are unavailable.
+- Python packaging/structure suite: **4/4 passed**; `.hnmod` reproducible. No Rust compile, mixin transform, server launch, in-game placement or load test has run. This is NOT a player-ready release.
+- Critical remaining risk: engine/mod JSON and Minecraft chunk saves are independent; the recheck reduces but cannot prove atomic consistency. Native pathfinding and console command behavior need real E2E on the pinned Horizon revision.
