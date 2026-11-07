@@ -63,8 +63,8 @@ class CivicCouncilContracts(unittest.TestCase):
     def test_npc_dialogue_shows_the_actual_top_council_concern(self):
         # The conversation text is built by the pure dialogue_menu in the core.
         self.assertIn("village.council_priorities().first()", CORE)
-        self.assertIn("Council: {} {}/100", CORE)
-        self.assertIn("Council: all calm", CORE)
+        self.assertIn("The council worries about {} ({}/100).", CORE)
+        self.assertIn("The council is calm.", CORE)
         self.assertIn('resident.entity_uuid == Some(uuid)', GLUE)
 
     def test_local_validator_does_not_enable_ci_or_run_gameplay(self):
@@ -86,7 +86,7 @@ class CivicCouncilContracts(unittest.TestCase):
         mixin = tomllib.loads((ROOT / "mixins/civilizations/horizon-mixin.toml").read_text())
         self.assertEqual(cargo["package"]["version"], mixin["mod"]["version"])
         self.assertEqual(mixin["mod"]["version"], cargo["package"]["version"])
-        self.assertEqual(len(mixin["injection"]), 14)
+        self.assertEqual(len(mixin["injection"]), 11)
         self.assertIn("pub const SCHEMA: u32 = 1;", CORE)
         self.assertNotIn("pub council:", CORE)
         self.assertNotIn("pub forecast:", CORE)
