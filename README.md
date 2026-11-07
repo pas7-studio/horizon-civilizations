@@ -109,7 +109,10 @@ to compile/trust the native mod before the game can run.
 | `/civ` or `/civ help` | All | Available actions |
 | `/civ list`, `/civ info [name]` | All | Inspect settlements |
 | `/civ roster NAME` | All | List professions and nearby recognized villagers |
-| `/civ construction NAME` | All | Physical hut state, verified block progress, pending count |
+| `/civ schedule NAME`, `/civ homes NAME` | All | Day/night shift and completed-hut physical allocations |
+| `/civ council NAME`, `/civ forecast NAME` | All | Read-only needs and three-day abstract economic outlook |
+| `/civ survey NAME` | All | Propose up to five loaded, unoccupied building sites; never reserves land |
+| `/civ construction NAME`, `/civ farming NAME`, `/civ harvests NAME` | All | Inspect physical build/farm progress and visual-only harvest receipts |
 | `/civ join NAME` | All | Join a settlement |
 | `/civ title`, `/civ promote` | All | View rank/coins; promote if eligible |
 | `/civ sell GOOD N`, `/civ buy GOOD N` | All | Trade with joined settlement |
@@ -117,6 +120,8 @@ to compile/trust the native mod before the game can run.
 | `/civ found NAME` | Operators lvl 2 | Create settlement at current position |
 | `/civ actors NAME` | Operators lvl 2 | Spawn named vanilla villager actors once |
 | `/civ construct NAME` | Operators lvl 2 | Approve a safe natural site at your feet for a physical 5x5 hut; requires a pending simulated house |
+| `/civ approvehouse NAME SLOT Y` | Operators lvl 2 | Confirm one numbered housing proposal near the selected plot; real blocks rechecked |
+| `/civ farm NAME`, `/civ recoverfarm NAME` | Operators lvl 2 | Approve visual crop patch or preflight recovery |
 | `/civ day [1..30]` | Operators lvl 2 | Advance abstract simulation manually |
 | `/civ war A B`, `/civ peace A B` | Operators lvl 2 | Strategic-only conflict state |
 
