@@ -837,6 +837,10 @@ pub struct Settlement {
     /// One direct native-barrel player purchase, precharged in world.json.
     #[serde(default)]
     pub market_purchase: Option<MarketPurchase>,
+    /// Confirmed physical wheat harvested but still being carried by
+    /// UUID-linked farmers toward the central village receiving area.
+    #[serde(default)]
+    pub wheat_in_transit: u32,
     /// Active physical civic hall construction; never inferred from a JSON
     /// house counter, and can resume after restarting with observed blocks.
     #[serde(default)]
@@ -1072,6 +1076,25 @@ impl Settlement {
         priorities
     }
 
+    pub fn wheat_delivery_pending(&self) -> u32 { self.wheat_in_transit }
+
+    /// Called only after the native server sees an actual UUID-bound
+    /// farmer return to the hall. Same world-JSON save commits the pending
+    /// receipt and delivered stock; no second crop receipt is created.
+    pub fn deliver_farm_wheat(&mut self, village_id: u64) -> Result<bool, String> {
+        let v = self.settlements.get_mut(&village_id).ok_or("unknown village")?;
+        if v.wheat_in_transit == 0 { return Ok(false); }
+        let next = v.warehouse_quantity(Good::Wheat)
+            .checked_add(v.wheat_in_transit).ok_or("wheat delivery overflow")?;
+        if next > 10_000_000 { return Err("village wheat receiving capacity exceeded".into()); }
+        let delivered = v.wheat_in_transit;
+        v.warehouse.insert(Good::Wheat, next);
+        v.wheat_in_transit = 0;
+        let name = v.name.clone();
+        self.event(format!("{name}: farmer brought {delivered} verified wheat to the hall"));
+        Ok(true)
+    }
+
     pub fn warehouse_quantity(&self, good: Good) -> u32 {
         self.warehouse.get(&good).copied().unwrap_or(0)
     }
@@ -1229,6 +1252,9 @@ impl World {
                     || !self.players.contains_key(&purchase.buyer) {
                     return Err("invalid pending native market purchase".into());
                 }
+            }
+            if village.wheat_in_transit > 10_000_000 {
+                return Err("wheat in physical transit exceeds cap".into());
             }
             if village.build_escrow.values().any(|&amount| amount > 10_000_000) {
                 return Err("physical builder escrow entry too large".into());
@@ -1437,6 +1463,7 @@ impl World {
             build_escrow: BTreeMap::new(),
             barrel_transfer: None,
             market_purchase: None,
+            wheat_in_transit: 0,
             hall_job: None,
             hall_complete: false,
             gather_job: None,
@@ -2084,10 +2111,10 @@ impl World {
         let credit_harvest = matches!(&decision, FarmDecision::StageComplete)
             && village.farm.as_ref().is_some_and(|farm| farm.stage == FarmStage::Harvesting);
         let new_wheat = if credit_harvest {
-            let n = village.warehouse_quantity(Good::Wheat)
-                .checked_add(8).ok_or("wheat warehouse overflow")?;
-            if n > 10_000_000 { return Err("wheat warehouse full".into()); }
-            Some(n)
+            let pending = village.wheat_in_transit.checked_add(8)
+                .ok_or("wheat farm delivery overflow")?;
+            if pending > 10_000_000 { return Err("wheat delivery queue exceeded".into()); }
+            Some(pending)
         } else { None };
         let farm = village.farm.as_mut().ok_or("no farm")?;
         match decision {
@@ -2138,11 +2165,11 @@ impl World {
                     }
                 };
                 farm.cursor = 0;
-                // This physical wheat is a *receipt-backed* ledger entry,
-                // never the abstract stock produced by daily simulation.
-                // No item is placed in a vanilla barrel (separate API needed).
+                // Harvest is physically observed and has exactly one
+                // receipt. The stock remains in the farmer's transit queue
+                // until a live UUID-bound farmer returns to the hall.
                 if let Some(count) = new_wheat {
-                    village.warehouse.insert(Good::Wheat, count);
+                    village.wheat_in_transit = count;
                 }
                 Ok(true)
             }
