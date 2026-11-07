@@ -42,7 +42,7 @@ pub struct PlayerParcel {
     pub commissioned: bool,
 }
 
-fn near_plot(a: [i32; 3], b: [i32; 3]) -> bool {
+pub fn near_plot(a: [i32; 3], b: [i32; 3]) -> bool {
     let dx = i128::from(a[0]) - i128::from(b[0]);
     let dz = i128::from(a[2]) - i128::from(b[2]);
     dx * dx + dz * dz < 9_i128 * 9
