@@ -129,6 +129,32 @@ class GuardedPartialVillagerRecoveryContracts(unittest.TestCase):
         self.assertIn("for (resident, position) in s.residents.iter().take(10).zip(positions)", op)
         self.assertNotIn("[x, f64::from(s.center[1]), z]", op)
 
+    def test_initial_spawn_positions_are_pairwise_separated(self):
+        survey = function(GLUE, "fn safe_actor_spawn_points(", "\n}")
+        self.assertIn("if spots.iter().any(|other: &[f64; 3]|", survey)
+        self.assertIn("dx * dx + dy * dy + dz * dz < 9.0", survey)
+        self.assertLess(survey.index("if spots.iter().any("),
+                        survey.index("spots.push(point)"))
+
+    def test_failed_reconcile_save_does_not_implicitly_retry(self):
+        command = function(GLUE, '"reconcile" if player.permission >= 2 => (|| {',
+                           "\n        })(),")
+        failure = command.split("if let Err(e) = save(state)", 1)[1]
+        self.assertLess(failure.index("already_saved = true;"),
+                        failure.index('state.problem = Some('))
+        self.assertIn("world halted", failure)
+
+    def test_post_commit_error_halts_instead_of_rolling_back_snapshot(self):
+        handler = GLUE.split("    match result {", 1)[-1]
+        # Narrow to the mutating command handler, not earlier matches.
+        handler = GLUE.split("    match result {\n        Ok(message) => {", 1)[1]
+        handler = handler.split("\n}\n", 1)[0]
+        self.assertIn("if already_saved {", handler)
+        self.assertIn("state.problem = Some(format!(", handler)
+        self.assertIn("state.world = Some(previous)", handler)
+        self.assertLess(handler.index("if already_saved {"),
+                        handler.index("state.world = Some(previous)", handler.index("Err(message) =>")))
+
     def test_core_regression_module_includes_seven_cases(self):
         chunk = CORE.split("mod guarded_partial_native_actor_recovery_tests", 1)[1]
         self.assertEqual(chunk.count("#[test]"), 8)
