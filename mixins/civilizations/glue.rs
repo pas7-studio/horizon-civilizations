@@ -903,7 +903,7 @@ fn buy_from_real_barrel(
         else { continue; };
         if let Some(slot) = slots.iter().find_map(|entry| {
             let stack = entry.stack.as_ref()?;
-            (entry.can_take && stack.item == good.item() && stack.count >= count
+            (entry.can_take && stack.item.as_ref() == good.item() && stack.count >= count
                 && stack.damage == 0 && stack.extra.is_none())
                 .then_some((entry.slot, stack.count))
         }) {
@@ -931,7 +931,7 @@ fn buy_from_real_barrel(
     *already_saved = true; // outer command handler must NEVER undo this debit
     let taken = game.native_extract_item(&v.dimension, barrel, Direction::Up, slot, count);
     let exact = taken.as_ref().is_some_and(|stack| {
-        stack.item == good.item() && stack.count == count
+        stack.item.as_ref() == good.item() && stack.count == count
             && stack.damage == 0 && stack.extra.is_none()
     });
     if !exact {
@@ -1861,7 +1861,7 @@ fn plain_barrel_count(game: &Game<'_>, dimension: &str, pos: [i32; 3], good: Goo
     }
     let slots = game.native_container_slots(dimension, pos, Direction::Up)?;
     slots.iter().filter_map(|entry| entry.stack.as_ref())
-        .filter(|stack| stack.item == good.item() && stack.damage == 0 && stack.extra.is_none())
+        .filter(|stack| stack.item.as_ref() == good.item() && stack.damage == 0 && stack.extra.is_none())
         .try_fold(0_u32, |total, stack| total.checked_add(stack.count))
 }
 
@@ -1914,7 +1914,7 @@ fn request_workshop_pickup(
         else { continue; };
         let item = slots.iter().find_map(|entry| {
             let stack = entry.stack.as_ref()?;
-            (entry.can_take && stack.item == good.item()
+            (entry.can_take && stack.item.as_ref() == good.item()
                 && stack.damage == 0 && stack.extra.is_none()
                 && stack.count > 0).then_some((entry.slot, stack.count))
         });
@@ -1979,7 +1979,7 @@ fn barrel_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
                     ).is_some_and(|slots| slots.iter().any(|entry| {
                         entry.slot == selected && entry.can_take
                             && entry.stack.as_ref().is_some_and(|stack| {
-                                stack.item == transfer.good.item()
+                                stack.item.as_ref() == transfer.good.item()
                                     && stack.damage == 0 && stack.extra.is_none()
                                     && stack.count >= transfer.count
                             })
@@ -2012,7 +2012,7 @@ fn barrel_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
                         &dimension, transfer.position, Direction::Up, slot, transfer.count
                     );
                     taken.is_some_and(|stack| {
-                        stack.item == transfer.good.item() && stack.count == transfer.count
+                        stack.item.as_ref() == transfer.good.item() && stack.count == transfer.count
                             && stack.damage == 0 && stack.extra.is_none()
                     })
                 }
@@ -2114,7 +2114,7 @@ fn barrel_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
                     else { continue; };
                     let Some((slot, available)) = slots.iter().find_map(|entry| {
                         let stack = entry.stack.as_ref()?;
-                        (entry.can_take && stack.item == good.item()
+                        (entry.can_take && stack.item.as_ref() == good.item()
                             && stack.damage == 0 && stack.extra.is_none()
                             && stack.count > 0).then_some((entry.slot, stack.count))
                     }) else { continue; };
@@ -2154,7 +2154,7 @@ fn barrel_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
                 else { continue; };
                 let space: u32 = slots.iter().map(|entry| match &entry.stack {
                     None => 64,
-                    Some(stack) if stack.item == good.item()
+                    Some(stack) if stack.item.as_ref() == good.item()
                         && stack.damage == 0 && stack.extra.is_none() =>
                         64_u32.saturating_sub(stack.count),
                     _ => 0,

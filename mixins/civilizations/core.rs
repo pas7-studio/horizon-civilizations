@@ -1193,23 +1193,6 @@ impl Settlement {
 
     pub fn wheat_delivery_pending(&self) -> u32 { self.wheat_in_transit }
 
-    /// Called only after the native server sees an actual UUID-bound
-    /// farmer return to the hall. Same world-JSON save commits the pending
-    /// receipt and delivered stock; no second crop receipt is created.
-    pub fn deliver_farm_wheat(&mut self, village_id: u64) -> Result<bool, String> {
-        let v = self.settlements.get_mut(&village_id).ok_or("unknown village")?;
-        if v.wheat_in_transit == 0 { return Ok(false); }
-        let next = v.warehouse_quantity(Good::Wheat)
-            .checked_add(v.wheat_in_transit).ok_or("wheat delivery overflow")?;
-        if next > 10_000_000 { return Err("village wheat receiving capacity exceeded".into()); }
-        let delivered = v.wheat_in_transit;
-        v.warehouse.insert(Good::Wheat, next);
-        v.wheat_in_transit = 0;
-        let name = v.name.clone();
-        self.event(format!("{name}: farmer brought {delivered} verified wheat to the hall"));
-        Ok(true)
-    }
-
     pub fn warehouse_quantity(&self, good: Good) -> u32 {
         self.warehouse.get(&good).copied().unwrap_or(0)
     }
@@ -1226,7 +1209,7 @@ impl Settlement {
     pub fn warehouse_debit(&mut self, good: Good, count: u32) -> Result<(), String> {
         let current = self.warehouse_quantity(good);
         if current < count { return Err(format!(
-            "warehouse lacks {} {}: {} available, {} required",
+            "warehouse lacks {}: {} available, {} required",
             good.as_str(), current, count
         )); }
         self.warehouse.insert(good, current - count);
@@ -1552,6 +1535,33 @@ impl World {
         }
     }
 
+    /// Called only after the native server sees an actual UUID-bound
+    /// farmer return to the hall. Same world-JSON save commits the pending
+    /// receipt and delivered stock; no second crop receipt is created.
+    pub fn deliver_farm_wheat(&mut self, village_id: u64) -> Result<bool, String> {
+        let (name, delivered) = {
+            let v = self.settlements.get_mut(&village_id).ok_or("unknown village")?;
+            if v.wheat_in_transit == 0 {
+                return Ok(false);
+            }
+            let next = v
+                .warehouse_quantity(Good::Wheat)
+                .checked_add(v.wheat_in_transit)
+                .ok_or("wheat delivery overflow")?;
+            if next > 10_000_000 {
+                return Err("village wheat receiving capacity exceeded".into());
+            }
+            let delivered = v.wheat_in_transit;
+            v.warehouse.insert(Good::Wheat, next);
+            v.wheat_in_transit = 0;
+            (v.name.clone(), delivered)
+        };
+        self.event(format!(
+            "{name}: farmer brought {delivered} verified wheat to the hall"
+        ));
+        Ok(true)
+    }
+
     pub fn found(
         &mut self,
         name: &str,
@@ -1776,17 +1786,20 @@ impl World {
     }
 
     pub fn finish_bakery(&mut self, id: u64) -> Result<(), String> {
-        let v = self.settlements.get_mut(&id).ok_or("unknown village")?;
-        let bakery = v.bakery.as_mut().ok_or("no bakery")?;
-        let job = bakery.building.as_ref().ok_or("no bakery construction job")?;
-        if bakery.complete || !bakery.supplies_reserved
-            || job.cursor != bakery_plan(job.origin).len() {
-            return Err("unfunded or physically incomplete bakery cannot open".into());
-        }
-        bakery.building = None;
-        bakery.complete = true;
-        let name = v.name.clone();
-        self.event(format!("{name}: verified bakery opened at {:?}", bakery.origin));
+        let (name, origin) = {
+            let v = self.settlements.get_mut(&id).ok_or("unknown village")?;
+            let bakery = v.bakery.as_mut().ok_or("no bakery")?;
+            let job = bakery.building.as_ref().ok_or("no bakery construction job")?;
+            if bakery.complete || !bakery.supplies_reserved
+                || job.cursor != bakery_plan(job.origin).len() {
+                return Err("unfunded or physically incomplete bakery cannot open".into());
+            }
+            let origin = bakery.origin;
+            bakery.building = None;
+            bakery.complete = true;
+            (v.name.clone(), origin)
+        };
+        self.event(format!("{name}: verified bakery opened at {origin:?}"));
         Ok(())
     }
 
