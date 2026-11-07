@@ -111,3 +111,13 @@ and either authoritative mob UUID ownership or a well-scoped identity registry.
 - [x] Read-only `/civ schedule NAME` reports phase and on-duty headcount.
 - [ ] Local Rust formatting, Clippy, native compile and first playable E2E (Actions disabled).
 - [ ] Real indoor sleeping/home ownership, civilian AI and player interaction remain follow-ups.
+
+## Completed-hut home routing (v0.1.8 source-only, local E2E pending)
+
+- [x] Compute capacity only from the completed physical hut registry, not abstract houses.
+- [x] Assign up to three standing places per completed hut deterministically by resident ID.
+- [x] Verify real Minecraft loaded floor, unobstructed interior and two-high doorway before night route.
+- [x] Fall back to existing commons route for no/unsafe/unloaded homes without mutating world blocks.
+- [x] Show physical housing capacity and allocation with read-only `/civ homes NAME` and NPC dialogue.
+- [ ] Local Rust/Clippy/Python validation, pinned Horizon native compile and in-world pathfinding E2E.
+- [ ] Actual bed ownership/sleep, door opening, permanent household claims, and shelter effects on morale.
