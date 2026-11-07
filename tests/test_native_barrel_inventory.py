@@ -116,7 +116,7 @@ class NativeBarrelInventorySourceContracts(unittest.TestCase):
         self.assertIn("*cancel = true;", GLUE)
         self.assertIn("hall_storage_positions(v.center).contains(&position)", GLUE)
         ids = [entry["id"] for entry in MIXIN["injection"]]
-        self.assertEqual(len(ids), 14)
+        self.assertEqual(len(ids), 11)
         self.assertIn("warehouse_inventory", ids)
         entry = next(item for item in MIXIN["injection"]
                      if item["id"] == "warehouse_inventory")

@@ -28,7 +28,7 @@ class PackagingContracts(unittest.TestCase):
         self.assertEqual('civilizations', manifest['mod']['id'])
         cargo = tomllib.loads((ROOT / 'Cargo.toml').read_text())
         self.assertEqual(cargo['package']['version'], manifest['mod']['version'])
-        self.assertEqual(14, len(manifest['injection']))
+        self.assertEqual(11, len(manifest['injection']))
 
     def test_native_bundle_is_reproducible_and_source_only(self):
         build = load_packager()

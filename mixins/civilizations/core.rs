@@ -218,6 +218,8 @@ pub struct WorkPost {
 /// How far from its camp a worker may search for natural resources.
 pub const POST_RADIUS: i32 = 24;
 pub const MAX_POSTS: usize = 4;
+/// A quarry pit is a staircase of at most this many steps down from its camp.
+pub const MAX_QUARRY_STEPS: u8 = 24;
 
 /// A village keeps its own work area ticking even with nobody standing in
 /// it. Chunks are the smallest horizontal unit the engine can load, so the
@@ -1138,47 +1140,8 @@ pub fn render_build_progress(title: &str, done: usize, total: usize, blocked: bo
     }
 }
 
-/// Rows of the villager conversation menu (a vanilla chest layout).
-pub const DIALOGUE_ROWS: u8 = 3;
-/// Most a single hand-over may sell, as the existing market enforces.
+/// Most a single sale may take of one good, as the existing market enforces.
 pub const MAX_HAND_SALE: u32 = 64;
-/// The trade page's input slots: the player drops goods into these.
-pub const TRADE_INPUT: std::ops::Range<usize> = 10..17;
-
-/// Pages of a villager's conversation menu.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MenuPage {
-    Main,
-    Village,
-    Trade,
-}
-
-/// What clicking a button does. Pure data: the native adapter performs it.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum MenuAction {
-    None,
-    Go(MenuPage),
-    Join,
-    Sell,
-    Close,
-}
-
-/// One icon in a villager's conversation menu. The text is the item name.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct MenuEntry {
-    pub slot: usize,
-    pub icon: &'static str,
-    pub text: String,
-    /// A text-component color name (`gold`, `green`, `gray`...).
-    pub color: &'static str,
-    pub bold: bool,
-    pub action: MenuAction,
-}
-
-fn entry(slot: usize, icon: &'static str, text: impl AsRef<str>, color: &'static str,
-         bold: bool, action: MenuAction) -> MenuEntry {
-    MenuEntry { slot, icon, text: menu_text(text), color, bold, action }
-}
 
 /// Goods this resident will buy from a player right now, each with the most
 /// they will take. Only the mayor and the baker trade at all, and only for
@@ -1209,38 +1172,74 @@ pub fn job_trades(job: Job) -> bool {
     matches!(job, Job::Merchant | Job::Baker)
 }
 
-/// A stack the player put into a trade slot, reduced to what a sale needs.
-#[derive(Clone, Debug, PartialEq, Eq)]
-pub struct OfferedStack {
-    pub item: String,
-    pub count: u32,
-    /// No damage and no extra components: only plain goods are bought.
-    pub plain: bool,
+/// Pages of a villager's conversation window.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum TalkPage {
+    Main,
+    Village,
+    Trade,
 }
 
-/// Take what the resident wants out of the offered stacks. Stacks are reduced
-/// in place (emptied ones become `None`); anything not wanted, damaged,
-/// customised or over a want's cap stays for the player to get back. Returns
-/// the total accepted per good, in `wants` order.
-pub fn settle_offer(
-    wants: &[(Good, u32)], offered: &mut [Option<OfferedStack>],
-) -> Vec<(Good, u32)> {
-    let mut accepted: Vec<(Good, u32)> = wants.iter().map(|(good, _)| (*good, 0)).collect();
-    for slot in offered.iter_mut() {
-        let Some(stack) = slot.as_mut() else { continue };
-        if !stack.plain { continue; }
-        let Some(index) = wants.iter().position(|(good, _)| good.item() == stack.item) else {
-            continue;
-        };
-        let room = wants[index].1.min(MAX_HAND_SALE).saturating_sub(accepted[index].1);
-        let take = stack.count.min(room);
-        if take == 0 { continue; }
-        accepted[index].1 += take;
-        stack.count -= take;
-        if stack.count == 0 { *slot = None; }
+impl TalkPage {
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::Main => "main",
+            Self::Village => "village",
+            Self::Trade => "trade",
+        }
     }
-    accepted.retain(|(_, count)| *count > 0);
-    accepted
+    pub fn parse(word: &str) -> Option<Self> {
+        match word {
+            "main" => Some(Self::Main),
+            "village" => Some(Self::Village),
+            "trade" => Some(Self::Trade),
+            _ => None,
+        }
+    }
+}
+
+/// A player-friendly name for a tradable good.
+pub fn good_label(good: Good) -> &'static str {
+    match good {
+        Good::Wood => "oak logs",
+        Good::Stone => "cobblestone",
+        Good::Wheat => "wheat",
+        Good::Bread => "bread",
+        _ => good.as_str(),
+    }
+}
+
+/// A slider the player drags to choose how much to sell.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DlgSlider {
+    pub key: &'static str,
+    pub label: String,
+    pub min: u32,
+    pub max: u32,
+    pub initial: u32,
+}
+
+/// A button. `command` runs as the player; with `template` it may contain
+/// `$(key)` placeholders that the dialog fills from the sliders.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct DlgButton {
+    pub label: String,
+    pub tooltip: Option<String>,
+    pub color: &'static str,
+    pub command: String,
+    pub template: bool,
+}
+
+/// An RPG-style conversation window: a portrait, paragraphs of speech,
+/// optional sliders and a column of choices.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct Dialog {
+    pub title: String,
+    pub portrait: &'static str,
+    pub portrait_caption: String,
+    pub paragraphs: Vec<(String, &'static str)>,
+    pub sliders: Vec<DlgSlider>,
+    pub buttons: Vec<DlgButton>,
 }
 
 fn job_icon(job: Job) -> &'static str {
@@ -1256,12 +1255,12 @@ fn job_icon(job: Job) -> &'static str {
     }
 }
 
-fn menu_text(text: impl AsRef<str>) -> String {
-    text.as_ref().chars().filter(|c| !c.is_control()).take(60).collect()
+fn dialog_text(text: impl AsRef<str>) -> String {
+    text.as_ref().chars().filter(|c| !c.is_control()).take(240).collect()
 }
 
-/// Everything the conversation menu shows. The menu itself changes nothing:
-/// clicks are turned into `MenuAction`s that the native adapter performs.
+/// Everything a conversation page shows. Pure data: the native adapter reads
+/// it from the live village and the player's pockets.
 pub struct DialogueInput<'a> {
     pub village: &'a Settlement,
     pub resident: &'a Resident,
@@ -1273,136 +1272,265 @@ pub struct DialogueInput<'a> {
     pub stock_known: bool,
     pub wood_missing: u32,
     pub stone_missing: u32,
+    /// How many of each good the player carries right now.
+    pub carried: &'a [(Good, u32)],
+    /// A line shown first, such as the result of the last action.
+    pub notice: Option<String>,
 }
 
-/// Title shown above a page.
-pub fn page_title(page: MenuPage, input: &DialogueInput<'_>) -> String {
-    match page {
-        MenuPage::Main => format!("{} - {}", input.village.name, input.resident.name),
-        MenuPage::Village => format!("{} - village", input.village.name),
-        MenuPage::Trade => format!("{} - trade", input.resident.name),
+fn greeting(input: &DialogueInput<'_>) -> String {
+    let village = &input.village.name;
+    let name = &input.resident.name;
+    match input.resident.job {
+        Job::Merchant => format!("Welcome to {village}, traveller. I keep the town hall's books and its warehouse."),
+        Job::Baker => format!("The ovens of {village} are warm. I am {name}, the baker."),
+        Job::Farmer => format!("The fields of {village} keep me busy. I am {name}."),
+        Job::Lumberjack => format!("Mind the chips, friend. I am {name}, I fell trees for {village}."),
+        Job::Miner => format!("Stone dust in my beard again. I am {name}, I quarry for {village}."),
+        Job::Builder => format!("Another wall to raise! I am {name}, builder of {village}."),
+        Job::Guard => format!("I keep watch over {village}. Move along, or state your business."),
+        _ => format!("Good day. I am {name}, I help wherever {village} needs hands."),
     }
 }
 
-fn filler(slot: usize) -> MenuEntry {
-    entry(slot, "minecraft:gray_stained_glass_pane", " ", "gray", false, MenuAction::None)
+fn command_for(input: &DialogueInput<'_>, page: &str) -> String {
+    format!("civ talk {} {} {}", input.village.name, input.resident.id, page)
 }
 
-/// The entries of one page, ready to place by slot.
-pub fn page_entries(page: MenuPage, input: &DialogueInput<'_>) -> Vec<MenuEntry> {
+fn back_button(input: &DialogueInput<'_>) -> DlgButton {
+    DlgButton {
+        label: "Back".into(), tooltip: None, color: "yellow",
+        command: command_for(input, "main"), template: false,
+    }
+}
+
+/// Build one conversation page.
+pub fn build_dialog(page: TalkPage, input: &DialogueInput<'_>) -> Dialog {
     let village = input.village;
     let resident = input.resident;
+    let role = if resident.job == Job::Merchant {
+        "mayor and warehouse steward".to_owned()
+    } else {
+        resident.job.name().to_owned()
+    };
+    let mut paragraphs: Vec<(String, &'static str)> = Vec::new();
+    if let Some(notice) = &input.notice {
+        paragraphs.push((dialog_text(notice), "gold"));
+    }
+    let mut sliders = Vec::new();
+    let mut buttons = Vec::new();
     match page {
-        MenuPage::Main => {
-            let role = if resident.job == Job::Merchant {
-                "mayor / warehouse steward".to_owned()
-            } else {
-                resident.job.name().to_owned()
-            };
+        TalkPage::Main => {
+            paragraphs.push((dialog_text(greeting(input)), "white"));
+            paragraphs.push((dialog_text(format!(
+                "{} - {}", input.routine, if input.on_duty { "on duty" } else { "off duty" }
+            )), "gray"));
             let home = match village.home_slot(resident.id) {
-                Some(slot) => format!("Home: hut, place {}", slot.lane + 1),
-                None => "Home: the commons".to_owned(),
+                Some(slot) => format!("Lives in a village hut, place {}.", slot.lane + 1),
+                None => "Sleeps in the commons.".to_owned(),
             };
-            let mut entries = vec![
-                entry(4, job_icon(resident.job), format!("{} - {}", resident.name, role),
-                    "gold", true, MenuAction::None),
-                entry(11, "minecraft:filled_map", format!("About {}", village.name),
-                    "aqua", false, MenuAction::Go(MenuPage::Village)),
-                entry(20, "minecraft:clock", format!("Routine: {} ({})", input.routine,
-                    if input.on_duty { "on duty" } else { "off duty" }),
-                    "gray", false, MenuAction::None),
-                entry(24, "minecraft:red_bed", home, "gray", false, MenuAction::None),
-                entry(22, "minecraft:barrier", "Close", "red", false, MenuAction::Close),
-            ];
-            entries.push(if job_trades(resident.job) {
-                let (text, color) = if input.wants.is_empty() {
-                    ("Trade (nothing needed now)", "gray")
+            paragraphs.push((home, "gray"));
+            buttons.push(DlgButton {
+                label: format!("Ask about {}", village.name),
+                tooltip: Some("Population, homes, treasury, needs and what the council worries about.".into()),
+                color: "aqua", command: command_for(input, "village"), template: false,
+            });
+            if job_trades(resident.job) {
+                let tooltip = if input.wants.is_empty() {
+                    "Nothing is needed right now.".to_owned()
                 } else {
-                    ("Trade - sell goods the village needs", "green")
+                    let list: Vec<String> = input.wants.iter()
+                        .map(|(g, n)| format!("{} up to {} at {} coins each", good_label(*g), n, g.price()))
+                        .collect();
+                    format!("I buy: {}.", list.join("; "))
                 };
-                entry(13, "minecraft:emerald", text, color, !input.wants.is_empty(),
-                    MenuAction::Go(MenuPage::Trade))
-            } else {
-                entry(13, "minecraft:barrier", "I do not trade - ask the mayor", "gray",
-                    false, MenuAction::None)
-            });
-            entries.push(if input.is_member {
-                entry(15, "minecraft:writable_book", format!("You belong to {}", village.name),
-                    "gray", false, MenuAction::None)
-            } else {
-                entry(15, "minecraft:writable_book", format!("Join {}", village.name),
-                    "green", true, MenuAction::Join)
-            });
-            entries
+                buttons.push(DlgButton {
+                    label: "Trade".into(), tooltip: Some(tooltip),
+                    color: if input.wants.is_empty() { "gray" } else { "green" },
+                    command: command_for(input, "trade"), template: false,
+                });
+            }
+            if !input.is_member {
+                buttons.push(DlgButton {
+                    label: format!("Join {}", village.name),
+                    tooltip: Some("Become a member: you can then trade with the village and earn standing.".into()),
+                    color: "green", command: command_for(input, "join"), template: false,
+                });
+            }
         }
-        MenuPage::Village => {
+        TalkPage::Village => {
             let (capacity, _, homeless) = village.physical_housing();
-            let needs = if !input.stock_known {
-                "Needs: hall barrels out of sight".to_owned()
-            } else if input.wood_missing == 0 && input.stone_missing == 0 {
-                "Needs: nothing for building".to_owned()
-            } else {
-                format!("Needs: wood {} stone {}", input.wood_missing, input.stone_missing)
-            };
+            paragraphs.push((format!("{} - {} people", village.name, village.population()), "gold"));
+            paragraphs.push((format!("Homes: {capacity}   homeless: {homeless}"), "gray"));
+            paragraphs.push((format!("Treasury: {} coins   mood: {}", village.treasury_coins, village.morale), "gray"));
+            paragraphs.push((
+                if village.hall_complete { "The town hall stands.".to_owned() }
+                else { "The town hall is not built yet.".to_owned() },
+                "gray",
+            ));
+            paragraphs.push((
+                if !input.stock_known {
+                    "The hall barrels are out of sight.".to_owned()
+                } else if input.wood_missing == 0 && input.stone_missing == 0 {
+                    "Nothing is missing for building.".to_owned()
+                } else {
+                    format!("Missing for building: {} oak logs, {} cobblestone.",
+                        input.wood_missing, input.stone_missing)
+                },
+                "gray",
+            ));
             let council = village.council_priorities().first()
-                .map(|p| format!("Council: {} {}/100", p.need.label(), p.urgency))
-                .unwrap_or_else(|| "Council: all calm".to_owned());
-            let war = if village.active_wars.is_empty() {
-                "Peace".to_owned()
-            } else {
-                format!("At war with {}", village.active_wars.len())
-            };
-            vec![
-                entry(4, "minecraft:bell", village.name.clone(), "gold", true, MenuAction::None),
-                entry(10, "minecraft:red_bed",
-                    format!("People {} - homes {} - homeless {}", village.population(), capacity, homeless),
-                    "gray", false, MenuAction::None),
-                entry(11, "minecraft:gold_ingot", format!("Treasury: {} coins", village.treasury_coins),
-                    "gray", false, MenuAction::None),
-                entry(12, "minecraft:golden_apple", format!("Mood {}", village.morale),
-                    "gray", false, MenuAction::None),
-                entry(13, "minecraft:bricks",
-                    if village.hall_complete { "Town hall: built" } else { "Town hall: not built yet" },
-                    "gray", false, MenuAction::None),
-                entry(14, "minecraft:oak_log", needs, "gray", false, MenuAction::None),
-                entry(15, "minecraft:bell", council, "gray", false, MenuAction::None),
-                entry(16, "minecraft:iron_sword", war, "gray", false, MenuAction::None),
-                entry(22, "minecraft:arrow", "Back", "yellow", false, MenuAction::Go(MenuPage::Main)),
-            ]
+                .map(|p| format!("The council worries about {} ({}/100).", p.need.label(), p.urgency))
+                .unwrap_or_else(|| "The council is calm.".to_owned());
+            paragraphs.push((council, "gray"));
+            paragraphs.push((
+                if village.active_wars.is_empty() { "The village is at peace.".to_owned() }
+                else { format!("The village is at war with {} settlement(s).", village.active_wars.len()) },
+                if village.active_wars.is_empty() { "green" } else { "red" },
+            ));
+            buttons.push(back_button(input));
         }
-        MenuPage::Trade => {
-            let header = if !input.stock_known {
-                "My stores are out of sight - come back near the hall".to_owned()
+        TalkPage::Trade => {
+            if !job_trades(resident.job) {
+                paragraphs.push(("I do not trade. The mayor buys what the village needs.".into(), "gray"));
+            } else if !input.stock_known {
+                paragraphs.push(("My stores are out of sight. Come back near the hall.".into(), "gray"));
             } else if input.wants.is_empty() {
-                "We need nothing from you right now".to_owned()
-            } else {
-                let list: Vec<String> = input.wants.iter()
-                    .map(|(g, n)| format!("{} x{} at {}c", g.as_str(), n, g.price()))
-                    .collect();
-                format!("I buy: {}", list.join(", "))
-            };
-            let mut entries = vec![
-                entry(4, "minecraft:emerald", header, "gold", true, MenuAction::None),
-                entry(18, "minecraft:arrow", "Back", "yellow", false, MenuAction::Go(MenuPage::Main)),
-                entry(26, "minecraft:barrier", "Close", "red", false, MenuAction::Close),
-            ];
-            entries.push(if input.wants.is_empty() {
-                entry(22, "minecraft:barrier", "Nothing to sell", "gray", false, MenuAction::None)
+                paragraphs.push(("We need nothing from you right now.".into(), "gray"));
             } else if !input.is_member {
-                entry(22, "minecraft:barrier", "Join the village first", "red", false, MenuAction::None)
+                paragraphs.push(("Join the village first, then we can trade.".into(), "red"));
             } else {
-                entry(22, "minecraft:lime_dye", "SELL what is in the slots", "green", true, MenuAction::Sell)
-            });
-            // Everything else outside the input row is inert filler.
-            let used: Vec<usize> = entries.iter().map(|e| e.slot).collect();
-            for slot in 0..usize::from(DIALOGUE_ROWS) * 9 {
-                if !used.contains(&slot) && !TRADE_INPUT.contains(&slot) {
-                    entries.push(filler(slot));
+                paragraphs.push(("Choose how much to sell. Every coin and every item is counted in the village books.".into(), "white"));
+                for (good, cap) in input.wants {
+                    let have = input.carried.iter().find(|(g, _)| g == good).map_or(0, |(_, n)| *n);
+                    let max = have.min(*cap);
+                    if max == 0 {
+                        paragraphs.push((format!(
+                            "{}: you carry none (the village needs up to {}).", good_label(*good), cap
+                        ), "gray"));
+                    } else {
+                        sliders.push(DlgSlider {
+                            key: good.as_str(),
+                            label: format!("{} ({} coins each, you carry {})", good_label(*good), good.price(), have),
+                            min: 0, max, initial: max,
+                        });
+                    }
+                }
+                if !sliders.is_empty() {
+                    let args: Vec<String> = sliders.iter().map(|s| format!("{0}.$({0})", s.key)).collect();
+                    buttons.push(DlgButton {
+                        label: "Sell".into(),
+                        tooltip: Some("Hand over the chosen amounts and receive coins.".into()),
+                        color: "green",
+                        command: format!("{} {}", command_for(input, "sell"), args.join(" ")),
+                        template: true,
+                    });
                 }
             }
-            entries
+            buttons.push(back_button(input));
         }
     }
+    let title = match page {
+        TalkPage::Main => resident.name.clone(),
+        TalkPage::Village => format!("{} - village", village.name),
+        TalkPage::Trade => format!("{} - trade", resident.name),
+    };
+    Dialog {
+        title: dialog_text(title),
+        portrait: job_icon(resident.job),
+        portrait_caption: dialog_text(format!("{} - {}", resident.name, role)),
+        paragraphs,
+        sliders,
+        buttons,
+    }
+}
+
+/// Turn the `good.amount` words a Sell button sends into amounts, never more
+/// than the resident wants or the player carries. Unknown goods, goods the
+/// resident does not buy and zero amounts are dropped; nothing left is an
+/// error. Amounts may arrive as `8` or `8.0`.
+pub fn parse_sale_args(
+    wants: &[(Good, u32)], carried: &[(Good, u32)], words: &[&str],
+) -> Result<Vec<(Good, u32)>, String> {
+    let mut sale: Vec<(Good, u32)> = Vec::new();
+    for word in words {
+        let (key, value) = word.split_once('.').ok_or("malformed sale request")?;
+        let good = Good::parse(key).ok_or("unknown good in the sale request")?;
+        let Some((_, cap)) = wants.iter().find(|(g, _)| *g == good) else { continue };
+        let amount: f64 = value.parse().map_err(|_| "malformed amount in the sale request")?;
+        if !amount.is_finite() || amount < 1.0 { continue; }
+        let have = carried.iter().find(|(g, _)| *g == good).map_or(0, |(_, n)| *n);
+        let take = (amount.round().min(f64::from(u32::MAX)) as u32)
+            .min(*cap).min(have).min(MAX_HAND_SALE);
+        if take == 0 || sale.iter().any(|(g, _)| *g == good) { continue; }
+        sale.push((good, take));
+    }
+    if sale.is_empty() {
+        Err("nothing to sell: choose an amount above zero of something I buy".into())
+    } else {
+        Ok(sale)
+    }
+}
+
+fn snbt_string(text: &str) -> String {
+    let mut out = String::from("\"");
+    for c in text.chars() {
+        match c {
+            '\\' => out.push_str("\\\\"),
+            '"' => out.push_str("\\\""),
+            '\n' | '\r' | '\t' => out.push(' '),
+            c if c.is_control() => {}
+            c => out.push(c),
+        }
+    }
+    out.push('"');
+    out
+}
+
+fn snbt_text(text: &str, color: &str, bold: bool) -> String {
+    format!(
+        "{{text:{},color:{}{}}}",
+        snbt_string(text), snbt_string(color), if bold { ",bold:1b" } else { "" }
+    )
+}
+
+/// The dialog as the inline SNBT that `/dialog show <player> <snbt>` takes.
+/// Escape closes it, it never pauses the game, and every button runs a `civ`
+/// command as the player.
+pub fn dialog_snbt(dialog: &Dialog) -> String {
+    let mut body = vec![format!(
+        "{{type:\"minecraft:item\",item:{{id:{},count:1}},description:{{contents:{},width:240}},show_decorations:0b,show_tooltip:0b,width:16,height:16}}",
+        snbt_string(dialog.portrait), snbt_text(&dialog.portrait_caption, "gold", true)
+    )];
+    for (text, color) in &dialog.paragraphs {
+        body.push(format!(
+            "{{type:\"minecraft:plain_message\",contents:{},width:300}}",
+            snbt_text(text, color, false)
+        ));
+    }
+    let inputs: Vec<String> = dialog.sliders.iter().map(|s| format!(
+        "{{type:\"minecraft:number_range\",key:{},label:{},width:300,start:{},end:{},initial:{},step:1}}",
+        snbt_string(s.key), snbt_text(&s.label, "white", false), s.min, s.max, s.initial
+    )).collect();
+    let actions: Vec<String> = dialog.buttons.iter().map(|b| {
+        let action = if b.template {
+            format!("{{type:\"minecraft:dynamic/run_command\",template:{}}}", snbt_string(&b.command))
+        } else {
+            format!("{{type:\"minecraft:run_command\",command:{}}}", snbt_string(&b.command))
+        };
+        let tooltip = b.tooltip.as_ref()
+            .map(|t| format!(",tooltip:{}", snbt_text(t, "gray", false))).unwrap_or_default();
+        format!(
+            "{{label:{}{tooltip},width:300,action:{action}}}",
+            snbt_text(&b.label, b.color, false)
+        )
+    }).collect();
+    format!(
+        "{{type:\"minecraft:multi_action\",title:{},can_close_with_escape:1b,pause:0b,after_action:\"close\",body:[{}],inputs:[{}],actions:[{}],columns:1,exit_action:{{label:{},width:300}}}}",
+        snbt_text(&dialog.title, "gold", true),
+        body.join(","), inputs.join(","), actions.join(","),
+        snbt_text("Farewell", "gray", false)
+    )
 }
 
 /// Standing site board: on natural ground just outside the front-right
@@ -1873,6 +2001,10 @@ pub struct Settlement {
     /// Lumber camps and quarries. Old saves load with none.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub posts: Vec<WorkPost>,
+    /// How many staircase steps of the quarry pit are already opened. A pit
+    /// is real excavation on real ground, never a virtual stone source.
+    #[serde(default)]
+    pub quarry_step: u8,
 }
 
 /// Compute *combined* outstanding construction demand using verified native
@@ -2630,6 +2762,9 @@ impl World {
             if village.posts.len() > MAX_POSTS {
                 return Err("camp limit exceeded".into());
             }
+            if village.quarry_step > MAX_QUARRY_STEPS {
+                return Err("quarry pit depth out of range".into());
+            }
             let mut camp_sites = BTreeSet::new();
             for post in &village.posts {
                 if i64::from(post.origin[0]).abs() > 29_999_990
@@ -2808,6 +2943,7 @@ impl World {
             hut_supplies_reserved: false,
             farm: None,
             posts: Vec::new(),
+            quarry_step: 0,
         };
         self.settlements.insert(id, settlement);
         let p = self.players.entry(founder.to_owned()).or_default();
@@ -3595,8 +3731,21 @@ impl World {
         Ok(())
     }
 
-    pub fn post_origin(&self, village_id: u64, kind: PostKind) -> Option<[i32; 3]> {
-        self.settlements.get(&village_id)?
+    /// Open the next step of the quarry staircase. The depth is bounded: a
+    /// pit is a real hole in real ground, never a virtual stone source.
+    pub fn advance_quarry(&mut self, village_id: u64) -> Result<(), String> {
+        let village = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?;
+        if village.posts.iter().all(|post| post.kind != PostKind::Quarry) {
+            return Err("this village has no quarry".into());
+        }
+        if village.quarry_step >= MAX_QUARRY_STEPS {
+            return Err("quarry pit is deep enough".into());
+        }
+        village.quarry_step += 1;
+        Ok(())
+    }
+
+    pub fn post_origin(&self, village_id: u64, kind: PostKind) -> Option<[i32; 3]> {        self.settlements.get(&village_id)?
             .posts.iter().find(|post| post.kind == kind).map(|post| post.origin)
     }
 
@@ -5407,6 +5556,33 @@ mod workplace_staffing_tests {
         assert_eq!(Good::Dirt.item(), "minecraft:dirt");
         assert_eq!(PostKind::for_good(Good::Sand), PostKind::Sand);
         world.validate().unwrap();
+    }
+
+    #[test]
+    fn a_quarry_pit_is_bounded_and_needs_its_camp() {
+        let (mut world, id) = village();
+        assert!(world.advance_quarry(id).is_err());
+        world.add_post(id, PostKind::Quarry, [-24, 70, 0]).unwrap();
+        for step in 1..=u8::from(super::MAX_QUARRY_STEPS) {
+            world.advance_quarry(id).unwrap();
+            assert_eq!(world.settlements[&id].quarry_step, step);
+        }
+        assert!(world.advance_quarry(id).is_err());
+        assert_eq!(world.settlements[&id].quarry_step, super::MAX_QUARRY_STEPS);
+        world.validate().unwrap();
+        world.settlements.get_mut(&id).unwrap().quarry_step = super::MAX_QUARRY_STEPS + 1;
+        assert!(world.validate().is_err());
+    }
+
+    #[test]
+    fn legacy_save_without_a_pit_loads_with_zero_depth() {
+        let (mut world, id) = village();
+        world.add_post(id, PostKind::Quarry, [-24, 70, 0]).unwrap();
+        let mut value = serde_json::to_value(&world).unwrap();
+        value["settlements"][id.to_string()].as_object_mut().unwrap().remove("quarry_step");
+        let restored: World = serde_json::from_value(value).unwrap();
+        assert_eq!(restored.settlements[&id].quarry_step, 0);
+        restored.validate().unwrap();
     }
 
     #[test]
@@ -7504,8 +7680,20 @@ mod villager_dialogue_tests {
         (world, id)
     }
 
-    fn stack(item: &str, count: u32) -> Option<OfferedStack> {
-        Some(OfferedStack { item: item.into(), count, plain: true })
+    fn resident_with(world: &World, id: u64, job: Job) -> Resident {
+        let mut resident = world.settlements[&id].residents.first().cloned().expect("residents");
+        resident.job = job;
+        resident
+    }
+
+    fn input_for<'a>(
+        v: &'a Settlement, resident: &'a Resident, wants: &'a [(Good, u32)],
+        carried: &'a [(Good, u32)], is_member: bool,
+    ) -> DialogueInput<'a> {
+        DialogueInput {
+            village: v, resident, is_member, routine: "work shift".into(), on_duty: true,
+            wants, stock_known: true, wood_missing: 8, stone_missing: 0, carried, notice: None,
+        }
     }
 
     #[test]
@@ -7529,118 +7717,133 @@ mod villager_dialogue_tests {
     }
 
     #[test]
-    fn settle_takes_only_wanted_plain_goods_up_to_the_cap() {
+    fn sale_is_capped_by_want_and_pockets_and_drops_junk() {
         let wants = [(Good::Wood, 8), (Good::Stone, 25)];
-        let mut offered = vec![
-            stack("minecraft:oak_log", 5),
-            stack("minecraft:oak_log", 10),
-            stack("minecraft:cobblestone", 30),
-            stack("minecraft:diamond", 3),
-            None,
-        ];
-        let accepted = settle_offer(&wants, &mut offered);
-        assert_eq!(accepted, vec![(Good::Wood, 8), (Good::Stone, 25)]);
-        // 5 logs fully taken, 3 of the second stack; 7 logs and 5 stone come back.
-        assert_eq!(offered[0], None);
-        assert_eq!(offered[1].as_ref().unwrap().count, 7);
-        assert_eq!(offered[2].as_ref().unwrap().count, 5);
-        assert_eq!(offered[3].as_ref().unwrap().count, 3);
+        let carried = [(Good::Wood, 40), (Good::Stone, 5)];
+        assert_eq!(parse_sale_args(&wants, &carried, &["wood.64", "stone.25"]).unwrap(),
+            vec![(Good::Wood, 8), (Good::Stone, 5)]);
+        // Sliders may report 8 or 8.0.
+        assert_eq!(parse_sale_args(&wants, &carried, &["wood.3.0"]).unwrap(), vec![(Good::Wood, 3)]);
+        // A good the resident does not buy, or zero, or a repeat, is ignored.
+        assert_eq!(parse_sale_args(&wants, &carried, &["wheat.5", "wood.0", "wood.2", "wood.4"]).unwrap(),
+            vec![(Good::Wood, 2)]);
+        assert!(parse_sale_args(&wants, &carried, &["wood.0"]).is_err());
+        assert!(parse_sale_args(&wants, &carried, &["wheat.5"]).is_err());
+        assert!(parse_sale_args(&wants, &carried, &[]).is_err());
+        assert!(parse_sale_args(&wants, &carried, &["nonsense"]).is_err());
+        assert!(parse_sale_args(&wants, &carried, &["gold.3"]).is_err());
+        assert!(parse_sale_args(&wants, &carried, &["wood.NaN"]).is_err());
+        // Nothing carried: nothing sells.
+        assert!(parse_sale_args(&wants, &[], &["wood.5"]).is_err());
     }
 
     #[test]
-    fn settle_never_takes_damaged_or_customised_stacks() {
-        let wants = [(Good::Wood, 8)];
-        let mut offered = vec![Some(OfferedStack {
-            item: "minecraft:oak_log".into(), count: 4, plain: false,
-        })];
-        assert!(settle_offer(&wants, &mut offered).is_empty());
-        assert_eq!(offered[0].as_ref().unwrap().count, 4);
-        let mut none: Vec<Option<OfferedStack>> = vec![stack("minecraft:oak_log", 4)];
-        assert!(settle_offer(&[], &mut none).is_empty());
-        assert_eq!(none[0].as_ref().unwrap().count, 4);
-    }
-
-    fn input_for<'a>(
-        v: &'a Settlement, resident: &'a Resident, wants: &'a [(Good, u32)],
-        is_member: bool, stock_known: bool,
-    ) -> DialogueInput<'a> {
-        DialogueInput {
-            village: v, resident, is_member, routine: "work".into(), on_duty: true,
-            wants, stock_known, wood_missing: 8, stone_missing: 0,
-        }
-    }
-
-    fn resident_with(world: &World, id: u64, job: Job) -> Resident {
-        let mut resident = world.settlements[&id].residents.first().cloned().expect("residents");
-        resident.job = job;
-        resident
-    }
-
-    #[test]
-    fn every_page_fits_the_chest_and_never_collides() {
+    fn main_page_offers_trade_only_to_trading_roles_and_join_only_to_visitors() {
         let (world, id) = village();
         let v = &world.settlements[&id];
-        let mayor = resident_with(&world, id, Job::Merchant);
-        let wants = [(Good::Wood, 8)];
-        for page in [MenuPage::Main, MenuPage::Village, MenuPage::Trade] {
-            let entries = page_entries(page, &input_for(v, &mayor, &wants, true, true));
-            let slots: std::collections::BTreeSet<_> = entries.iter().map(|e| e.slot).collect();
-            assert_eq!(slots.len(), entries.len(), "{page:?} has colliding slots");
-            assert!(entries.iter().all(|e| e.slot < usize::from(DIALOGUE_ROWS) * 9), "{page:?}");
-            assert!(entries.iter().all(|e| e.text.chars().count() <= 60), "{page:?}");
-            // Trade input slots stay free for the player.
-            if page == MenuPage::Trade {
-                assert!(entries.iter().all(|e| !TRADE_INPUT.contains(&e.slot)));
-            }
-        }
-    }
-
-    #[test]
-    fn main_page_offers_trade_only_to_trading_roles() {
-        let (world, id) = village();
-        let v = &world.settlements[&id];
-        let find = |entries: &[MenuEntry], slot: usize| entries.iter().find(|e| e.slot == slot).cloned();
-        let mayor = resident_with(&world, id, Job::Merchant);
-        let wants = [(Good::Wood, 8)];
-        let page = page_entries(MenuPage::Main, &input_for(v, &mayor, &wants, true, true));
-        assert_eq!(find(&page, 13).unwrap().action, MenuAction::Go(MenuPage::Trade));
-        let farmer = resident_with(&world, id, Job::Farmer);
-        let page = page_entries(MenuPage::Main, &input_for(v, &farmer, &[], true, true));
-        assert_eq!(find(&page, 13).unwrap().action, MenuAction::None);
-    }
-
-    #[test]
-    fn join_button_only_for_non_members_and_sell_only_for_members_with_wants() {
-        let (world, id) = village();
-        let v = &world.settlements[&id];
-        let mayor = resident_with(&world, id, Job::Merchant);
-        let wants = [(Good::Wood, 8)];
-        let action_at = |page: MenuPage, member: bool, wants: &[(Good, u32)], slot: usize| {
-            page_entries(page, &input_for(v, &mayor, wants, member, true))
-                .into_iter().find(|e| e.slot == slot).unwrap().action
+        let labels = |job: Job, member: bool| -> Vec<String> {
+            let resident = resident_with(&world, id, job);
+            let wants = [(Good::Wood, 8)];
+            build_dialog(TalkPage::Main, &input_for(v, &resident, &wants, &[], member))
+                .buttons.into_iter().map(|b| b.label).collect()
         };
-        assert_eq!(action_at(MenuPage::Main, false, &wants, 15), MenuAction::Join);
-        assert_eq!(action_at(MenuPage::Main, true, &wants, 15), MenuAction::None);
-        assert_eq!(action_at(MenuPage::Trade, true, &wants, 22), MenuAction::Sell);
-        assert_eq!(action_at(MenuPage::Trade, false, &wants, 22), MenuAction::None);
-        assert_eq!(action_at(MenuPage::Trade, true, &[], 22), MenuAction::None);
+        assert!(labels(Job::Merchant, true).contains(&"Trade".to_owned()));
+        assert!(!labels(Job::Farmer, true).contains(&"Trade".to_owned()));
+        assert!(labels(Job::Merchant, false).iter().any(|l| l.starts_with("Join ")));
+        assert!(!labels(Job::Merchant, true).iter().any(|l| l.starts_with("Join ")));
     }
 
     #[test]
-    fn navigation_buttons_lead_back_and_close() {
+    fn trade_page_has_a_slider_only_for_goods_the_player_carries() {
+        let (world, id) = village();
+        let v = &world.settlements[&id];
+        let mayor = resident_with(&world, id, Job::Merchant);
+        let wants = [(Good::Wood, 8), (Good::Stone, 25)];
+        let carried = [(Good::Wood, 40)];
+        let dialog = build_dialog(TalkPage::Trade, &input_for(v, &mayor, &wants, &carried, true));
+        assert_eq!(dialog.sliders.len(), 1);
+        assert_eq!(dialog.sliders[0].key, "wood");
+        assert_eq!((dialog.sliders[0].min, dialog.sliders[0].max, dialog.sliders[0].initial), (0, 8, 8));
+        // The sell button is a template over exactly the sliders present.
+        let sell = dialog.buttons.iter().find(|b| b.label == "Sell").unwrap();
+        assert!(sell.template);
+        assert_eq!(sell.command, format!("civ talk Ashford {} sell wood.$(wood)", mayor.id));
+        assert!(dialog.paragraphs.iter().any(|(t, _)| t.contains("cobblestone: you carry none")));
+    }
+
+    #[test]
+    fn trade_page_without_membership_or_goods_has_no_sell_button() {
         let (world, id) = village();
         let v = &world.settlements[&id];
         let mayor = resident_with(&world, id, Job::Merchant);
         let wants = [(Good::Wood, 8)];
-        let input = input_for(v, &mayor, &wants, true, true);
-        let village_page = page_entries(MenuPage::Village, &input);
-        assert!(village_page.iter().any(|e| e.action == MenuAction::Go(MenuPage::Main)));
-        let trade_page = page_entries(MenuPage::Trade, &input);
-        assert!(trade_page.iter().any(|e| e.action == MenuAction::Go(MenuPage::Main)));
-        assert!(trade_page.iter().any(|e| e.action == MenuAction::Close));
-        assert!(page_entries(MenuPage::Main, &input).iter().any(|e| e.action == MenuAction::Close));
+        for (carried, member) in [(&[(Good::Wood, 9)][..], false), (&[][..], true)] {
+            let dialog = build_dialog(TalkPage::Trade, &input_for(v, &mayor, &wants, carried, member));
+            assert!(dialog.sliders.is_empty());
+            assert!(dialog.buttons.iter().all(|b| b.label != "Sell"));
+            assert!(dialog.buttons.iter().any(|b| b.label == "Back"));
+        }
+        let farmer = resident_with(&world, id, Job::Farmer);
+        let dialog = build_dialog(TalkPage::Trade, &input_for(v, &farmer, &[], &[], true));
+        assert!(dialog.paragraphs.iter().any(|(t, _)| t.contains("I do not trade")));
+    }
+
+    #[test]
+    fn notice_comes_first_and_pages_round_trip_by_name() {
+        let (world, id) = village();
+        let v = &world.settlements[&id];
+        let mayor = resident_with(&world, id, Job::Merchant);
+        let mut input = input_for(v, &mayor, &[], &[], true);
+        input.notice = Some("Sold 8 oak logs for 24 coins.".into());
+        let dialog = build_dialog(TalkPage::Main, &input);
+        assert_eq!(dialog.paragraphs[0].0, "Sold 8 oak logs for 24 coins.");
+        for page in [TalkPage::Main, TalkPage::Village, TalkPage::Trade] {
+            assert_eq!(TalkPage::parse(page.name()), Some(page));
+        }
+        assert_eq!(TalkPage::parse("evil"), None);
+    }
+
+    #[test]
+    fn snbt_is_balanced_escaped_and_names_every_button_command() {
+        let (world, id) = village();
+        let v = &world.settlements[&id];
+        let mut mayor = resident_with(&world, id, Job::Merchant);
+        mayor.name = "Quote\"Back\\slash".into();
+        let wants = [(Good::Wood, 8)];
+        let carried = [(Good::Wood, 40)];
+        let dialog = build_dialog(TalkPage::Trade, &input_for(v, &mayor, &wants, &carried, true));
+        let snbt = dialog_snbt(&dialog);
+        assert!(snbt.starts_with("{type:\"minecraft:multi_action\""));
+        assert!(snbt.contains("minecraft:number_range"));
+        assert!(snbt.contains("dynamic/run_command"));
+        assert!(snbt.contains("Quote\\\"Back\\\\slash"));
+        // Braces and brackets balance outside of string literals.
+        let (mut depth, mut square, mut in_str, mut escaped) = (0_i32, 0_i32, false, false);
+        for c in snbt.chars() {
+            if in_str {
+                if escaped { escaped = false; }
+                else if c == '\\' { escaped = true; }
+                else if c == '"' { in_str = false; }
+                continue;
+            }
+            match c {
+                '"' => in_str = true,
+                '{' => depth += 1,
+                '}' => depth -= 1,
+                '[' => square += 1,
+                ']' => square -= 1,
+                _ => {}
+            }
+            assert!(depth >= 0 && square >= 0);
+        }
+        assert!(!in_str && depth == 0 && square == 0);
+        for button in &dialog.buttons {
+            assert!(snbt.contains(&snbt_string(&button.command)), "{}", button.command);
+        }
+        assert!(!snbt.contains('\n'));
     }
 }
+
 
 
 #[cfg(test)]

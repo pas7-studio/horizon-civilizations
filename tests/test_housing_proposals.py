@@ -63,7 +63,7 @@ class VillageHousingProposalContracts(unittest.TestCase):
         cargo = tomllib.loads((ROOT / "Cargo.toml").read_text())
         self.assertEqual(cargo["package"]["version"], mixin["mod"]["version"])
         self.assertEqual(mixin["mod"]["version"], cargo["package"]["version"])
-        self.assertEqual(len(mixin["injection"]), 14)
+        self.assertEqual(len(mixin["injection"]), 11)
         self.assertIn("pub const SCHEMA: u32 = 1", CORE)
         self.assertNotIn("pub proposed_sites:", CORE)
 

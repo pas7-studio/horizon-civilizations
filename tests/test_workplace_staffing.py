@@ -97,6 +97,29 @@ class WorkplaceStaffingContracts(unittest.TestCase):
         self.assertIn("if !village.posts.iter().any(|post| post.kind == pit)", planner)
         self.assertIn("plan_gather(id, good, position, stand)", planner)
 
+    def test_a_natural_bump_is_cut_down_to_the_plot_floor(self):
+        body = GLUE.split("fn clear_growth_only(", 1)[1].split("\n}", 1)[0]
+        self.assertIn("if y == 0 && is_ground(&name) {", body)
+        self.assertIn("if is_ground(&below) {", body)
+        self.assertIn("is not natural growth", body)
+        # Nothing may be placed: a plot is only ever opened by removing blocks.
+        self.assertNotIn("minecraft:dirt replace", body)
+        self.assertNotIn("native_give", body)
+
+    def test_a_quarry_digs_a_bounded_staircase_to_real_stone(self):
+        self.assertIn("pub const MAX_QUARRY_STEPS: u8 = 24;", CORE)
+        self.assertIn("pub fn advance_quarry(", CORE)
+        self.assertIn("pub quarry_step: u8,", CORE)
+        pit = GLUE.split("fn quarry_one_step(", 1)[1].split("\n}", 1)[0]
+        self.assertIn('name == "minecraft:stone"', pit)
+        self.assertIn("plan_gather(id, Good::Stone, position, stand)", pit)
+        self.assertIn("advance_quarry(id)?", pit)
+        self.assertIn("native_run_command", pit)
+        self.assertIn("native_worker_near(actor.pos, position, 4.0, 3.0)", pit)
+        start = GLUE.split("fn quarry_start(", 1)[1].split("\n}", 1)[0]
+        self.assertIn("is_ground", start)
+        self.assertNotIn("native_run_command", start)
+
     def test_role_changes_are_announced_readably(self):
         staff = GLUE.split("fn staff_village(", 1)[1].split("\n}", 1)[0]
         self.assertIn("native_broadcast(", staff)

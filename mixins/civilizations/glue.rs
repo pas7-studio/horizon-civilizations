@@ -4,7 +4,7 @@ use crate::game::{
     civilizations_core::{farm_plan, hut_plan, town_hall_plan, bakery_plan, hall_storage_positions,
         BarrelDirection, BarrelPhase, inspect_farm, inspect_hut, inspect_town_hall, inspect_bakery, is_ground,
         is_rooted_oak_harvest_origin, short_oak_stem_height, inspect_oak_stem,
-        native_worker_near, native_worker_reaches_block, PostKind, POST_RADIUS, gather_turn_index,
+        native_worker_near, native_worker_reaches_block, PostKind, POST_RADIUS, MAX_QUARRY_STEPS, gather_turn_index,
         BuildInspection, DailyPhase, FarmBlock, FarmDecision, FarmStage, Good, HomeSlot, Job, VisualBuildJob,
         World, inspect_home, hall_board_positions, HOUSING_PLOT_OFFSETS, MAX_HOUSING_SURVEY_RESULTS,
         MAX_SIM_DAYS},
@@ -174,6 +174,10 @@ pub fn register(commands: &mut Vec<NativeCommand>) {
         "civ construction <name:word>", "civ farming <name:word>",
         "civ harvests <name:word>",
         "civ join <name:word>", "civ title", "civ promote", "civ history",
+        "civ talk <name:word> <resident:integer>",
+        "civ talk <name:word> <resident:integer> <page:word>",
+        "civ talk <name:word> <resident:integer> <page:word> <a:word>",
+        "civ talk <name:word> <resident:integer> <page:word> <a:word> <b:word>",
         "civ sell <good:word> <amount:integer>", "civ buy <good:word> <amount:integer>",
     ] {
         commands.push(NativeCommand::new(usage));
@@ -457,10 +461,23 @@ fn clear_growth_only(
                 let pos = [origin[0] + x, origin[1] + y, origin[2] + z];
                 let name = world_block(game, dimension, pos).ok_or("plot is not loaded")?;
                 if name == "minecraft:air" { continue; }
-                if !is_clearable_growth(&name) {
-                    return Err(format!("{name} at {pos:?} is not natural growth"));
+                if is_clearable_growth(&name) {
+                    doomed.push(pos);
+                    continue;
                 }
-                doomed.push(pos);
+                // A natural one-block bump is ordinary earthwork: the builder
+                // cuts it down to the plot floor, but only while real ground
+                // stays underneath, so the plot never gains a hole.
+                if y == 0 && is_ground(&name) {
+                    let below = world_block(
+                        game, dimension, [pos[0], origin[1] - 1, pos[2]],
+                    ).ok_or("plot floor is not loaded")?;
+                    if is_ground(&below) {
+                        doomed.push(pos);
+                        continue;
+                    }
+                }
+                return Err(format!("{name} at {pos:?} is not natural growth"));
             }
         }
     }
@@ -912,58 +929,53 @@ pub fn protect_hall_inventory(
 }
 
 use crate::game::civilizations_core::{
-    page_entries, page_title, resident_wants, settle_offer, DialogueInput, MenuAction, MenuEntry,
-    MenuPage, OfferedStack, DIALOGUE_ROWS, TRADE_INPUT,
+    build_dialog, dialog_snbt, good_label, parse_sale_args, resident_wants, DialogueInput, Resident,
+    Settlement, TalkPage,
 };
 
-/// One open conversation menu. The server hub is not reachable from inside
-/// the right-click hook, so the click only queues an opening and the next
-/// server tick shows the menu; later clicks are looked up by window id.
-#[derive(Clone)]
-struct MenuSession {
-    window: i32,
-    village_id: u64,
-    resident_id: u64,
-    page: MenuPage,
-    entries: Vec<MenuEntry>,
+/// Dialogs waiting to be shown: (player name, inline dialog SNBT). The server
+/// command that shows a dialog only runs from the server tick, never inside a
+/// player's command or hook, so everything is queued and flushed there.
+static DIALOG_QUEUE: Mutex<Vec<(String, String)>> = Mutex::new(Vec::new());
+
+fn dialog_queue() -> MutexGuard<'static, Vec<(String, String)>> {
+    DIALOG_QUEUE.lock().unwrap_or_else(|poison| poison.into_inner())
+}
+
+/// Called every server tick: show queued conversation windows.
+pub fn process_dialog_queue(game: &mut Game<'_>) {
+    let queued: Vec<(String, String)> = std::mem::take(&mut *dialog_queue());
+    for (name, snbt) in queued {
+        // Player names are 1..16 of letters, digits and underscore; refuse
+        // anything else rather than build a command from it.
+        let safe = !name.is_empty()
+            && name.len() <= 16
+            && name.chars().all(|c| c.is_ascii_alphanumeric() || c == '_');
+        if !safe {
+            log::warn!("[civilizations] conversation not shown: unusual player name");
+            continue;
+        }
+        if !game.native_run_command(&format!("dialog show {name} {snbt}")) {
+            log::warn!("[civilizations] conversation window could not be shown to {name}");
+        }
+    }
+}
+
+/// What one conversation page needs, read from the live village and the
+/// player's pockets. Only valid where the player's state is swapped in (a
+/// command or an interaction hook), which is where it is called.
+struct Talk {
+    village: Settlement,
+    resident: Resident,
+    is_member: bool,
     wants: Vec<(Good, u32)>,
-    /// The player pressed SELL: the next close of the trade page settles the
-    /// goods left in its input slots. A plain close sells nothing.
-    confirm_sale: bool,
+    stock_known: bool,
+    wood_missing: u32,
+    stone_missing: u32,
+    carried: Vec<(Good, u32)>,
 }
 
-struct PendingOpen {
-    uuid: u128,
-    village_id: u64,
-    resident_id: u64,
-    page: MenuPage,
-}
-
-static MENU_SESSIONS: Mutex<BTreeMap<u128, MenuSession>> = Mutex::new(BTreeMap::new());
-static MENU_QUEUE: Mutex<Vec<PendingOpen>> = Mutex::new(Vec::new());
-static MENU_TELLS: Mutex<Vec<(u128, String)>> = Mutex::new(Vec::new());
-
-fn menu_sessions() -> MutexGuard<'static, BTreeMap<u128, MenuSession>> {
-    MENU_SESSIONS.lock().unwrap_or_else(|poison| poison.into_inner())
-}
-fn menu_queue() -> MutexGuard<'static, Vec<PendingOpen>> {
-    MENU_QUEUE.lock().unwrap_or_else(|poison| poison.into_inner())
-}
-fn menu_tells() -> MutexGuard<'static, Vec<(u128, String)>> {
-    MENU_TELLS.lock().unwrap_or_else(|poison| poison.into_inner())
-}
-
-struct RenderedPage {
-    title: String,
-    village_name: String,
-    entries: Vec<MenuEntry>,
-    wants: Vec<(Good, u32)>,
-}
-
-/// Read the live village and build one page. Nothing is written.
-fn render_page(
-    game: &Game<'_>, uuid: u128, village_id: u64, resident_id: u64, page: MenuPage,
-) -> Option<RenderedPage> {
+fn read_talk(game: &mut Game<'_>, uuid: u128, village_id: u64, resident_id: u64) -> Option<Talk> {
     let dir = game.native_world_dir()?;
     let (village, resident, is_member) = {
         let guard = active(dir.join(DIR));
@@ -982,163 +994,40 @@ fn render_page(
         crate::game::civilizations_core::physical_construction_shortfall(&village, stock)
     });
     let wants = resident_wants(&village, resident.job, wood_missing, stone_missing);
+    let carried = [Good::Wood, Good::Stone, Good::Wheat].iter()
+        .map(|good| (*good, game.native_count_items(good.item())))
+        .collect();
+    Some(Talk {
+        village, resident, is_member, wants, stock_known: stored.is_some(),
+        wood_missing, stone_missing, carried,
+    })
+}
+
+/// Build one conversation page and queue it for the server tick.
+fn show_talk(
+    game: &mut Game<'_>, player: &NativeServerPlayer, village_id: u64, resident_id: u64,
+    page: TalkPage, notice: Option<String>,
+) -> bool {
+    let Some(talk) = read_talk(game, player.uuid, village_id, resident_id) else {
+        return false;
+    };
     let phase = DailyPhase::at(game.world.day_time);
     let input = DialogueInput {
-        village: &village,
-        resident: &resident,
-        is_member,
+        village: &talk.village,
+        resident: &talk.resident,
+        is_member: talk.is_member,
         routine: phase.name().to_owned(),
-        on_duty: phase.on_shift(resident.job),
-        wants: &wants,
-        stock_known: stored.is_some(),
-        wood_missing,
-        stone_missing,
+        on_duty: phase.on_shift(talk.resident.job),
+        wants: &talk.wants,
+        stock_known: talk.stock_known,
+        wood_missing: talk.wood_missing,
+        stone_missing: talk.stone_missing,
+        carried: &talk.carried,
+        notice,
     };
-    let entries = page_entries(page, &input);
-    let title = page_title(page, &input);
-    Some(RenderedPage { title, village_name: village.name.clone(), entries, wants })
-}
-
-/// A named, colored menu item. Item names are the button labels.
-fn menu_stack(entry: &MenuEntry) -> ItemStack {
-    let mut name = Compound::new();
-    name.insert("text".into(), Tag::String(entry.text.as_str().into()));
-    name.insert("color".into(), Tag::String(entry.color.into()));
-    name.insert("italic".into(), Tag::Byte(0));
-    if entry.bold {
-        name.insert("bold".into(), Tag::Byte(1));
-    }
-    ItemStack {
-        item: entry.icon.into(),
-        count: 1,
-        damage: 0,
-        extra: Some(Box::new(horizon_client::item_data::StackData {
-            custom_name: Some(Tag::Compound(name)),
-            ..Default::default()
-        })),
-    }
-}
-
-fn page_items(entries: &[MenuEntry]) -> Vec<Option<ItemStack>> {
-    let mut items: Vec<Option<ItemStack>> = vec![None; usize::from(DIALOGUE_ROWS) * 9];
-    for entry in entries {
-        if let Some(cell) = items.get_mut(entry.slot) {
-            *cell = Some(menu_stack(entry));
-        }
-    }
-    items
-}
-
-/// Show one page to a player, replacing whatever menu they had open. The
-/// trade page also opens its input row so goods can be dropped in. Returns
-/// false when no menu can be shown (the caller falls back to chat).
-fn open_page(
-    game: &mut Game<'_>, uuid: u128, village_id: u64, resident_id: u64, page: MenuPage,
-) -> bool {
-    let Some(rendered) = render_page(game, uuid, village_id, resident_id, page) else {
-        return false;
-    };
-    let items = page_items(&rendered.entries);
-    let title = Text::literal(rendered.title.clone()).with_color(text::GOLD);
-    let window = if page == MenuPage::Trade {
-        game.native_open_menu_with_input(uuid, DIALOGUE_ROWS, title, items, TRADE_INPUT)
-    } else {
-        game.native_open_menu(uuid, DIALOGUE_ROWS, title, items)
-    };
-    let Some(window) = window else {
-        return false;
-    };
-    menu_sessions().insert(uuid, MenuSession {
-        window, village_id, resident_id, page,
-        entries: rendered.entries, wants: rendered.wants, confirm_sale: false,
-    });
+    let snbt = dialog_snbt(&build_dialog(page, &input));
+    dialog_queue().push((player.name.clone(), snbt));
     true
-}
-
-/// Called every server tick (the hub is reachable here): open queued menus
-/// and deliver queued messages.
-pub fn process_menu_queue(game: &mut Game<'_>) {
-    let opens: Vec<PendingOpen> = std::mem::take(&mut *menu_queue());
-    for open in opens {
-        if open_page(game, open.uuid, open.village_id, open.resident_id, open.page) {
-            continue;
-        }
-        // No menu possible for this player: show the same page as chat.
-        if let Some(page) = render_page(game, open.uuid, open.village_id, open.resident_id, open.page) {
-            let _ = send_dialogue_chat(game, open.uuid, &page.village_name, &page.entries);
-        }
-    }
-    let tells: Vec<(u128, String)> = std::mem::take(&mut *menu_tells());
-    for (uuid, message) in tells {
-        let _ = game.native_tell(uuid, Text::literal(message).with_color(text::GOLD));
-    }
-}
-
-/// A click inside an open conversation menu (its own slots only: a click
-/// there moves nothing, so no item can be taken out of the menu).
-pub fn menu_clicked(game: &mut Game<'_>, uuid: u128, window: i32, slot: i32) {
-    if !game.native_on(MOD_ID) { return; }
-    let session = menu_sessions().get(&uuid).filter(|s| s.window == window).cloned();
-    let Some(session) = session else { return; };
-    let Ok(slot) = usize::try_from(slot) else { return; };
-    let Some(action) = session.entries.iter().find(|e| e.slot == slot).map(|e| e.action) else {
-        return;
-    };
-    match action {
-        MenuAction::None => {}
-        MenuAction::Close => game.native_close_menu(uuid),
-        MenuAction::Go(page) => {
-            let _ = open_page(game, uuid, session.village_id, session.resident_id, page);
-        }
-        MenuAction::Join => {
-            let message = match join_village(game, uuid, session.village_id) {
-                Ok(done) => done,
-                Err(reason) => format!("Could not join: {reason}"),
-            };
-            menu_tells().push((uuid, message));
-            // Redraw so the button turns into the membership line.
-            let _ = open_page(game, uuid, session.village_id, session.resident_id, MenuPage::Main);
-        }
-        MenuAction::Sell => {
-            if let Some(open) = menu_sessions().get_mut(&uuid).filter(|s| s.window == window) {
-                open.confirm_sale = true;
-            }
-            // Closing hands the input slots to `menu_input_closed`.
-            game.native_close_menu(uuid);
-        }
-    }
-}
-
-/// The trade menu closed. If SELL was pressed, take what the resident wants
-/// out of the goods left in the input slots; everything else returns to the
-/// player. The sale is saved first and a failure leaves every slot untouched.
-pub fn menu_input_closed(
-    game: &mut Game<'_>, uuid: u128, window: i32, slots: &mut Vec<Option<ItemStack>>,
-) {
-    if !game.native_on(MOD_ID) { return; }
-    let session = menu_sessions().get(&uuid)
-        .filter(|s| s.window == window && s.page == MenuPage::Trade && s.confirm_sale)
-        .cloned();
-    let Some(session) = session else { return; };
-    let message = match sell_offered(game, uuid, &session, slots) {
-        Ok(done) => done,
-        Err(reason) => format!("Nothing sold: {reason}. Your goods were returned."),
-    };
-    menu_tells().push((uuid, message));
-    // Keep trading: show the trade page again with fresh needs.
-    menu_queue().push(PendingOpen {
-        uuid, village_id: session.village_id, resident_id: session.resident_id,
-        page: MenuPage::Trade,
-    });
-}
-
-/// Forget a session when its window closes (a newer window keeps its own).
-pub fn menu_closed(game: &mut Game<'_>, uuid: u128, window: i32) {
-    if !game.native_on(MOD_ID) { return; }
-    let mut sessions = menu_sessions();
-    if sessions.get(&uuid).is_some_and(|s| s.window == window) {
-        sessions.remove(&uuid);
-    }
 }
 
 fn join_village(game: &Game<'_>, uuid: u128, village_id: u64) -> Result<String, String> {
@@ -1158,37 +1047,33 @@ fn join_village(game: &Game<'_>, uuid: u128, village_id: u64) -> Result<String, 
     Ok(format!("You joined {name}. /civ title shows your balance and rank."))
 }
 
-/// Settle the goods in the input slots against this resident's wants. The
-/// coins, the warehouse credit and the save all happen before any slot is
-/// emptied, so an error leaves the player's goods exactly as they were.
-fn sell_offered(
-    game: &Game<'_>, uuid: u128, session: &MenuSession, slots: &mut [Option<ItemStack>],
+/// Sell what the sliders chose. The coins, the warehouse credit and the save
+/// are committed together with taking the items from the player; if any step
+/// fails the items are given back and the world is restored.
+fn sell_to_resident(
+    game: &mut Game<'_>, player: &NativeServerPlayer, village_id: u64, resident_id: u64,
+    words: &[&str],
 ) -> Result<String, String> {
-    let mut offered: Vec<Option<OfferedStack>> = slots.iter().map(|slot| {
-        slot.as_ref().map(|stack| OfferedStack {
-            item: stack.item.to_string(),
-            count: stack.count,
-            plain: stack.damage == 0 && stack.extra.is_none(),
-        })
-    }).collect();
-    let accepted = settle_offer(&session.wants, &mut offered);
-    if accepted.is_empty() {
-        return Err("nothing in the slots is something I need".into());
+    let talk = read_talk(game, player.uuid, village_id, resident_id)
+        .ok_or("this villager is not available")?;
+    if !talk.is_member {
+        return Err("join the village first".into());
     }
+    let sale = parse_sale_args(&talk.wants, &talk.carried, words)?;
     let dir = game.native_world_dir().ok_or("world folder unavailable")?;
     let mut guard = active(dir.join(DIR));
     let state = guard.as_mut()
         .filter(|state| state.problem.is_none() && state.world.is_some())
         .ok_or("civilizations is paused for this world")?;
     let previous = state.world.as_ref().unwrap().clone();
-    let actor = format!("{uuid:032x}");
+    let actor = format!("{:032x}", player.uuid);
     let mut total = 0_u64;
     let mut parts = Vec::new();
-    for (good, count) in &accepted {
-        match state.world.as_mut().unwrap().sell(&actor, session.village_id, *good, *count) {
+    for (good, count) in &sale {
+        match state.world.as_mut().unwrap().sell(&actor, village_id, *good, *count) {
             Ok(payout) => {
                 total += payout;
-                parts.push(format!("{count} {}", good.as_str()));
+                parts.push(format!("{count} {}", good_label(*good)));
             }
             Err(error) => {
                 state.world = Some(previous);
@@ -1196,24 +1081,90 @@ fn sell_offered(
             }
         }
     }
-    if let Err(error) = save(state) {
-        state.world = Some(previous);
-        return Err(format!("not saved: {error}"));
-    }
-    for (slot, left) in slots.iter_mut().zip(offered) {
-        match left {
-            None => *slot = None,
-            Some(rest) => {
-                if let Some(stack) = slot.as_mut() { stack.count = rest.count; }
+    let mut taken: Vec<(Good, u32)> = Vec::new();
+    for (good, count) in &sale {
+        let got = game.native_take_items(good.item(), *count);
+        taken.push((*good, got));
+        if got != *count {
+            for (given, n) in &taken {
+                if *n > 0 { game.native_give_items(given.item(), *n); }
             }
+            state.world = Some(previous);
+            return Err("your inventory changed during the sale".into());
         }
+    }
+    if let Err(error) = save(state) {
+        for (given, n) in &taken {
+            if *n > 0 { game.native_give_items(given.item(), *n); }
+        }
+        log::error!("[civilizations] conversation sale not saved, items returned: {error}");
+        state.world = Some(previous);
+        return Err(format!("sale not committed: {error}"));
     }
     Ok(format!("Sold {} for {total} coins.", parts.join(", ")))
 }
 
-/// Right-click on a villager. A village resident opens the conversation menu
-/// (queued for the next tick); any other villager inside village territory is
-/// blocked from vanilla trading too, so no default trade UI ever appears.
+/// `/civ talk <village> <resident> [page] [good.amount ...]`: every button of a
+/// conversation window runs this. It never trusts the window: the village,
+/// the resident, the page and the amounts are all checked again here.
+fn talk_command(game: &mut Game<'_>, player: &NativeServerPlayer, mut args: std::str::SplitWhitespace<'_>) {
+    let (Some(village_name), Some(resident_word)) = (args.next(), args.next()) else {
+        error(game, "usage: /civ talk <village> <resident> [page]");
+        return;
+    };
+    let Ok(resident_id) = resident_word.parse::<u64>() else {
+        error(game, "invalid resident");
+        return;
+    };
+    let page_word = args.next().unwrap_or("main");
+    let rest: Vec<&str> = args.collect();
+    let Some(dir) = game.native_world_dir() else {
+        error(game, "no server world open");
+        return;
+    };
+    let found = {
+        let guard = active(dir.join(DIR));
+        guard.as_ref()
+            .filter(|state| state.problem.is_none())
+            .and_then(|state| state.world.as_ref())
+            .and_then(|world| world.by_name(village_name))
+            .map(|village| (village.id, village.dimension.clone(), village.center))
+    };
+    let Some((village_id, dimension, center)) = found else {
+        error(game, "unknown settlement");
+        return;
+    };
+    let dx = player.position[0] - f64::from(center[0]);
+    let dz = player.position[2] - f64::from(center[2]);
+    if player.dimension != dimension || !(dx * dx + dz * dz <= 64.0 * 64.0) {
+        error(game, "you are too far from this village to talk to its people");
+        return;
+    }
+    let (page, notice) = match page_word {
+        "sell" => {
+            let outcome = sell_to_resident(game, player, village_id, resident_id, &rest);
+            (TalkPage::Trade, Some(outcome.unwrap_or_else(|reason| format!("Nothing sold: {reason}."))))
+        }
+        "join" => {
+            let outcome = join_village(game, player.uuid, village_id);
+            (TalkPage::Main, Some(outcome.unwrap_or_else(|reason| format!("Could not join: {reason}."))))
+        }
+        other => match TalkPage::parse(other) {
+            Some(page) => (page, None),
+            None => {
+                error(game, "unknown conversation page");
+                return;
+            }
+        },
+    };
+    if !show_talk(game, player, village_id, resident_id, page, notice) {
+        error(game, "this villager is not available any more");
+    }
+}
+
+/// Right-click on a villager. A village resident opens the conversation
+/// window; any other villager inside village territory is blocked from
+/// vanilla trading too, so no default trade screen ever appears.
 pub fn interact_entity(game: &mut Game<'_>, entity: i32, kind: &str, claimed: &mut bool) {
     if *claimed || kind != "minecraft:villager" || !game.native_on(MOD_ID) {
         return;
@@ -1251,7 +1202,7 @@ pub fn interact_entity(game: &mut Game<'_>, entity: i32, kind: &str, claimed: &m
         });
         match linked {
             Some(found) => found,
-            // Not on any roster. If the player is standing in a village's
+            // Not on any roster. If the player stands in a village's
             // territory this is still a village villager (not yet linked):
             // never let it open the default trading screen.
             None => {
@@ -1270,9 +1221,11 @@ pub fn interact_entity(game: &mut Game<'_>, entity: i32, kind: &str, claimed: &m
     *claimed = true;
     match found {
         Found::Resident { village_id, resident_id } => {
-            menu_queue().push(PendingOpen {
-                uuid: player.uuid, village_id, resident_id, page: MenuPage::Main,
-            });
+            if !show_talk(game, &player, village_id, resident_id, TalkPage::Main, None) {
+                let _ = game.native_tell(player.uuid, Text::literal(
+                    "This villager has nothing to say right now."
+                ).with_color(text::GRAY));
+            }
         }
         Found::Unbound { village } => {
             let _ = game.native_tell(player.uuid, Text::literal(format!(
@@ -1281,30 +1234,6 @@ pub fn interact_entity(game: &mut Game<'_>, entity: i32, kind: &str, claimed: &m
             )).with_color(text::GRAY));
         }
     }
-}
-
-/// The conversation as a colored chat panel (only when no menu can open).
-fn send_dialogue_chat(
-    game: &mut Game<'_>, uuid: u128, village: &str, entries: &[MenuEntry],
-) -> bool {
-    let mut ordered: Vec<&MenuEntry> = entries.iter()
-        .filter(|entry| entry.icon != "minecraft:gray_stained_glass_pane")
-        .collect();
-    ordered.sort_by_key(|entry| entry.slot);
-    let Some(head) = ordered.first() else { return false; };
-    let header = Text::literal(format!("-- {} ({village}) --", head.text))
-        .with_color(text::GOLD).bold();
-    if !game.native_tell(uuid, header) {
-        return false;
-    }
-    for entry in ordered.iter().skip(1) {
-        let _ = game.native_tell(
-            uuid,
-            Text::literal("  - ").with_color(text::DARK_GRAY)
-                .append(Text::literal(entry.text.clone()).with_color(text::GRAY)),
-        );
-    }
-    true
 }
 
 fn quarantined_native_purchase(state: &mut ActiveWorld, village_id: u64, reason: &str) -> String {
@@ -1421,6 +1350,13 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
     *ran = true;
     if !game.native_on(MOD_ID) {
         error(game, "Civilizations is disabled");
+        return;
+    }
+    // Conversation windows: handled before the world lock is taken because
+    // the handler reads and saves the world itself.
+    if args.clone().next() == Some("talk") {
+        args.next();
+        talk_command(game, player, args);
         return;
     }
     let Some(world_dir) = game.native_world_dir() else { error(game, "no server world open"); return; };
@@ -3311,6 +3247,21 @@ fn autonomous_village_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Resu
     };
 
     if village.gather_job.is_none() {
+        // Stone is rarely exposed at the surface of a forest or plains
+        // village. A quarry starts as a pit on natural ground, so open one
+        // when cobble is short and the village has none yet.
+        if stone_needed > 0 && village.posts.iter().all(|post| post.kind != PostKind::Quarry) {
+            if let Some(spot) = quarry_start(game, &dimension, village.center) {
+                let before = state.world.as_ref().unwrap().clone();
+                if state.world.as_mut().unwrap()
+                    .add_post(id, PostKind::Quarry, spot).is_ok()
+                {
+                    save_autonomous(state, before)?;
+                    log::info!("[civilizations] {} opened a quarry pit at {:?}", village.name, spot);
+                    return Ok(());
+                }
+            }
+        }
         let mut work: Vec<(Good, u32, Job)> = vec![
             (Good::Wood, wood_needed, Job::Lumberjack),
             (Good::Stone, stone_needed, Job::Miner),
@@ -4092,6 +4043,86 @@ fn gather_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
     Ok(())
 }
 
+/// A quarry needs no exposed stone: a pit starts on any natural surface near
+/// the village. Bounded ring scan, first safe stand wins.
+fn quarry_start(game: &Game<'_>, dimension: &str, center: [i32; 3]) -> Option<[i32; 3]> {
+    for radius in [20_i32, 24, 28, 32] {
+        for (dx, dz) in [(radius, 0), (-radius, 0), (0, radius), (0, -radius),
+                         (radius, radius), (-radius, radius), (radius, -radius), (-radius, -radius)] {
+            let (Some(x), Some(z)) = (center[0].checked_add(dx), center[2].checked_add(dz))
+            else { continue };
+            for dy in [0_i32, 1, -1, 2] {
+                let Some(y) = center[1].checked_add(dy) else { continue };
+                let below = world_block(game, dimension, [x, y - 1, z]);
+                if !below.as_deref().is_some_and(is_ground) { continue; }
+                if world_block(game, dimension, [x, y, z]).as_deref() != Some("minecraft:air") {
+                    continue;
+                }
+                if world_block(game, dimension, [x, y + 1, z]).as_deref() != Some("minecraft:air") {
+                    continue;
+                }
+                return Some([x, y, z]);
+            }
+        }
+    }
+    None
+}
+
+/// An open-pit quarry: the bound miner walks a staircase down through real
+/// ground until it reaches stone. Soil is excavation (no credit, no receipt);
+/// a stone block goes through the normal receipt journal, so one cobble is
+/// credited only after that same worker returns to the hall.
+fn quarry_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), String> {
+    if !DailyPhase::at(game.world.day_time).on_shift(Job::Miner) { return Ok(()); }
+    let dimension = game.dim.id().to_owned();
+    let target = state.world.as_ref().unwrap().settlements.values()
+        .filter(|v| v.dimension == dimension && v.gather_job.is_none())
+        .find_map(|v| v.posts.iter().find(|post| post.kind == PostKind::Quarry)
+            .map(|post| (v.id, post.origin, v.quarry_step, post.worker_id)));
+    let Some((id, origin, step, Some(worker))) = target else { return Ok(()); };
+    if step >= MAX_QUARRY_STEPS { return Ok(()); }
+    let depth = i32::from(step);
+    let position = [origin[0] + depth, origin[1] - depth, origin[2]];
+    let Some(name) = world_block(game, &dimension, position) else { return Ok(()); };
+    // Only the bound miner digs this pit, and only while standing at it.
+    let world = state.world.as_ref().unwrap();
+    let village = &world.settlements[&id];
+    let linked = loaded_actors(game, world, id);
+    let near = village.residents.iter()
+        .filter(|r| r.alive && r.id == worker && r.job == Job::Miner)
+        .any(|r| linked.iter().any(|(known, mob)| *known == r.id
+            && game.native_mob(&dimension, *mob).is_some_and(|actor|
+                native_worker_near(actor.pos, position, 4.0, 3.0))));
+    if !near { return Ok(()); }
+    let before = state.world.as_ref().unwrap().clone();
+    if name == "minecraft:air" {
+        state.world.as_mut().unwrap().advance_quarry(id)?;
+        return save_autonomous(state, before);
+    }
+    if name == "minecraft:stone" {
+        let Some(stand) = gather_stand(game, &dimension, position) else { return Ok(()); };
+        if state.world.as_mut().unwrap()
+            .plan_gather(id, Good::Stone, position, stand).is_ok()
+        {
+            save_autonomous(state, before)?;
+            log::info!("[civilizations] {} quarry reached stone at {:?}", village.name, position);
+        }
+        return Ok(());
+    }
+    if is_ground(&name) || is_clearable_growth(&name) {
+        let [x, y, z] = position;
+        if game.native_run_command(&format!(
+            "execute in {dimension} run setblock {x} {y} {z} minecraft:air replace"
+        )) {
+            state.world.as_mut().unwrap().advance_quarry(id)?;
+            return save_autonomous(state, before);
+        }
+        return Ok(());
+    }
+    // A player block or water stops the pit: never dig through it.
+    Ok(())
+}
+
 /// Runs after an authoritative level tick: the selected dimension and its
 /// loaded chunks are guaranteed to be the ones inspected/modified here.
 pub fn level_tick(game: &mut Game<'_>, dimension: &str) {
@@ -4192,6 +4223,13 @@ pub fn level_tick(game: &mut Game<'_>, dimension: &str) {
                 return;
             }
         }
+        if let Err(error) = quarry_one_step(game, state) {
+            log::warn!("[civilizations] quarry excavation paused: {error}");
+            if error.starts_with("persistence:") {
+                state.problem = Some(error);
+                return;
+            }
+        }
         if let Err(error) = gather_one_step(game, state) {
             log::warn!("[civilizations] physical gathering paused: {error}");
             if error.starts_with("persistence:") {
@@ -4215,9 +4253,9 @@ pub fn tick(game: &mut Game<'_>) {
     if !game.native_on(MOD_ID) {
         return;
     }
-    // Conversation menus are opened from here: the hub is out of reach inside
-    // the right-click hook that asked for them.
-    process_menu_queue(game);
+    // Conversation windows are shown from here: the server command that opens
+    // a dialog does not run inside a player command or hook.
+    process_dialog_queue(game);
     let Some(dir) = game.native_world_dir() else { return; };
     let mut guard = active(dir.join(DIR));
     let state = guard.as_mut().expect("active initialized");

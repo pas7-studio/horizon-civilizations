@@ -1,3 +1,4 @@
+import re
 import tomllib
 import unittest
 from pathlib import Path
@@ -8,59 +9,65 @@ GLUE = (ROOT / "mixins/civilizations/glue.rs").read_text()
 CORE = (ROOT / "mixins/civilizations/core.rs").read_text()
 
 
-class VillagerMenuContracts(unittest.TestCase):
-    def test_menu_hooks_are_registered_with_existing_helpers(self):
-        by_id = {entry["id"]: entry for entry in MIXIN["injection"]}
-        expected = {
-            "menu_click": "native_menu_clicked",
-            "menu_input": "native_menu_input_closed",
-            "menu_close": "native_menu_closed",
-        }
-        for key, hook in expected.items():
-            self.assertTrue(by_id[key]["target"].endswith(hook), key)
-            self.assertTrue((ROOT / "mixins/civilizations" / by_id[key]["helper"]).is_file())
+class VillagerDialogueContracts(unittest.TestCase):
+    def test_no_chest_menu_hooks_remain(self):
+        ids = {entry["id"] for entry in MIXIN["injection"]}
+        self.assertFalse({"menu_click", "menu_input", "menu_close"} & ids)
+        for name in ("menu_click.rs", "menu_input.rs", "menu_close.rs"):
+            self.assertFalse((ROOT / "mixins/civilizations" / name).exists(), name)
+        self.assertNotIn("native_open_menu", GLUE)
 
-    def test_right_click_queues_the_menu_instead_of_opening_it_in_the_hook(self):
-        body = GLUE.split("pub fn interact_entity(", 1)[1].split("\n/// The conversation as", 1)[0]
-        # The hub is out of reach inside the click hook: only queue there.
-        self.assertIn("menu_queue().push(PendingOpen", body)
-        self.assertNotIn("native_open_menu", body)
-        self.assertIn("*claimed = true;", body)
-        # Opening happens from the server tick, every tick.
+    def test_dialogs_are_shown_only_from_the_server_tick(self):
+        # The show command refuses to run inside a player's command or hook.
         tick = GLUE.split("pub fn tick(game: &mut Game<'_>) {", 1)[1].split("\n}", 1)[0]
-        self.assertIn("process_menu_queue(game);", tick)
-        queue = GLUE.split("pub fn process_menu_queue(", 1)[1].split("\n}", 1)[0]
-        self.assertIn("open_page(game", queue)
+        self.assertIn("process_dialog_queue(game);", tick)
+        flush = GLUE.split("pub fn process_dialog_queue(", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn('native_run_command(&format!("dialog show {name} {snbt}"))', flush)
+        talk = GLUE.split("fn show_talk(", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("dialog_queue().push(", talk)
+        self.assertNotIn("native_run_command", talk)
 
-    def test_default_villager_trading_is_blocked_for_unlinked_villagers_too(self):
-        body = GLUE.split("pub fn interact_entity(", 1)[1].split("\n/// The conversation as", 1)[0]
+    def test_player_names_are_validated_before_building_a_command(self):
+        flush = GLUE.split("pub fn process_dialog_queue(", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("is_ascii_alphanumeric() || c == '_'", flush)
+        self.assertIn("name.len() <= 16", flush)
+
+    def test_right_click_claims_every_village_villager_and_shows_the_window(self):
+        body = GLUE.split("pub fn interact_entity(", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("show_talk(game, &player, village_id, resident_id, TalkPage::Main, None)", body)
         self.assertIn("Found::Unbound", body)
         self.assertIn("160.0 * 160.0", body)
         self.assertIn("Default villager trading is turned off", body)
+        self.assertIn("*claimed = true;", body)
 
-    def test_pages_open_with_input_slots_only_for_trading(self):
-        opener = GLUE.split("fn open_page(", 1)[1].split("\n}", 1)[0]
-        self.assertIn("native_open_menu_with_input(uuid, DIALOGUE_ROWS, title, items, TRADE_INPUT)", opener)
-        self.assertIn("native_open_menu(uuid, DIALOGUE_ROWS, title, items)", opener)
-        self.assertIn("page == MenuPage::Trade", opener)
+    def test_talk_command_is_public_registered_with_slider_arities(self):
+        for usage in ('"civ talk <name:word> <resident:integer>"',
+                      '"civ talk <name:word> <resident:integer> <page:word>"',
+                      '"civ talk <name:word> <resident:integer> <page:word> <a:word>"',
+                      '"civ talk <name:word> <resident:integer> <page:word> <a:word> <b:word>"'):
+            self.assertIn(usage, GLUE)
+        # Registered with the public list, not the operator list.
+        public = GLUE.split("for usage in [", 2)[1].split("] {", 1)[0]
+        self.assertIn("civ talk", public)
+        perform = GLUE.split("pub fn perform(", 1)[1]
+        self.assertLess(perform.index('Some("talk")'), perform.index("let Some(world_dir)"))
 
-    def test_clicks_are_dispatched_by_action_and_never_move_items(self):
-        click = GLUE.split("pub fn menu_clicked(", 1)[1].split("\n}\n", 1)[0]
-        for action in ("MenuAction::Close", "MenuAction::Go(page)", "MenuAction::Join",
-                       "MenuAction::Sell"):
-            self.assertIn(action, click)
-        self.assertNotIn("native_exchange_items", GLUE)
+    def test_talk_command_rechecks_everything_the_window_sent(self):
+        body = GLUE.split("fn talk_command(", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("player.dimension != dimension", body)
+        self.assertIn("64.0 * 64.0", body)
+        self.assertIn("TalkPage::parse(other)", body)
+        sale = GLUE.split("fn sell_to_resident(", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn("parse_sale_args(&talk.wants, &talk.carried, words)", sale)
+        self.assertIn("if !talk.is_member", sale)
 
-    def test_only_a_confirmed_sale_takes_goods_and_failures_return_them(self):
-        closed = GLUE.split("pub fn menu_input_closed(", 1)[1].split("\n}\n", 1)[0]
-        self.assertIn("s.confirm_sale", closed)
-        self.assertIn("MenuPage::Trade", closed)
-        sale = GLUE.split("fn sell_offered(", 1)[1].split("\n}\n", 1)[0]
-        self.assertIn("settle_offer(&session.wants", sale)
-        self.assertIn(".sell(&actor, session.village_id", sale)
-        self.assertGreaterEqual(sale.count("state.world = Some(previous);"), 2)
-        # Slots are emptied only after the sale has been saved.
-        self.assertLess(sale.index("save(state)"), sale.index("slots.iter_mut()"))
+    def test_sale_is_all_or_nothing_with_rollback_before_and_after_the_save(self):
+        sale = GLUE.split("fn sell_to_resident(", 1)[1].split("\n}\n", 1)[0]
+        self.assertIn(".sell(&actor, village_id, *good, *count)", sale)
+        self.assertIn("native_take_items(good.item(), *count)", sale)
+        self.assertIn("native_give_items(", sale)
+        self.assertGreaterEqual(sale.count("state.world = Some(previous);"), 3)
+        self.assertLess(sale.index("native_take_items"), sale.index("save(state)"))
 
     def test_only_mayor_and_baker_trade_and_by_theme(self):
         self.assertIn("matches!(job, Job::Merchant | Job::Baker)", CORE)
@@ -68,10 +75,25 @@ class VillagerMenuContracts(unittest.TestCase):
         for needle in ("Job::Merchant", "wood_missing", "stone_missing", "Job::Baker"):
             self.assertIn(needle, wants)
 
+    def test_dialog_uses_only_run_command_buttons_and_never_pauses(self):
+        snbt = CORE.split("pub fn dialog_snbt(", 1)[1]
+        self.assertIn("minecraft:multi_action", snbt)
+        self.assertIn("pause:0b", snbt)
+        self.assertIn("can_close_with_escape:1b", snbt)
+        for kind in ("minecraft:run_command", "minecraft:dynamic/run_command"):
+            self.assertIn(kind, snbt)
+        # No button may open links or suggest commands.
+        self.assertNotIn("open_url", snbt)
+        self.assertNotIn("suggest_command", snbt)
+
     def test_global_sell_buy_commands_are_operator_only(self):
         arm = GLUE.split('"sell" | "buy" => (||', 1)[1].split("let good = Good::parse", 1)[0]
         self.assertIn("player.permission < 2", arm)
         self.assertIn("Villagers trade in person", arm)
+
+    def test_every_dialog_command_is_a_civ_talk_command(self):
+        commands = re.findall(r'format!\("civ talk \{\} \{\} \{\}"', CORE)
+        self.assertEqual(len(commands), 1)
 
 
 if __name__ == "__main__":
