@@ -75,3 +75,13 @@ and either authoritative mob UUID ownership or a well-scoped identity registry.
 - [x] Construction reconciliation extracted to a pure decision engine and covered by Rust tests for rollback, foreign blocks, loaded chunks and completion (new CI still required).
 - [x] Physical construction opportunities rotate across loaded, unblocked villages so an unloaded first settlement cannot starve others (new CI still required).
 - [ ] Real in-game E2E: launch, NPC navigation, hut construction/restart, multi-village fairness.
+
+## Visual farmer milestone (v0.1.4, gameplay E2E pending)
+
+- [x] Per-settlement single saved field, phase/cursor, crop-cycle counter and 3×3 non-overlap placement.
+- [x] UUID-linked farmer waypoint and loaded-proximity gating for physical edits.
+- [x] Real soil/water/plant command steps; reads loaded Horizon blocks, including real wheat age=7.
+- [x] Pure observable phase machine: preparing → growing → harvesting → replanting → growing; safe rewind after chunk/save skew.
+- [x] No generated item drops or warehouse credits from physical harvest (prevents double accounting against abstract daily stock).
+- [ ] Gameplay evidence: irrigation, crop growth under vanilla random ticks, conditional harvest and replant, unloaded-chunk restart recovery, and client logs.
+- [ ] Durable physical-harvest-to-ledger credit journal and full economic coupling. **Do not claim this is implemented yet.**

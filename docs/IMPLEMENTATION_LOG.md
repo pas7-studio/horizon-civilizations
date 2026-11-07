@@ -61,3 +61,14 @@
 - Right-click displays real resident/profession/settlement/morale context and join/trade commands; ordinary vanilla villagers remain untouched.
 - Updated build/package/installer version to 0.1.3, with source-level safety tests and in-game acceptance cases.
 - Pending: native CI and real right-click gameplay, multiplayer and relog E2E.
+
+## 2026-11-07 — v0.1.4 experimental visual wheat fields
+
+- Implemented a three-by-three irrigated plot with 8 farmland/wheat sites and center water.
+- Saved preparation/growing/harvesting/replanting phase, cursor, and visual cycle counter in optional legacy-compatible settlement data.
+- Added farmer worksite navigation, actual crop-age inspection, loaded chunk gates and one conditional authoritative block command per tick.
+- Added pure Rust tests for plot blueprint, obstructions, age gating, crash rewind, phase transitions, save compatibility and economy isolation.
+- Deliberately no warehouse wheat credit or Minecraft item drops; a cross-store transaction journal is required before economic linkage.
+- Pending GitHub Core/native checks and real-world E2E, including vanilla crop hydration/growth.
+
+- Added fail-closed operator `/civ recoverfarm NAME`, with world-block preflight before clearing a blocked farm; simple unblock without checks is forbidden.

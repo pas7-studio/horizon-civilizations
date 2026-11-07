@@ -298,6 +298,168 @@ pub fn inspect_hut(job: &VisualBuildJob, mut read: impl FnMut([i32; 3]) -> Optio
     BuildInspection::Complete
 }
 
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum FarmStage {
+    Preparing,
+    Growing,
+    Harvesting,
+    Replanting,
+}
+
+/// One operator-approved field (8 crops around a permanent center water block).
+/// Harvest is visual-only: Minecraft blocks and simulation stock are distinct.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct FarmPlot {
+    pub origin: [i32; 3],
+    pub stage: FarmStage,
+    pub cursor: usize,
+    #[serde(default)]
+    pub blocked: bool,
+    #[serde(default)]
+    pub completed_cycles: u32,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FarmStep {
+    pub pos: [i32; 3],
+    pub block: &'static str,
+    pub floor: bool,
+}
+
+pub fn farm_plan(origin: [i32; 3]) -> Vec<FarmStep> {
+    let mut steps = Vec::with_capacity(17);
+    // Water at soil level keeps the eight neighboring farmland blocks hydrated.
+    for z in -1..=1 {
+        for x in -1..=1 {
+            if x == 0 && z == 0 { continue; }
+            steps.push(FarmStep {
+                pos: [origin[0] + x, origin[1] - 1, origin[2] + z],
+                block: "minecraft:farmland",
+                floor: true,
+            });
+        }
+    }
+    steps.push(FarmStep {
+        pos: [origin[0], origin[1] - 1, origin[2]],
+        block: "minecraft:water",
+        floor: true,
+    });
+    for z in -1..=1 {
+        for x in -1..=1 {
+            if x == 0 && z == 0 { continue; }
+            steps.push(FarmStep {
+                pos: [origin[0] + x, origin[1], origin[2] + z],
+                block: "minecraft:wheat",
+                floor: false,
+            });
+        }
+    }
+    steps
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct FarmBlock {
+    pub name: String,
+    pub age: Option<u8>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum FarmDecision {
+    Unloaded,
+    Paused,
+    InvalidCursor,
+    Blocked { position: [i32; 3], found: String },
+    Rewind(usize),
+    Advance,
+    StageComplete,
+    Place { position: [i32; 3], old_block: String, new_block: &'static str },
+}
+
+/// Pure observation-based state machine. No player items are granted and no
+/// simulated resources are credited: block storage and the economy JSON are
+/// not a single crash-atomic transaction.
+pub fn inspect_farm(plot: &FarmPlot, mut read: impl FnMut([i32; 3]) -> Option<FarmBlock>) -> FarmDecision {
+    if plot.blocked { return FarmDecision::Paused; }
+    let plan = farm_plan(plot.origin);
+    let count = match plot.stage {
+        FarmStage::Preparing => plan.len(),
+        _ => 8,
+    };
+    if plot.cursor > count { return FarmDecision::InvalidCursor; }
+    if plot.stage != FarmStage::Preparing {
+        // Never harvest or replant when the water/soil infrastructure changed.
+        for step in plan.iter().take(9) {
+            let Some(block) = read(step.pos) else { return FarmDecision::Unloaded; };
+            if block.name != step.block {
+                return FarmDecision::Blocked { position: step.pos, found: block.name };
+            }
+        }
+    }
+    if plot.stage == FarmStage::Growing {
+        let mut all_mature = true;
+        for step in plan.iter().skip(9) {
+            let Some(block) = read(step.pos) else { return FarmDecision::Unloaded; };
+            if block.name != "minecraft:wheat" {
+                return FarmDecision::Blocked { position: step.pos, found: block.name };
+            }
+            all_mature &= block.age == Some(7);
+        }
+        return if all_mature { FarmDecision::StageComplete } else { FarmDecision::Paused };
+    }
+    if plot.stage == FarmStage::Preparing {
+        for (i, step) in plan.iter().enumerate() {
+            if i > plot.cursor { break; }
+            let Some(block) = read(step.pos) else { return FarmDecision::Unloaded; };
+            if block.name == step.block {
+                if i == plot.cursor { return FarmDecision::Advance; }
+                continue;
+            }
+            let safe = if step.floor { is_ground(&block.name) } else { block.name == "minecraft:air" };
+            if !safe {
+                return FarmDecision::Blocked { position: step.pos, found: block.name };
+            }
+            if i < plot.cursor { return FarmDecision::Rewind(i); }
+            return FarmDecision::Place {
+                position: step.pos, old_block: block.name, new_block: step.block,
+            };
+        }
+        return FarmDecision::StageComplete;
+    }
+    for (i, step) in plan.iter().skip(9).enumerate() {
+        if i > plot.cursor { break; }
+        let Some(block) = read(step.pos) else { return FarmDecision::Unloaded; };
+        let done = match plot.stage {
+            FarmStage::Harvesting => block.name == "minecraft:air",
+            FarmStage::Replanting => block.name == "minecraft:wheat",
+            _ => unreachable!("handled above"),
+        };
+        if done {
+            if i == plot.cursor { return FarmDecision::Advance; }
+            continue;
+        }
+        let valid = match plot.stage {
+            FarmStage::Harvesting => block.name == "minecraft:wheat" && block.age == Some(7),
+            FarmStage::Replanting => block.name == "minecraft:air",
+            _ => unreachable!("handled above"),
+        };
+        if !valid {
+            return FarmDecision::Blocked { position: step.pos, found: block.name };
+        }
+        if i < plot.cursor { return FarmDecision::Rewind(i); }
+        let (old_block, new_block) = match plot.stage {
+            FarmStage::Harvesting => ("minecraft:wheat[age=7]", "minecraft:air"),
+            FarmStage::Replanting => ("minecraft:air", "minecraft:wheat"),
+            _ => unreachable!("handled above"),
+        };
+        return FarmDecision::Place {
+            position: step.pos, old_block: old_block.to_owned(), new_block,
+        };
+    }
+    FarmDecision::StageComplete
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Settlement {
     pub id: u64,
@@ -321,6 +483,9 @@ pub struct Settlement {
     pub visual_sites: Vec<[i32; 3]>,
     #[serde(default)]
     pub visual_job: Option<VisualBuildJob>,
+    /// Optional one-field living crop simulation, retained across saves.
+    #[serde(default)]
+    pub farm: Option<FarmPlot>,
 }
 
 impl Settlement {
@@ -447,6 +612,16 @@ impl World {
                     }
                 }
             }
+            if let Some(plot) = &village.farm {
+                let [x, y, z] = plot.origin;
+                if i64::from(x).abs() > 29_999_988 || i64::from(z).abs() > 29_999_988
+                    || !(-2046..=2046).contains(&y) {
+                    return Err("farm outside world bounds".into());
+                }
+                let count = if plot.stage == FarmStage::Preparing { farm_plan(plot.origin).len() } else { 8 };
+                if plot.cursor > count { return Err("farm cursor beyond phase".into()); }
+                if plot.completed_cycles > 1_000_000 { return Err("farm cycle counter invalid".into()); }
+            }
             if village.visual_sites.len() > 32 { return Err("visual building site cap exceeded".into()); }
             if village.visual_sites.len() as u32 > village.houses { return Err("visual buildings exceed houses".into()); }
             if village.pending_visual_buildings > village.houses { return Err("pending physical houses exceed housing".into()); }
@@ -563,6 +738,7 @@ impl World {
             actors_spawned: false,
             visual_sites: Vec::new(),
             visual_job: None,
+            farm: None,
         };
         self.settlements.insert(id, settlement);
         let p = self.players.entry(founder.to_owned()).or_default();
@@ -619,6 +795,103 @@ impl World {
         } else {
             Some(eligible[sequence % eligible.len()].clone())
         }
+    }
+
+
+    /// Reserve a real 3x3 growing patch without manufacturing economic stock.
+    /// The Horizon adapter must preflight the terrain before calling this.
+    pub fn start_farm(&mut self, village_id: u64, origin: [i32; 3]) -> Result<(), String> {
+        let village = self.settlements.get(&village_id).ok_or("unknown settlement")?;
+        if village.farm.is_some() { return Err("farm already assigned".into()); }
+        if village.count(Job::Farmer) == 0 { return Err("village has no farmer".into()); }
+        if i64::from(origin[0]).abs() > 29_999_988 || i64::from(origin[2]).abs() > 29_999_988
+            || !(-2046..=2046).contains(&origin[1]) {
+            return Err("farm outside safe build coordinates".into());
+        }
+        let distance = |a: [i32; 3], b: [i32; 3]| {
+            let dx = i64::from(a[0]) - i64::from(b[0]);
+            let dz = i64::from(a[2]) - i64::from(b[2]);
+            dx * dx + dz * dz
+        };
+        if !(12 * 12..=80 * 80).contains(&distance(village.center, origin)) {
+            return Err("farm must be 12..80 blocks from the village center".into());
+        }
+        for s in self.settlements.values().filter(|s| s.dimension == village.dimension) {
+            if s.farm.as_ref().is_some_and(|p| distance(p.origin, origin) < 9 * 9)
+                || s.visual_job.as_ref().is_some_and(|p| distance(p.origin, origin) < 9 * 9)
+                || s.visual_sites.iter().any(|&site| distance(site, origin) < 9 * 9) {
+                return Err("farm overlaps an existing civilization structure".into());
+            }
+        }
+        self.settlements.get_mut(&village_id).unwrap().farm = Some(FarmPlot {
+            origin, stage: FarmStage::Preparing, cursor: 0, blocked: false, completed_cycles: 0,
+        });
+        Ok(())
+    }
+
+    /// The adapter must first inspect the unblocked plot against the real
+    /// loaded blocks before issuing an operator-approved recovery.
+    pub fn recover_farm(&mut self, village_id: u64) -> Result<(), String> {
+        let farm = self.settlements.get_mut(&village_id)
+            .ok_or("unknown settlement")?.farm.as_mut().ok_or("no farm")?;
+        if !farm.blocked { return Err("farm is not blocked".into()); }
+        farm.blocked = false;
+        Ok(())
+    }
+
+    pub fn advance_farm(&mut self, village_id: u64, decision: FarmDecision) -> Result<bool, String> {
+        let village = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?;
+        let farm = village.farm.as_mut().ok_or("no farm")?;
+        match decision {
+            FarmDecision::Unloaded | FarmDecision::Paused | FarmDecision::Place { .. } => Ok(false),
+            FarmDecision::InvalidCursor => Err("farm has invalid cursor".into()),
+            FarmDecision::Blocked { .. } => {
+                farm.blocked = true;
+                Ok(true)
+            }
+            FarmDecision::Rewind(cursor) => {
+                farm.cursor = cursor;
+                Ok(true)
+            }
+            FarmDecision::Advance => {
+                let limit = if farm.stage == FarmStage::Preparing { farm_plan(farm.origin).len() } else { 8 };
+                if farm.cursor >= limit {
+                    return Err("cannot advance farm beyond phase step count".into());
+                }
+                farm.cursor += 1;
+                Ok(true)
+            }
+            FarmDecision::StageComplete => {
+                let steps = if farm.stage == FarmStage::Preparing { farm_plan(farm.origin).len() } else { 8 };
+                if farm.stage != FarmStage::Growing && farm.cursor != steps {
+                    return Err("farm phase cannot complete before all blocks are verified".into());
+                }
+                farm.stage = match farm.stage {
+                    FarmStage::Preparing => FarmStage::Growing,
+                    FarmStage::Growing => FarmStage::Harvesting,
+                    FarmStage::Harvesting => FarmStage::Replanting,
+                    FarmStage::Replanting => {
+                        farm.completed_cycles = farm.completed_cycles.saturating_add(1);
+                        FarmStage::Growing
+                    }
+                };
+                farm.cursor = 0;
+                Ok(true)
+            }
+        }
+    }
+
+    /// Each selected plot is considered only when its chunk is already loaded.
+    pub fn next_farm(&self, dimension: &str, sequence: usize,
+                     mut loaded: impl FnMut([i32; 3]) -> bool) -> Option<(u64, FarmPlot)> {
+        let eligible: Vec<_> = self.settlements.values()
+            .filter(|s| s.dimension == dimension)
+            .filter_map(|s| {
+                let farm = s.farm.as_ref()?;
+                (!farm.blocked && loaded(farm.origin)).then(|| (s.id, farm.clone()))
+            })
+            .collect();
+        if eligible.is_empty() { None } else { Some(eligible[sequence % eligible.len()].clone()) }
     }
 
     /// Called only after all block states have been observed at their targets.
@@ -1109,5 +1382,205 @@ mod actor_identity_tests {
         world.settlements.get_mut(&settlement).unwrap().residents[1].entity_uuid = Some(0x1111);
         assert_eq!(second, world.settlements[&settlement].residents[1].id);
         assert!(world.validate().is_err());
+    }
+}
+
+#[cfg(test)]
+mod visual_farm_tests {
+    use super::*;
+
+    fn plot() -> FarmPlot {
+        FarmPlot { origin: [25, 72, -20], stage: FarmStage::Preparing, cursor: 0, blocked: false, completed_cycles: 0 }
+    }
+    fn block(name: &str, age: Option<u8>) -> Option<FarmBlock> {
+        Some(FarmBlock { name: name.into(), age })
+    }
+    fn farm_in_world() -> (World, u64) {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0, 72, 0], "founder").unwrap();
+        world.start_farm(id, [25, 72, 0]).unwrap();
+        (world, id)
+    }
+    #[test]
+    fn field_is_nine_soil_tiles_and_eight_wheat_crops() {
+        let plan = farm_plan([25, 72, -20]);
+        assert_eq!(plan.len(), 17);
+        assert_eq!(plan.iter().filter(|s| s.block == "minecraft:farmland").count(), 8);
+        assert_eq!(plan.iter().filter(|s| s.block == "minecraft:water").count(), 1);
+        assert_eq!(plan.iter().filter(|s| s.block == "minecraft:wheat").count(), 8);
+        let positions: BTreeSet<_> = plan.iter().map(|s| s.pos).collect();
+        assert_eq!(positions.len(), plan.len());
+    }
+    #[test]
+    fn preparing_only_replaces_natural_ground_and_air() {
+        let plot = plot();
+        let first = farm_plan(plot.origin)[0].pos;
+        assert_eq!(inspect_farm(&plot, |_| block("minecraft:grass_block", None)),
+            FarmDecision::Place { position: first, old_block: "minecraft:grass_block".into(), new_block: "minecraft:farmland" });
+        assert_eq!(inspect_farm(&plot, |_| block("minecraft:chest", None)),
+            FarmDecision::Blocked { position: first, found: "minecraft:chest".into() });
+        assert_eq!(inspect_farm(&plot, |_| None), FarmDecision::Unloaded);
+    }
+    #[test]
+    fn phase_changes_only_after_all_confirmed_blocks() {
+        let (mut world, id) = farm_in_world();
+        world.settlements.get_mut(&id).unwrap().farm.as_mut().unwrap().cursor = 17;
+        world.advance_farm(id, FarmDecision::StageComplete).unwrap();
+        let farm = world.settlements[&id].farm.as_ref().unwrap();
+        assert_eq!(farm.stage, FarmStage::Growing);
+        assert_eq!(farm.cursor, 0);
+        assert_eq!(world.settlements[&id].quantity(Good::Wheat), 20);
+    }
+    #[test]
+    fn crop_growth_uses_real_maturity_and_never_credits_stock() {
+        let (mut world, id) = farm_in_world();
+        let farm = world.settlements.get_mut(&id).unwrap().farm.as_mut().unwrap();
+        farm.stage = FarmStage::Growing;
+        let origin = farm.origin;
+        let mature = inspect_farm(farm, |pos| {
+            if pos[1] == origin[1] { block("minecraft:wheat", Some(7)) }
+            else if pos[0] == origin[0] && pos[2] == origin[2] { block("minecraft:water", None) }
+            else { block("minecraft:farmland", None) }
+        });
+        assert_eq!(mature, FarmDecision::StageComplete);
+        let immature = inspect_farm(farm, |pos| {
+            if pos[1] == origin[1] { block("minecraft:wheat", Some(4)) }
+            else if pos[0] == origin[0] && pos[2] == origin[2] { block("minecraft:water", None) }
+            else { block("minecraft:farmland", None) }
+        });
+        assert_eq!(immature, FarmDecision::Paused);
+        world.advance_farm(id, mature).unwrap();
+        assert_eq!(world.settlements[&id].farm.as_ref().unwrap().stage, FarmStage::Harvesting);
+        assert_eq!(world.settlements[&id].quantity(Good::Wheat), 20);
+    }
+    #[test]
+    fn harvesting_is_conditional_and_never_drops_items_or_rewinds_stock() {
+        let (mut world, id) = farm_in_world();
+        let farm = world.settlements.get_mut(&id).unwrap().farm.as_mut().unwrap();
+        farm.stage = FarmStage::Harvesting;
+        let origin = farm.origin;
+        let expected = farm_plan(origin)[9].pos;
+        let result = inspect_farm(farm, |pos| {
+            if pos[1] == origin[1] { block("minecraft:wheat", Some(7)) }
+            else if pos[0] == origin[0] && pos[2] == origin[2] { block("minecraft:water", None) }
+            else { block("minecraft:farmland", None) }
+        });
+        assert_eq!(result, FarmDecision::Place {
+            position: expected, old_block: "minecraft:wheat[age=7]".into(), new_block: "minecraft:air",
+        });
+        assert!(!world.advance_farm(id, result).unwrap());
+        assert_eq!(world.settlements[&id].quantity(Good::Wheat), 20);
+    }
+    #[test]
+    fn interrupted_harvest_rewinds_without_minting_wheat() {
+        let (mut world, id) = farm_in_world();
+        let farm = world.settlements.get_mut(&id).unwrap().farm.as_mut().unwrap();
+        farm.stage = FarmStage::Harvesting;
+        farm.cursor = 3;
+        let origin = farm.origin;
+        let first = farm_plan(origin)[9].pos;
+        let decision = inspect_farm(farm, |pos| {
+            if pos[1] == origin[1] {
+                if pos == first { block("minecraft:wheat", Some(7)) }
+                else { block("minecraft:air", None) }
+            } else if pos[0] == origin[0] && pos[2] == origin[2] {
+                block("minecraft:water", None)
+            } else { block("minecraft:farmland", None) }
+        });
+        assert_eq!(decision, FarmDecision::Rewind(0));
+        world.advance_farm(id, decision).unwrap();
+        assert_eq!(world.settlements[&id].farm.as_ref().unwrap().cursor, 0);
+        assert_eq!(world.settlements[&id].quantity(Good::Wheat), 20);
+    }
+    #[test]
+    fn replants_then_restarts_growing_idempotently() {
+        let (mut world, id) = farm_in_world();
+        let farm = world.settlements.get_mut(&id).unwrap().farm.as_mut().unwrap();
+        farm.stage = FarmStage::Replanting;
+        let origin = farm.origin;
+        let first = farm_plan(origin)[9].pos;
+        let decision = inspect_farm(farm, |pos| {
+            if pos[1] == origin[1] { block("minecraft:air", None) }
+            else if pos[0] == origin[0] && pos[2] == origin[2] { block("minecraft:water", None) }
+            else { block("minecraft:farmland", None) }
+        });
+        assert_eq!(decision, FarmDecision::Place {
+            position: first, old_block: "minecraft:air".into(), new_block: "minecraft:wheat",
+        });
+        let farm = world.settlements.get_mut(&id).unwrap().farm.as_mut().unwrap();
+        farm.cursor = 8;
+        world.advance_farm(id, FarmDecision::StageComplete).unwrap();
+        let farm = world.settlements[&id].farm.as_ref().unwrap();
+        assert_eq!(farm.stage, FarmStage::Growing);
+        assert_eq!(farm.completed_cycles, 1);
+        assert_eq!(world.settlements[&id].quantity(Good::Wheat), 20);
+    }
+    #[test]
+    fn farm_is_persisted_and_legacy_without_farm_loads() {
+        let (world, id) = farm_in_world();
+        let json = serde_json::to_string(&world).unwrap();
+        let decoded: World = serde_json::from_str(&json).unwrap();
+        decoded.validate().unwrap();
+        assert_eq!(decoded.settlements[&id].farm.as_ref().unwrap().origin, [25, 72, 0]);
+        let mut data: serde_json::Value = serde_json::from_str(&json).unwrap();
+        data["settlements"][id.to_string()].as_object_mut().unwrap().remove("farm");
+        let legacy: World = serde_json::from_value(data).unwrap();
+        legacy.validate().unwrap();
+        assert!(legacy.settlements[&id].farm.is_none());
+    }
+    #[test]
+    fn site_collision_and_wrong_dimensions_are_rejected() {
+        let (mut world, id) = farm_in_world();
+        assert!(world.start_farm(id, [60, 72, 0]).is_err());
+        let second = world.found("Brighthold", "minecraft:overworld", [300, 72, 0], "other").unwrap();
+        assert!(world.start_farm(second, [25, 72, 0]).is_err());
+        world.start_farm(second, [325, 72, 0]).unwrap();
+        assert!(world.validate().is_ok());
+    }
+}
+
+#[cfg(test)]
+mod visual_farm_recovery_tests {
+    use super::*;
+
+    #[test]
+    fn recovery_requires_a_blocked_plot_and_preserves_stock() {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0, 70, 0], "operator").unwrap();
+        world.start_farm(id, [20, 70, 0]).unwrap();
+        assert!(world.recover_farm(id).is_err());
+        let initial_stock = world.settlements[&id].stock.clone();
+        world.advance_farm(id, FarmDecision::Blocked {
+            position: [20, 69, 0],
+            found: "minecraft:chest".into(),
+        }).unwrap();
+        assert!(world.settlements[&id].farm.as_ref().unwrap().blocked);
+        world.recover_farm(id).unwrap();
+        assert!(!world.settlements[&id].farm.as_ref().unwrap().blocked);
+        assert_eq!(world.settlements[&id].stock, initial_stock);
+        world.validate().unwrap();
+        let decoded: World = serde_json::from_str(&serde_json::to_string(&world).unwrap()).unwrap();
+        assert!(!decoded.settlements[&id].farm.as_ref().unwrap().blocked);
+    }
+}
+
+#[cfg(test)]
+mod visual_farm_transition_tests {
+    use super::*;
+
+    #[test]
+    fn incomplete_phase_cannot_commit_or_overrun_cursor() {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0, 70, 0], "operator").unwrap();
+        world.start_farm(id, [20, 70, 0]).unwrap();
+        assert!(world.advance_farm(id, FarmDecision::StageComplete).is_err());
+        assert_eq!(world.settlements[&id].farm.as_ref().unwrap().stage, FarmStage::Preparing);
+        world.settlements.get_mut(&id).unwrap().farm.as_mut().unwrap().cursor = 17;
+        assert!(world.advance_farm(id, FarmDecision::Advance).is_err());
+        world.advance_farm(id, FarmDecision::StageComplete).unwrap();
+        let farm = world.settlements[&id].farm.as_ref().unwrap();
+        assert_eq!(farm.stage, FarmStage::Growing);
+        assert_eq!(farm.cursor, 0);
+        world.validate().unwrap();
     }
 }
