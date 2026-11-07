@@ -2655,8 +2655,8 @@ impl World {
             }
             if let Some(gather) = &village.gather_job {
                 if let Some(worker_id) = gather.worker_id {
-                    let role = if gather.good == Good::Wood { Job::Lumberjack }
-                        else { Job::Miner };
+                    let role = gather.good.job()
+                        .ok_or("physical gather good has no qualified worker")?;
                     if !village.residents.iter().any(|r|
                         r.id == worker_id && r.job == role) {
                         return Err("physical gather worker ID is invalid".into());
@@ -3767,9 +3767,7 @@ impl World {
         if job.issued || job.blocked {
             return Err("cannot assign an already issued or blocked gather".into());
         }
-        let required = if job.good == Good::Wood { Job::Lumberjack }
-            else if job.good == Good::Stone { Job::Miner }
-            else { return Err("unsupported native gather good".into()); };
+        let required = job.good.job().ok_or("unsupported native gather good")?;
         if !village.residents.iter().any(|resident|
             resident.alive && resident.id == resident_id && resident.job == required) {
             return Err("worker is not a living qualified settlement resident".into());
@@ -8291,6 +8289,50 @@ mod autonomous_frontier_tests {
         assert_eq!(decoded.settlements[&1].founder, NPC_FOUNDER);
         assert!(decoded.players.is_empty());
         assert_eq!(decoded.settlements[&1].residents.len(), 10);
+    }
+}
+
+#[cfg(test)]
+mod physical_pit_courier_tests {
+    use super::*;
+
+    fn exercise_digger_delivery(good: Good, kind: PostKind) {
+        let mut world = World::default();
+        let id = world.found("PitTown", "minecraft:overworld", [0, 70, 0], "owner").unwrap();
+        world.add_post(id, kind, [18, 70, 0]).unwrap();
+        world.settlements.get_mut(&id).unwrap().staff_workplaces();
+        let digger = world.settlements[&id].residents.iter()
+            .find(|r| r.alive && r.job == Job::Digger).unwrap().id;
+        let miner = world.settlements[&id].residents.iter()
+            .find(|r| r.alive && r.job == Job::Miner).unwrap().id;
+        world.set_post_worker(id, kind, digger).unwrap();
+        world.plan_gather(id, good, [20, 70, 0], [21, 70, 0]).unwrap();
+        assert!(world.assign_gather_worker(id, miner).is_err());
+        assert!(world.mark_gather_issued(id).is_err());
+        world.assign_gather_worker(id, digger).unwrap();
+        world.validate().unwrap();
+        world.mark_gather_issued(id).unwrap();
+        world.mark_gather_native_edit_confirmed(id).unwrap();
+        assert!(world.confirm_gather(id).is_err()); // source pickup is not witnessed
+        world.witness_gather_pickup(id, digger).unwrap();
+        let saved = serde_json::to_string(&world).unwrap();
+        let mut restored: World = serde_json::from_str(&saved).unwrap();
+        restored.validate().unwrap(); // a bound digger must survive a save/reload
+        assert!(restored.assign_gather_worker(id, miner).is_err());
+        restored.confirm_gather(id).unwrap();
+        assert_eq!(restored.settlements[&id].warehouse_quantity(good), 1);
+        assert!(restored.confirm_gather(id).is_err()); // exactly-once stock credit
+        restored.validate().unwrap();
+    }
+
+    #[test]
+    fn real_sand_pit_digger_delivers_one_witnessed_item_after_reboot() {
+        exercise_digger_delivery(Good::Sand, PostKind::Sand);
+    }
+
+    #[test]
+    fn real_dirt_pit_digger_delivers_one_witnessed_item_after_reboot() {
+        exercise_digger_delivery(Good::Dirt, PostKind::Dirt);
     }
 }
 
