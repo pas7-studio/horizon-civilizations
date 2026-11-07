@@ -636,3 +636,25 @@
   probes are **not** a cargo test, full Python unittest, native client
   build or Minecraft gameplay E2E.
 - PR #34 remains Draft, main unchanged, Actions OFF. Acceptance 289–292.
+
+
+## 2026-11-08 — guard orphaned `world.json.tmp` from interrupted first write
+
+- Compared the pinned Horizon native mob creation and entity UUID APIs.
+  `spawn_mob` inserts into `self.mobs` synchronously;
+  `native_entity` and `native_entity_uuid` can immediately inspect the
+  spawned actor. The suspected deferred-identity issue was **not** confirmed;
+  no unnecessary changes to native spawn identity were made.
+- Found the actual saved-world gap: `load` already rejected
+  `world.json.swap`, but treated missing primary + residual
+  `world.json.tmp` as a fresh empty world. Also, `save` would
+  truncate an existing temp file on its next attempt.
+- Fail-closed load now detects both temporary and swap artifacts before
+  opening the primary or creating any default world. Save rejects either
+  stale artifact BEFORE `fs::File::create(&temp)`; original bytes remain.
+- Added three Rust filesystem regression cases (authored in native glue)
+  and three Python source-contract cases. Acceptance tests 293–296.
+- Verification limitation: no local Rust/cargo toolchain or direct
+  GitHub DNS in the container. Exact-source checks run via GitHub;
+  full Python unittest, Rust and Minecraft E2E **not executed**.
+- Keep PR #34 Draft, no main merge or Actions changes.
