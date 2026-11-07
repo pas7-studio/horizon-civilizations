@@ -1405,10 +1405,16 @@ impl World {
                 match t.direction {
                     BarrelDirection::ToBakeryBuilder if t.slot.is_none()
                         || !matches!(t.good, Good::Wood | Good::Stone)
-                        || village.bakery.is_none() =>
+                        || village.bakery.as_ref().is_none_or(|b|
+                            b.supplies_reserved || b.complete
+                                || b.building.as_ref().is_none_or(|job| job.blocked)) =>
                         return Err("invalid native bakery material extraction".into()),
                     BarrelDirection::ToBakerIngredients if t.slot.is_none()
-                        || t.good != Good::Wheat || village.bakery.is_none() =>
+                        || t.good != Good::Wheat
+                        || village.bakery.as_ref().is_none_or(|b|
+                            !b.complete || b.bread_in_transit != 0
+                                || b.wheat_escrow.checked_add(t.count)
+                                    .is_none_or(|n| n > BREAD_WHEAT_RECIPE)) =>
                         return Err("invalid native baker wheat extraction".into()),
                     _ => {}
                 }
@@ -1909,8 +1915,9 @@ impl World {
             }
             BarrelDirection::ToBakeryBuilder => {
                 let bakery = v.bakery.as_ref().ok_or("no planned bakery")?;
-                if bakery.building.is_none() || bakery.supplies_reserved || bakery.complete {
-                    return Err("no unfunded physical bakery project".into());
+                if bakery.building.as_ref().is_none_or(|job| job.blocked)
+                    || bakery.supplies_reserved || bakery.complete {
+                    return Err("no valid unfunded physical bakery project".into());
                 }
                 let required = match good {
                     Good::Wood => BAKERY_WOOD_LOGS,
@@ -4667,13 +4674,45 @@ mod physical_logistics_hardening_tests {
         assert_eq!(physical_construction_shortfall(village, &[]), (0, 0));
     }
 
+
     #[test]
-    fn saved_bakery_transfer_requires_a_real_bakery_after_reboot() {
+    fn no_new_extraction_into_obstructed_bakery_job() {
+        let (mut world, id) = with_bakery_and_hut();
+        world.settlements.get_mut(&id).unwrap().bakery.as_mut().unwrap()
+            .building.as_mut().unwrap().blocked = true;
+        let barrel = hall_storage_positions([0, 70, 0])[0];
+        assert!(world.plan_barrel_transfer(id, barrel, Good::Wood,
+            BarrelDirection::ToBakeryBuilder, 8, 8, Some(0)).is_err());
+        assert!(world.validate().is_ok());
+    }
+
+    #[test]
+    fn saved_wheat_extraction_rejects_unfinished_or_full_bakery() {
         let (mut world, id) = with_bakery_and_hut();
         let barrel = hall_storage_positions([0, 70, 0])[0];
         world.settlements.get_mut(&id).unwrap().barrel_transfer = Some(BarrelTransfer {
             position: barrel, good: Good::Wheat,
             direction: BarrelDirection::ToBakerIngredients,
+            phase: BarrelPhase::Planned, before: 2, count: 1, slot: Some(0),
+        });
+        assert!(world.validate().is_err()); // no completed workstation
+        let bakery = world.settlements.get_mut(&id).unwrap().bakery.as_mut().unwrap();
+        bakery.building = None;
+        bakery.supplies_reserved = true;
+        bakery.complete = true;
+        assert!(world.validate().is_ok());
+        world.settlements.get_mut(&id).unwrap().bakery.as_mut().unwrap()
+            .wheat_escrow = BREAD_WHEAT_RECIPE;
+        assert!(world.validate().is_err()); // no more wheat may be carried
+    }
+
+    #[test]
+    fn saved_bakery_transfer_requires_a_real_bakery_after_reboot() {
+        let (mut world, id) = with_bakery_and_hut();
+        let barrel = hall_storage_positions([0, 70, 0])[0];
+        world.settlements.get_mut(&id).unwrap().barrel_transfer = Some(BarrelTransfer {
+            position: barrel, good: Good::Wood,
+            direction: BarrelDirection::ToBakeryBuilder,
             phase: BarrelPhase::Planned, before: 2, count: 1, slot: Some(0),
         });
         assert!(world.validate().is_ok());
