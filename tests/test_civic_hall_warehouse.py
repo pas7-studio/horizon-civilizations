@@ -121,7 +121,7 @@ class CivicHallWarehouseContracts(unittest.TestCase):
         mixin = tomllib.loads((ROOT / "mixins/civilizations/horizon-mixin.toml").read_text())
         self.assertEqual(cargo["package"]["version"], "0.1.12")
         self.assertEqual(mixin["mod"]["version"], "0.1.12")
-        self.assertEqual(len(mixin["injection"]), 6)
+        self.assertEqual(len(mixin["injection"]), 7)
         self.assertIn("pub const SCHEMA: u32 = 1;", CORE)
         for field in ("warehouse", "hall_job", "hall_complete",
                       "hut_supplies_reserved", "gather_job"):
