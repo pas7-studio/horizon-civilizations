@@ -1,3 +1,21 @@
+## Native build after quarry-main rebase (Draft PR #35)
+
+PR #35 was rebased onto quarry-enabled main. If your local
+`feat/independent-npc-towns-v0115` branch is from the earlier PR head,
+avoid blindly pulling or resetting it. Create a clean, separate worktree
+for native verification without modifying existing working files:
+
+```powershell
+git fetch origin
+git worktree add -b verify-npc-meals ../horizon-playtest origin/feat/independent-npc-towns-v0115
+cd ../horizon-playtest
+py -3 tools/first_play_gate.py --expected-branch verify-npc-meals --build-client
+```
+
+No full Rust, Python unittest, Windows client or Minecraft gameplay E2E
+has been executed in this chat; the actual first-play build report remains
+the required next proof.
+
 ## Real NPC meal cycle — first in-game acceptance
 
 Run only on a disposable world **after** a successful native Rust/client
