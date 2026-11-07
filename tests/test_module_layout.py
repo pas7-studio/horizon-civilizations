@@ -5,6 +5,8 @@ unmergeable. These checks keep the split from silently collapsing back, and
 prove that the payload the Horizon mixin tool receives is still self-contained.
 """
 from pathlib import Path
+import shutil
+import subprocess
 import tempfile
 import tomllib
 import unittest
@@ -63,6 +65,28 @@ class ModuleLayoutContracts(unittest.TestCase):
         self.assertGreaterEqual(len(impl_files), 8)
         self.assertIn("state", impl_files)
         self.assertIn("gather", impl_files)
+
+    def test_staged_payload_parses_as_rust(self):
+        """The planner only reports `cannot parse string into token stream`.
+
+        A missing brace from a bad module move is caught here with a line
+        number instead of a full native build.
+        """
+        rustfmt = shutil.which("rustfmt")
+        if not rustfmt:
+            self.skipTest("rustfmt not installed")
+        with tempfile.TemporaryDirectory(prefix="civ-syntax-") as work:
+            mods = mixin_sources.stage(BUNDLE, Path(work))
+            staged = mods / BUNDLE.name
+            manifest = tomllib.loads((staged / "horizon-mixin.toml").read_text(encoding="utf-8"))
+            for entry in manifest["module"]:
+                payload = staged / entry["source"]
+                proc = subprocess.run(
+                    [rustfmt, "--edition", "2024", "--check", str(payload)],
+                    capture_output=True, text=True, errors="replace")
+                syntax_errors = [line for line in (proc.stdout + proc.stderr).splitlines()
+                                 if line.startswith("error:")]
+                self.assertEqual([], syntax_errors, f"{entry['source']}: {syntax_errors[:3]}")
 
     def test_staged_payload_is_self_contained_and_keeps_its_unit_tests(self):
         with tempfile.TemporaryDirectory(prefix="civ-layout-") as work:
