@@ -1531,6 +1531,92 @@ impl World {
         Ok(())
     }
 
+    /// Prepare one and only one actual vanilla barrel mutation; native code
+    /// must read the exact barrel count/slot before calling. Planning itself
+    /// creates no item and deducts no warehouse quantity.
+    pub fn plan_barrel_transfer(
+        &mut self, id: u64, position: [i32; 3], good: Good,
+        direction: BarrelDirection, before: u32, slot: Option<usize>,
+    ) -> Result<(), String> {
+        let v = self.settlements.get(&id).ok_or("unknown settlement")?;
+        if !v.hall_complete { return Err("physical town hall not complete".into()); }
+        if v.barrel_transfer.is_some() { return Err("another barrel transfer is pending".into()); }
+        if !hall_storage_positions(v.center).contains(&position) {
+            return Err("barrel is not an official village hall warehouse".into());
+        }
+        if before > 10_000_000 { return Err("invalid native barrel item count".into()); }
+        match direction {
+            BarrelDirection::ToBarrel => {
+                if v.warehouse_quantity(good) == 0 {
+                    return Err("no confirmed incoming goods awaiting barrel delivery".into());
+                }
+                if slot.is_some() { return Err("deposit is not a slot extraction".into()); }
+                before.checked_add(1).ok_or("barrel count overflow")?;
+            }
+            BarrelDirection::ToBuilder => {
+                if v.visual_job.is_none() || v.hut_supplies_reserved {
+                    return Err("no unfunded physical hut work order".into());
+                }
+                let required = match good {
+                    Good::Wood => HUT_WOOD_LOGS,
+                    Good::Stone => HUT_COBBLESTONE,
+                    _ => return Err("builders only reserve verified wood and cobblestone".into()),
+                };
+                if v.build_escrow.get(&good).copied().unwrap_or(0) >= required {
+                    return Err("this building material is already fully reserved".into());
+                }
+                if before == 0 || slot.is_none() {
+                    return Err("missing native barrel item/slot for extraction".into());
+                }
+            }
+        }
+        self.settlements.get_mut(&id).unwrap().barrel_transfer = Some(BarrelTransfer {
+            position, good, direction, phase: BarrelPhase::Planned, before, slot,
+        });
+        Ok(())
+    }
+
+    /// Persist this state BEFORE inserting or extracting from native barrels.
+    /// Issued transactions must NEVER be dispatched again after a reload.
+    pub fn issue_barrel_transfer(&mut self, id: u64) -> Result<(), String> {
+        let transfer = self.settlements.get_mut(&id).ok_or("unknown settlement")?
+            .barrel_transfer.as_mut().ok_or("no barrel transfer")?;
+        if transfer.phase != BarrelPhase::Planned {
+            return Err("barrel transfer already issued/blocked".into());
+        }
+        transfer.phase = BarrelPhase::Issued;
+        Ok(())
+    }
+
+    /// Compare a later native snapshot of precisely the same barrel.
+    pub fn confirm_barrel_transfer(&mut self, id: u64, after: u32) -> Result<(), String> {
+        let v = self.settlements.get_mut(&id).ok_or("unknown settlement")?;
+        let t = v.barrel_transfer.as_ref().ok_or("no barrel transfer")?;
+        if t.phase != BarrelPhase::Issued || t.expected_after() != Some(after) {
+            return Err("barrel item count does not match the issued transfer".into());
+        }
+        let good = t.good;
+        let direction = t.direction;
+        match direction {
+            BarrelDirection::ToBarrel => v.warehouse_debit(good, 1)?,
+            BarrelDirection::ToBuilder => {
+                let previous = v.build_escrow.get(&good).copied().unwrap_or(0);
+                let next = previous.checked_add(1).ok_or("building escrow overflow")?;
+                v.build_escrow.insert(good, next);
+            }
+        }
+        v.barrel_transfer = None;
+        Ok(())
+    }
+
+    /// A refused/ambiguous external mutation never retries automatically.
+    pub fn block_barrel_transfer(&mut self, id: u64) -> Result<(), String> {
+        let v = self.settlements.get_mut(&id).ok_or("unknown settlement")?;
+        let t = v.barrel_transfer.as_mut().ok_or("no barrel transfer")?;
+        t.phase = BarrelPhase::Blocked;
+        Ok(())
+    }
+
     /// Planning creates no items. Both native and domain checks forbid
     /// extraction inside the town hall, another structure or player lot.
     pub fn plan_gather(
