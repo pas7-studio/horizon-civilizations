@@ -45,7 +45,7 @@ python3 tools/package.py
 python3 tools/verify_static.py
 ```
 
-Packaging produces `target/civilizations-0.1.6.hnmod` (source-only; the
+Packaging produces `target/civilizations-0.1.7.hnmod` (source-only; the
 launcher compiles it). The template is based on the **native hook-point**
 pattern used by the official Horizon SMP mod. The compatibility pin is in
 `compatibility.json`; the source was inspected but not compiled in this workspace.
@@ -76,7 +76,7 @@ to compile/trust the native mod before the game can run.
 
 1. Install the official Horizon launcher from <https://playhorizon.dev/>.
 2. Create a separate test instance and back up the world.
-3. Put `civilizations-0.1.6.hnmod` in that instance's `horizon-native-mods/`
+3. Put `civilizations-0.1.7.hnmod` in that instance's `horizon-native-mods/`
    directory. The native build requires the launcher's explicit trust action.
 4. Let the launcher **build** the modded game and review build logs. If you see
    `target not found`, hook schema incompatibility, or Rust errors, stop: the
@@ -204,3 +204,20 @@ To avoid runaway stock/house generation after a command jumps the world clock fo
 After the first Windows session, use the read-only script in [playtest evidence](docs/PLAYTEST_EVIDENCE.md)
 to inspect UUID bindings, physical build/farm cursors and harvest receipts. This is not
 a substitute for checking actual NPCs or blocks in the running game.
+
+## Daily NPC routines (v0.1.7 experimental)
+
+The persistent Horizon clock now drives four deterministic movement windows:
+0–1999 dawn (commons), 2000–10999 daytime work, 11000–12999 evening
+gathering, and 13000–23999 near-center nighttime regrouping. Builders
+and farmers work at their real approved sites during the work window;
+guards stay on watch throughout the day. Use `/civ schedule Ashford` to
+inspect the phase and on-duty workforce. Physical farm/construction
+block edits are explicitly disabled outside the daytime work window,
+even if a worker remains standing near the plot.
+
+This is **NPC navigation and work gating only**: no real bed ownership,
+sleep animations, mine production, offscreen work or extra inventory
+credits are claimed. No saved fields or new Horizon hooks were added.
+v0.1.7 has not been compiled or tested in an actual Horizon game yet;
+GitHub Actions were disabled by the user, and local QA is planned.
