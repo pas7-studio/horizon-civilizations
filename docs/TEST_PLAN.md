@@ -887,3 +887,16 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
      with REAL Rust 1.95 and owned Minecraft Java resources
      in a disposable instance, followed by the prior in-game
      E2E and integrity scenarios.
+
+## Compile-first local release gate (revision of native acceptance)
+
+268. Run `py -3 tools/first_play_gate.py --dry-run --build-client`
+     on the latest branch. Verify `cargo-test` executes before
+     Clippy, then strict rustfmt/cargo fmt checks and native build.
+269. Simulate a Rust compile error AND an unformatted source:
+     the first stage and first blocker must be cargo-test, not fmt.
+270. Simulate cargo passing but cargo fmt failing: no
+     SOURCE_CHECK_PASS or READY_FOR_GAMEPLAY_E2E is allowed.
+271. With all real source stages passing, the previous strict native
+     client executable, SHA-256 and manual game-world gates still apply.
+     This ordering improvement is not native compilation evidence.
