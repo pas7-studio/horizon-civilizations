@@ -10,7 +10,7 @@ class FirstPlayDiagnosticsContracts(unittest.TestCase):
     @classmethod
     def setUpClass(cls):
         cls.section = GLUE.split('if action == "diagnose" {', 1)[1].split(
-            'if action == "barrelcheck" {', 1
+            'if action == "gathercheck" {', 1
         )[0]
 
     def test_player_can_call_diagnostic_without_op(self):
