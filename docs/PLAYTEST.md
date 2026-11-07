@@ -60,3 +60,27 @@ When the Windows native compile workflow has uploaded `horizon-client.exe` (not 
 The script imports that exact executable, prepares resources using the official launcher and launches the disposable `Civilizations-Test` creative world. It does not distribute resources, bypass sign-in or alter another save. The `-TrustUnsigned` switch is required to make trust in your own CI artifact an explicit decision. If official resources are already prepared for this installed build, `-SkipPrepare` skips preparing them again.
 
 This launcher flow is **not yet run in this workspace**. If Horizon Launcher reports that a compiled binary is incompatible with its selected version, use the pinned compatible upstream build and a new disposable world instead of patching an existing Minecraft save.
+
+## Build current main on Windows from GitHub (v0.1.6+)
+
+1. Open [Windows native Horizon client workflow](https://github.com/pas7-studio/horizon-civilizations/actions/workflows/build-windows-client.yml).
+2. Click **Run workflow**, choose `main` as branch and confirm. This is needed when
+   no automatic run appears; GitHub API-authorized updates may not emit ordinary
+   push-triggered workflow events.
+3. Wait for the run to finish with **success**, then open that **same run** and
+   download `civilizations-windows-client-no-assets`. Do not take an older run
+   unless deliberately testing that older commit.
+4. Extract the ZIP to `C:\\Games\\HorizonTest\\horizon-client.exe`. The archive
+   contains no Minecraft assets. Obtain them only from the official Horizon
+   Launcher using your legitimately owned Minecraft Java Edition account.
+5. Use `scripts/start-windows-playtest.ps1` as shown above. The launcher imports
+   this trusted unsigned build and starts disposable `Civilizations-Test`.
+6. In-game, execute the numbered cases in [TEST_PLAN](TEST_PLAN.md). After saving
+   and quitting, collect the read-only report described in
+   [PLAYTEST_EVIDENCE](PLAYTEST_EVIDENCE.md). The report is *not* a gameplay pass.
+
+The original Windows build (Actions run 42381940020) was successful but used
+commit `c796d6b1f9e1898c9c1dc2175b91626907adf190` before the v0.1.6 host-clock
+merge. To test the current integration, choose the newest successful `main` run
+and check its exact commit. No modded EXE should be considered production-ready
+without in-world evidence of NPCs, hut, farm and restart behavior.
