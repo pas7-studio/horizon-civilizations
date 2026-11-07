@@ -22,7 +22,7 @@ class VillageHousingProposalContracts(unittest.TestCase):
     def test_domain_checks_all_same_dimension_structure_and_farm_overlaps(self):
         check = CORE.split("pub fn check_visual_house_site(", 1)[1]
         check = check.split("\n    }", 1)[0]
-        self.assertIn("other.dimension == village.dimension", check)
+        self.assertIn("filter(|s| s.dimension == village.dimension)", check)
         for part in ("other.visual_sites", "other.visual_job", "other.farm"):
             self.assertIn(part, check)
         self.assertIn("distance(site, origin)", check)
