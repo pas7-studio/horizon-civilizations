@@ -406,3 +406,26 @@ and conditional edits refuse replacing unfamiliar player-built blocks.
 Parcels and commissions survive a normal save/restart, but the game still
 needs actual local Horizon E2E to prove spawning, navigation, building,
 growth, blocked construction and reload. Test only in disposable worlds.
+
+### Buy an existing real building
+
+To buy a **completed village-built hut**, first accumulate at least **35
+civic coins** (e.g. trade with the village). Stand within 12 blocks of
+that actual building and run:
+
+```
+/civ buyhouse Ashford
+/civ plots Ashford
+```
+
+The native adapter verifies *every* real loaded block of the
+cobblestone-and-oak hut before processing payment. The authenticated
+buyer becomes its private owner, receives the 5x5 plot, and the village
+treasury receives 35 coins. That hut stops being public NPC housing;
+residents return to other public huts or their commons. The next
+ordinary simulated economic days can replenish public housing using
+normal wood/stone consumption, not free stock generation.
+
+This purchases only a completed physical hut created by the mod. It
+does not purchase arbitrary vanilla or third-party player structures.
+Owners can build on their parcels using the usual game controls.
