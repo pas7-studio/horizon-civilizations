@@ -1,3 +1,112 @@
+## Independent NPC-founded settlements (Draft PR #34)
+
+The mod now has a **source implementation** of natural frontier founding, not
+only OP-issued `/civ found`. In the Overworld, once every 2,400 loaded ticks
+the authoritative host surveys a small set of sites roughly 88–91 blocks
+from a real explorer, with a minimum 192-block exclusion near existing towns.
+Both a fully natural, loaded 5×5 civic plot **and ten separately safe loaded
+NPC spawn positions** must be available before any settlement is saved.
+No chunk generation, teleporting, block clearing or forced loading occurs.
+
+At most **eight** independently NPC-founded villages may exist in a world.
+They have ten original residents, real-material construction and autonomy
+on by default, but no human founder, invented player title or free player
+coins. The existing manual OP founding flow is unchanged. Players can locate
+independent communities with **`/civ nearby`** (nearest four in their current
+dimension, coordinates and town hall state), talk to residents and join them.
+
+**Assurance:** 6 new Rust domain tests and 11 Python source contracts
+authored; these remain unexecuted by a native Rust/Horizon build in this
+environment. Do not consider automatic world generation or NPC gameplay
+verified until disposable-world E2E.
+
+## Windows first-play launcher and recovery audit (Draft PR #34)
+
+A Windows GUI-subsystem executable such as Horizon Launcher can return to
+PowerShell before it exits. `start-windows-playtest.ps1` now explicitly
+waits for each `import-build`, `prepare` and `play` command through a
+pipeline and checks its exit status; no following step starts after a
+failed predecessor. The official Horizon CLI contract at pinned revision
+`18840db9146b2521dd46ad52a4559a49be180f8f` was checked.
+
+`tools/playtest_evidence.py` now reports both `world.json.swap` and
+`world.json.tmp` as interrupted transactions, and surfaces one-shot
+`actor_recovery_issued` markers so unfinished villager recovery cannot
+look like a completely clean save. This is a **read-only saved-state
+audit**, not confirmation of NPCs visible in the world. Windows execution
+and full Python/Rust/Minecraft E2E have **not** run here.
+
+## Native test gate: both Rust modules are mandatory
+
+The pinned Horizon native build now enumerates and runs **both**
+`civilizations_core::` and `civilizations_glue::` tests. Cargo can exit zero
+on a test selector matching zero cases, so the gate checks that each filter
+finds at least one real native test **before** claiming a passing build. The
+final JSON evidence includes `native_mod_tests` with matched counts; the
+first-play gate refuses empty or missing suites even when a binary exists.
+A mock Cargo-only Python regression suite covers zero-match, enumeration
+failure and valid coverage. This does **not** replace actual native compilation.
+
+## Crash-safe first save: orphaned temporary files (Draft PR #34)
+
+An interrupted initial write can leave `world.json.tmp` **without** a
+`world.json`. Horizon Civilizations now refuses to initialize a default empty
+world when either `world.json.tmp` or `world.json.swap` exists. Saving also
+refuses to truncate these artifacts. Back up the entire
+`horizon-civilizations` world folder and manually reconcile primary,
+backup and temporary files before loading a valuable save. Never just delete
+an unknown pending save; it may contain the only copy of a new settlement.
+
+Three Rust filesystem regression tests and three Python source contracts were
+added. **Source only:** native compilation and Minecraft gameplay remain
+unverified.
+
+## Latest stacked Draft: partial NPC spawn recovery (source-only)
+
+The first-play gate now defaults to this branch, so on the current checkout
+`py -3 tools/first_play_gate.py --build-client` selects the correct branch.
+Use `--expected-sha` to pin an exact commit when collecting native evidence.
+
+**Latest crash-safety update:** the shared initial spawn survey now also
+requires all selected NPC positions to remain at least 3 blocks apart.
+The command dispatcher no longer rolls back RAM to an old snapshot after
+a durable world save followed by an error, and a failed reconcile save
+now freezes the world rather than implicitly retrying it. The local
+first-play gate extracts the first actionable failing line from the
+compiler/test log into `report.md` and `report.json`. These changes are
+not yet Rust-compiled or game-tested.
+
+**Startup safety update:** both autonomous first-village spawning and OP `/civ actors NAME`
+now share a live survey: ten living unbound residents, no already-loaded tagged
+villagers, and ten natural, loaded, two-air, unoccupied spawn spots. The older
+manual fixed-coordinate spawn path was removed. An incomplete survey creates
+**no** reservation and spawns **no** entity; it can be rerun once the area is safe.
+This hardening remains source-only until real Rust/Horizon/Minecraft tests.
+
+Branch: `feat/guarded-partial-villager-recovery-v0115`, based on
+PR #33. **Not yet compiled or gameplay-verified.** `main`
+unchanged and GitHub Actions disabled.
+
+The first village NPC batch is persisted before spawning; if native
+creation crashes halfway, never rerun all ten. A new OP-only
+`/civ recoveractor NAME ID attempt` can attempt **one** missing
+resident after `/civ reconcile NAME`, inspection of loaded
+original villagers, a fully loaded 96-block scan and a safe
+natural spot. A durable per-resident one-shot reservation is saved
+before native spawning, with exact UUID binding and no blind retry.
+`/civ roster NAME` shows IDs and pending recovery status.
+
+On Windows with Rust 1.95, Python 3.11+ and Horizon prerequisites:
+
+```powershell
+git fetch origin
+git switch feat/guarded-partial-villager-recovery-v0115
+py -3 tools/first_play_gate.py --expected-branch feat/guarded-partial-villager-recovery-v0115 --build-client
+```
+
+This is NOT gameplay E2E. See [PLAYTEST](docs/PLAYTEST.md)
+and [TEST_PLAN](docs/TEST_PLAN.md) for the native recovery scenario.
+
 ## Current Draft — release gate verifies the actual native client artifact
 
 Newest stacked branch: `fix/first-play-binary-evidence-v0115`.

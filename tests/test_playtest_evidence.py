@@ -58,6 +58,34 @@ class EvidenceTests(unittest.TestCase):
             self.assertEqual(report["status"], "FAIL")
             self.assertEqual(len(report["failures"]), 2)
 
+    def test_stale_first_save_tmp_blocks_false_green_report(self):
+        with tempfile.TemporaryDirectory() as path:
+            root = Path(path)
+            fixture(root)
+            pending = root / "horizon-civilizations" / "world.json.tmp"
+            pending.write_bytes(b"recoverable newer state")
+            report = mod.inspect_save(root, settlement="Ashford", min_linked=10)
+            self.assertEqual(report["status"], "FAIL")
+            self.assertTrue(any("world.json.tmp" in reason
+                                for reason in report["failures"]))
+            self.assertEqual(pending.read_bytes(), b"recoverable newer state")
+            self.assertFalse(report["gameplay_verified"])
+
+    def test_only_tmp_without_primary_does_not_look_like_empty_new_world(self):
+        with tempfile.TemporaryDirectory() as path:
+            root = Path(path)
+            mod_dir = root / "horizon-civilizations"
+            mod_dir.mkdir()
+            (mod_dir / "world.json.tmp").write_bytes(b"first interrupted write")
+            report = mod.inspect_save(root)
+            self.assertEqual(report["status"], "FAIL")
+            self.assertTrue(any("world.json.tmp" in reason
+                                for reason in report["failures"]))
+            self.assertTrue(any("world.json missing" in reason
+                                for reason in report["failures"]))
+            self.assertEqual((mod_dir / "world.json.tmp").read_bytes(),
+                             b"first interrupted write")
+
     def test_invalid_and_duplicate_uuid_fail(self):
         with tempfile.TemporaryDirectory() as path:
             root = Path(path)
@@ -67,6 +95,50 @@ class EvidenceTests(unittest.TestCase):
             village["settlements"]["1"]["residents"][0]["entity_uuid"] = "2".zfill(32)
             (root / "horizon-civilizations/world.json").write_text(json.dumps(village))
             self.assertEqual(mod.inspect_save(root)["status"], "FAIL")
+
+    def test_pending_actor_recovery_warns_without_fake_clean_pass(self):
+        with tempfile.TemporaryDirectory() as path:
+            root = Path(path)
+            fixture(root)
+            save = root / "horizon-civilizations/world.json"
+            world = json.loads(save.read_text())
+            village = world["settlements"]["1"]
+            village["residents"][0]["entity_uuid"] = None
+            village["actor_recovery_issued"] = [1]
+            save.write_text(json.dumps(world))
+            report = mod.inspect_save(root, settlement="Ashford", min_linked=9)
+            self.assertEqual(report["status"], "PASS_WITH_WARNINGS")
+            self.assertEqual(report["settlements"][0]["pending_actor_recoveries"], 1)
+            self.assertTrue(any("reconcile before another spawn" in warning
+                                for warning in report["warnings"]))
+
+    def test_pending_recovery_marker_for_bound_or_unknown_actor_is_invalid(self):
+        with tempfile.TemporaryDirectory() as path:
+            root = Path(path)
+            fixture(root)
+            save = root / "horizon-civilizations/world.json"
+            world = json.loads(save.read_text())
+            world["settlements"]["1"]["actor_recovery_issued"] = [1, 999]
+            save.write_text(json.dumps(world))
+            report = mod.inspect_save(root, settlement="Ashford", min_linked=10)
+            self.assertEqual(report["status"], "FAIL")
+            self.assertTrue(any("missing or UUID-linked resident" in reason
+                                for reason in report["failures"]))
+
+    def test_dead_unbound_resident_recovery_tombstone_is_not_corruption(self):
+        with tempfile.TemporaryDirectory() as path:
+            root = Path(path)
+            fixture(root)
+            save = root / "horizon-civilizations/world.json"
+            world = json.loads(save.read_text())
+            village = world["settlements"]["1"]
+            village["residents"][0]["alive"] = False
+            village["residents"][0]["entity_uuid"] = None
+            village["actor_recovery_issued"] = [1]
+            save.write_text(json.dumps(world))
+            report = mod.inspect_save(root, settlement="Ashford", min_linked=9)
+            self.assertEqual(report["status"], "PASS_WITH_WARNINGS")
+            self.assertEqual(report["settlements"][0]["pending_actor_recoveries"], 1)
 
     def test_no_raw_player_log_text_in_report(self):
         with tempfile.TemporaryDirectory() as path:

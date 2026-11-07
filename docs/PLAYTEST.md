@@ -1,9 +1,37 @@
+## Natural village discovery acceptance (new Draft PR #34 feature)
+
+Use a **throwaway Minecraft/Horizon world**. Do not copy a valuable save
+until real native build and gameplay are verified.
+
+1. In a fresh Overworld area with loaded natural, flat ground, move away
+   from existing towns, remain active for more than 2,400 loaded server
+   ticks (~2 minutes at 20 TPS), then use `/civ nearby`.
+2. A successful site must be ~88–91 blocks from an explorer, have 5×5
+   naturally suitable ground and enough safe positions for **ten** NPCs;
+   no new settlement should appear on a blocked or unloaded site.
+3. `/civ info NAME`, `/civ roster NAME`, `/civ hall NAME` and
+   `/civ warehouse NAME` must reveal the independent town's actual
+   saved state. Speak to an NPC, then `/civ join NAME` to become a
+   citizen. No player account becomes a lord from natural founding.
+4. Follow actual NPCs to resources, inspect the funding of the physical
+   town hall, confirm working signs/barrels, then restart mid-build.
+5. Revisit the same area and verify NO duplicate city, UUID or building.
+   Move 192+ blocks beyond all existing towns to discover another;
+   no more than eight independent NPC towns should be founded.
+6. In the Nether/End or when no players are present, verify no natural
+   town is founded. A partial/unloaded candidate must not be persisted.
+7. `/civ nearby` is read-only, shows only current-dimension towns,
+   nearest first with coordinates, and never generates/loads chunks.
+
+**Do not mark these steps passed based on Rust/Python source contracts.**
+The local build report and recorded native Minecraft evidence are required.
+
 # Local Horizon Civilizations playtest
 
 **Current assurance:** an older pinned Horizon native branch previously passed
 `cargo check` and embedded Rust tests. The latest v0.1.14 stacked source in
-`feat/first-play-diagnostics-v0115` has **not** passed native compile or
-Minecraft E2E. Do not reuse an old binary as evidence for this stack.
+`feat/guarded-partial-villager-recovery-v0115` (Draft PR #34) has **not**
+passed native compile or Minecraft E2E. Do not reuse an old binary as evidence for this stack.
 
 ## Build on your own development PC
 
@@ -58,7 +86,7 @@ When the Windows native compile workflow has uploaded `horizon-client.exe` (not 
 .\scripts\start-windows-playtest.ps1 -ClientExe 'C:\Games\HorizonTest\horizon-client.exe' -TrustUnsigned
 ```
 
-The script imports that exact executable, prepares resources using the official launcher and launches the disposable `Civilizations-Test` creative world. It does not distribute resources, bypass sign-in or alter another save. The `-TrustUnsigned` switch is required to make trust in your own CI artifact an explicit decision. If official resources are already prepared for this installed build, `-SkipPrepare` skips preparing them again.
+The script imports that exact executable, prepares resources using the official launcher and launches the disposable `Civilizations-Test` creative world. Each Horizon Launcher operation is awaited using a PowerShell pipeline, because the Windows GUI-subsystem executable otherwise may return before its exit status is available. A failed import/prepare must stop the sequence before play. It does not distribute resources, bypass sign-in or alter another save. The `-TrustUnsigned` switch is required to make trust in your own CI artifact an explicit decision. If official resources are already prepared for this installed build, `-SkipPrepare` skips preparing them again.
 
 This launcher flow is **not yet run in this workspace**. If Horizon Launcher reports that a compiled binary is incompatible with its selected version, use the pinned compatible upstream build and a new disposable world instead of patching an existing Minecraft save.
 
@@ -542,7 +570,7 @@ models/animations and full playability still not claimed.
 
 ```powershell
 git fetch origin
-git switch chore/first-play-native-validation-v0115
+git switch feat/guarded-partial-villager-recovery-v0115
 py -3 tools/first_play_gate.py --dry-run --build-client
 py -3 tools/first_play_gate.py --build-client
 ```
@@ -593,3 +621,34 @@ the script never silently changes Rust source. Open
 `target/first-play-gate/<UTC>/report.md` for the first blocker.
 The runner's 12/12 mock harness tests passed on Linux; native
 compilation/Minecraft gameplay remain unverified.
+
+## Recover only an actually missing resident after partial NPC creation
+
+Latest source: `feat/guarded-partial-villager-recovery-v0115`.
+This branch is **not compiled or gameplay-verified**.
+
+On a networked Windows build machine:
+
+```powershell
+git fetch origin
+git switch feat/guarded-partial-villager-recovery-v0115
+py -3 tools/first_play_gate.py --expected-branch feat/guarded-partial-villager-recovery-v0115 --build-client
+```
+
+On a disposable Minecraft world: `/civ roster Ashford` now includes
+each citizen's resident ID and their saved UUID state. If a crash
+interrupted native creation, first **load the original village chunks**
+and run OP `/civ reconcile Ashford` to bind existing villagers. Only
+after verifying a particular villager is truly missing, standing
+within 32 blocks and with all surrounding native chunks loaded,
+an OP can issue (example ID; use the real roster value):
+
+```
+/civ recoveractor Ashford 1007 attempt
+```
+
+This is **one irreversible native spawn attempt per resident**,
+journalled before native effects, never retried automatically.
+If interrupted, inspect live entities and `/civ reconcile`;
+do not blindly create a duplicate. See TEST_PLAN 272–283.
+Never use a valuable game world to test this Draft feature.

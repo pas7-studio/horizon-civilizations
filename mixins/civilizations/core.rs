@@ -29,6 +29,11 @@ pub const LAND_PRICE_COINS: u64 = 10;
 pub const COMMISSION_PRICE_COINS: u64 = 15;
 pub const FINISHED_HUT_PRICE_COINS: u64 = 35;
 pub const MAX_PLAYER_PARCELS: usize = 32;
+/// Bound autonomous founding so exploration does not eventually create
+/// sixty-four always-ticking settlements in one long-lived world. Manual
+/// operator settlements are separate and keep their original rules.
+pub const MAX_NPC_SETTLEMENTS: usize = 8;
+pub const NPC_FOUNDER: &str = "civilizations:npc";
 
 fn autonomous_by_default() -> bool { true }
 
@@ -1124,6 +1129,12 @@ pub struct Settlement {
     pub active_wars: BTreeSet<u64>,
     pub pending_visual_buildings: u32,
     pub actors_spawned: bool,
+    /// One-shot, durably reserved OP recovery attempts after partial native
+    /// actor spawning. A crash can occur AFTER the entity is created but
+    /// BEFORE its UUID is persisted: never automatically reissue this spawn.
+    /// The OP must first inspect/reconcile any already-existing villager.
+    #[serde(default)]
+    pub actor_recovery_issued: BTreeSet<u64>,
     /// Villages develop by default. OP can pause selected settlements.
     #[serde(default = "autonomous_by_default")]
     pub autonomy_enabled: bool,
@@ -1704,6 +1715,19 @@ impl World {
                 all_parcels.push((village.dimension.clone(), parcel.origin));
             }
             if village.residents.len() > 128 { return Err("resident cap exceeded".into()); }
+            if !village.actor_recovery_issued.is_empty() && !village.actors_spawned {
+                return Err("recovery attempts exist before actor spawn reservation".into());
+            }
+            for recovery_id in &village.actor_recovery_issued {
+                // A resident may legitimately die AFTER one native spawn
+                // attempt was reserved. Keep that one-shot tombstone on disk
+                // (do not revive them), but never reject the entire village
+                // save merely because their life ended.
+                if !village.residents.iter().any(|r|
+                    r.id == *recovery_id && r.entity_uuid.is_none()) {
+                    return Err("invalid pending actor recovery ID or already bound actor".into());
+                }
+            }
             let mut resident_ids = BTreeSet::new();
             for resident in &village.residents {
                 if !resident_ids.insert(resident.id) {
@@ -1809,6 +1833,37 @@ impl World {
         center: [i32; 3],
         founder: &str,
     ) -> Result<u64, String> {
+        self.found_internal(name, dimension, center, founder, true)
+    }
+
+    /// Self-founded NPC community. No authenticated human owns this village:
+    /// no synthetic player record, title, balance, or joining a real player
+    /// to the new settlement. Reuses EXACTLY the manual collision, entity,
+    /// construction and resident invariants via found_internal.
+    pub fn found_autonomous(
+        &mut self,
+        name: &str,
+        dimension: &str,
+        center: [i32; 3],
+    ) -> Result<u64, String> {
+        if dimension != "minecraft:overworld" {
+            return Err("autonomous frontier settlements require the overworld".into());
+        }
+        if self.settlements.values()
+            .filter(|s| s.founder == NPC_FOUNDER).count() >= MAX_NPC_SETTLEMENTS {
+            return Err("autonomous settlement cap reached".into());
+        }
+        self.found_internal(name, dimension, center, NPC_FOUNDER, false)
+    }
+
+    fn found_internal(
+        &mut self,
+        name: &str,
+        dimension: &str,
+        center: [i32; 3],
+        founder: &str,
+        player_founded: bool,
+    ) -> Result<u64, String> {
         if self.settlements.len() >= MAX_SETTLEMENTS {
             return Err("settlement cap reached".into());
         }
@@ -1873,6 +1928,7 @@ impl World {
             active_wars: BTreeSet::new(),
             pending_visual_buildings: 0,
             actors_spawned: false,
+            actor_recovery_issued: BTreeSet::new(),
             autonomy_enabled: true,
             player_parcels: Vec::new(),
             visual_sites: Vec::new(),
@@ -1881,12 +1937,18 @@ impl World {
             farm: None,
         };
         self.settlements.insert(id, settlement);
-        let p = self.players.entry(founder.to_owned()).or_default();
-        p.settlement = Some(id);
-        p.rank = Rank::Lord;
-        p.coins = p.coins.saturating_add(25);
-        p.reputation.insert(id, 50);
-        self.event(format!("{name} founded"));
+        if player_founded {
+            // The old /civ found contract is unchanged: a REAL authenticated
+            // human OP receives the founding title and initial civic coins.
+            let p = self.players.entry(founder.to_owned()).or_default();
+            p.settlement = Some(id);
+            p.rank = Rank::Lord;
+            p.coins = p.coins.saturating_add(25);
+            p.reputation.insert(id, 50);
+            self.event(format!("{name} founded"));
+        } else {
+            self.event(format!("{name} founded by an independent NPC council"));
+        }
         Ok(id)
     }
 
@@ -2965,6 +3027,29 @@ impl World {
 
     /// Bind a resident to the actual saved Horizon entity UUID, once.
     /// The operation is idempotent for the same identity and rejects reassignment.
+    /// The OP explicitly requested ONE missing villager after inspecting
+    /// loaded native actors. Save this reservation before sending any spawn
+    /// command, so a crash or native refusal does not cause a second entity
+    /// to be spawned by automated logic on a later tick.
+    pub fn reserve_actor_recovery(
+        &mut self, settlement_id: u64, resident_id: u64,
+    ) -> Result<(), String> {
+        let settlement = self.settlements.get_mut(&settlement_id)
+            .ok_or("unknown settlement")?;
+        if !settlement.actors_spawned {
+            return Err("initial villager batch has not been reserved".into());
+        }
+        let missing = settlement.residents.iter().any(|r|
+            r.id == resident_id && r.alive && r.entity_uuid.is_none());
+        if !missing {
+            return Err("resident is dead, missing or already UUID-linked".into());
+        }
+        if !settlement.actor_recovery_issued.insert(resident_id) {
+            return Err("actor recovery already attempted; inspect/reconcile, never spawn twice".into());
+        }
+        Ok(())
+    }
+
     pub fn bind_actor(&mut self, settlement_id: u64, resident_id: u64, uuid: u128) -> Result<bool, String> {
         if uuid == 0 {
             return Err("cannot bind zero entity UUID".into());
@@ -2988,6 +3073,9 @@ impl World {
             Some(_) => Err("resident already bound to a different entity UUID".into()),
             None => {
                 resident.entity_uuid = Some(uuid);
+                // Atomic in-memory state saved by the bridge. If the save
+                // fails, the disk retains the pending one-shot reservation.
+                settlement.actor_recovery_issued.remove(&resident_id);
                 Ok(true)
             }
         }
@@ -6042,5 +6130,216 @@ mod legacy_witnessed_gather_migration_tests {
         migrated.abandon_blocked_issued_gather(id).unwrap();
         assert_eq!(migrated.settlements[&id].warehouse_quantity(Good::Stone), 0);
         migrated.validate().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod guarded_partial_native_actor_recovery_tests {
+    use super::*;
+
+    fn partial_spawn() -> (World, u64, u64) {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0, 70, 0], "owner").unwrap();
+        let first = world.settlements[&id].residents[0].id;
+        world.settlements.get_mut(&id).unwrap().actors_spawned = true;
+        world.bind_actor(id, first, 0x123456).unwrap();
+        let missing = world.settlements[&id].residents[7].id;
+        world.validate().unwrap();
+        (world, id, missing)
+    }
+
+    #[test]
+    fn cannot_recover_before_initial_spawn_is_durably_reserved() {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0, 70, 0], "owner").unwrap();
+        let worker = world.settlements[&id].residents[7].id;
+        assert!(world.reserve_actor_recovery(id, worker).is_err());
+        assert!(world.settlements[&id].actor_recovery_issued.is_empty());
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn pending_recovery_can_only_be_reserved_once_even_after_reload() {
+        let (mut world, id, worker) = partial_spawn();
+        world.reserve_actor_recovery(id, worker).unwrap();
+        assert!(world.reserve_actor_recovery(id, worker).is_err());
+        let mut restored: World = serde_json::from_str(
+            &serde_json::to_string(&world).unwrap()).unwrap();
+        restored.validate().unwrap();
+        assert!(restored.settlements[&id].actor_recovery_issued.contains(&worker));
+        assert!(restored.reserve_actor_recovery(id, worker).is_err());
+    }
+
+    #[test]
+    fn native_uuid_link_clears_pending_recovery_without_new_residents() {
+        let (mut world, id, worker) = partial_spawn();
+        let original_count = world.settlements[&id].residents.len();
+        world.reserve_actor_recovery(id, worker).unwrap();
+        world.bind_actor(id, worker, 0x789abc).unwrap();
+        assert!(world.settlements[&id].actor_recovery_issued.is_empty());
+        assert_eq!(world.settlements[&id].residents.len(), original_count);
+        assert_eq!(world.settlements[&id].residents.iter().find(
+            |r| r.id == worker).unwrap().entity_uuid, Some(0x789abc));
+        assert!(world.reserve_actor_recovery(id, worker).is_err());
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn another_citizens_uuid_never_clears_pending_recovery() {
+        let (mut world, id, worker) = partial_spawn();
+        world.reserve_actor_recovery(id, worker).unwrap();
+        let other = world.settlements[&id].residents[8].id;
+        world.bind_actor(id, other, 0xabc).unwrap();
+        assert!(world.settlements[&id].actor_recovery_issued.contains(&worker));
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn unknown_dead_and_already_linked_resident_ids_cannot_be_reserved() {
+        let (mut world, id, missing) = partial_spawn();
+        assert!(world.reserve_actor_recovery(id, u64::MAX).is_err());
+        let linked = world.settlements[&id].residents[0].id;
+        assert!(world.reserve_actor_recovery(id, linked).is_err());
+        world.settlements.get_mut(&id).unwrap().residents.iter_mut()
+            .find(|r| r.id == missing).unwrap().alive = false;
+        assert!(world.reserve_actor_recovery(id, missing).is_err());
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn dead_resident_with_prior_recovery_attempt_is_safe_to_reload_but_not_respawn() {
+        let (mut world, id, worker) = partial_spawn();
+        world.reserve_actor_recovery(id, worker).unwrap();
+        world.settlements.get_mut(&id).unwrap().residents.iter_mut()
+            .find(|r| r.id == worker).unwrap().alive = false;
+        world.validate().unwrap();
+        let mut restored: World = serde_json::from_str(
+            &serde_json::to_string(&world).unwrap()).unwrap();
+        restored.validate().unwrap();
+        assert!(restored.settlements[&id].actor_recovery_issued.contains(&worker));
+        assert!(restored.reserve_actor_recovery(id, worker).is_err());
+    }
+
+    #[test]
+    fn invalid_recovery_marker_fails_json_validation() {
+        let (mut world, id, _) = partial_spawn();
+        world.settlements.get_mut(&id).unwrap()
+            .actor_recovery_issued.insert(u64::MAX);
+        assert!(world.validate().is_err());
+    }
+
+    #[test]
+    fn recovery_marker_cannot_precede_initial_actor_reservation() {
+        let (mut world, id, worker) = partial_spawn();
+        world.reserve_actor_recovery(id, worker).unwrap();
+        world.settlements.get_mut(&id).unwrap().actors_spawned = false;
+        assert!(world.validate().is_err());
+    }
+}
+
+#[cfg(test)]
+mod autonomous_frontier_tests {
+    use super::*;
+
+    #[test]
+    fn npc_founding_creates_full_independent_society_without_player_gifts() {
+        let mut world = World::default();
+        let id = world.found_autonomous(
+            "Oakford_1", "minecraft:overworld", [96, 71, 96]
+        ).unwrap();
+        let settlement = &world.settlements[&id];
+        assert_eq!(settlement.founder, NPC_FOUNDER);
+        assert_eq!(settlement.residents.len(), 10);
+        assert!(settlement.autonomy_enabled);
+        assert!(!settlement.actors_spawned);
+        assert!(!settlement.hall_complete);
+        assert!(settlement.warehouse.is_empty());
+        assert!(settlement.build_escrow.is_empty());
+        assert!(world.players.is_empty(), "no fake player, lordship or free coins");
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn a_real_player_may_join_an_independent_village_without_becoming_founder() {
+        let mut world = World::default();
+        let id = world.found_autonomous(
+            "Stonevale_1", "minecraft:overworld", [80, 70, 90]
+        ).unwrap();
+        world.join("player-uuid", id).unwrap();
+        let human = &world.players["player-uuid"];
+        assert_eq!(human.rank, Rank::Citizen);
+        assert_eq!(human.coins, 25);
+        assert_eq!(human.settlement, Some(id));
+        assert_eq!(world.settlements[&id].founder, NPC_FOUNDER);
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn autonomous_and_manual_settlements_share_spatial_collision_guards() {
+        let mut world = World::default();
+        world.found("HumanTown", "minecraft:overworld", [0, 70, 0], "op")
+            .unwrap();
+        assert!(world.found_autonomous(
+            "TooNear", "minecraft:overworld", [100, 70, 0]
+        ).is_err());
+        assert!(world.found_autonomous(
+            "WrongDim", "minecraft:the_nether", [300, 70, 0]
+        ).is_err());
+        let id = world.found_autonomous(
+            "SafeTown", "minecraft:overworld", [300, 70, 0]
+        ).unwrap();
+        assert_eq!(world.settlements[&id].residents.len(), 10);
+        assert_eq!(world.players["op"].rank, Rank::Lord);
+        assert_eq!(world.players["op"].coins, 25);
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn autonomous_villages_are_bounded_without_disabling_manual_founding() {
+        let mut world = World::default();
+        for n in 0..MAX_NPC_SETTLEMENTS {
+            world.found_autonomous(
+                &format!("Frontier_{n}"), "minecraft:overworld",
+                [n as i32 * 256, 70, 0],
+            ).unwrap();
+        }
+        assert!(world.found_autonomous(
+            "NinthTown", "minecraft:overworld", [2600, 70, 0]
+        ).is_err());
+        let human = world.found(
+            "HumanTown", "minecraft:overworld", [3000, 70, 0], "op"
+        ).unwrap();
+        assert_ne!(world.settlements[&human].founder, NPC_FOUNDER);
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn reload_cannot_found_a_second_npc_town_on_the_same_site() {
+        let mut world = World::default();
+        let original = world.found_autonomous(
+            "Oakford_1", "minecraft:overworld", [88, 70, 0]
+        ).unwrap();
+        let json = serde_json::to_string(&world).unwrap();
+        let mut reloaded: World = serde_json::from_str(&json).unwrap();
+        assert!(reloaded.found_autonomous(
+            "NewName", "minecraft:overworld", [90, 70, 1]
+        ).is_err());
+        assert_eq!(reloaded.settlements.len(), 1);
+        assert_eq!(reloaded.settlements[&original].name, "Oakford_1");
+        reloaded.validate().unwrap();
+    }
+
+    #[test]
+    fn npc_founding_roundtrip_does_not_materialize_synthetic_accounts() {
+        let mut world = World::default();
+        world.found_autonomous(
+            "Birchmere_1", "minecraft:overworld", [88, 65, -64]
+        ).unwrap();
+        let encoded = serde_json::to_string(&world).unwrap();
+        let decoded: World = serde_json::from_str(&encoded).unwrap();
+        decoded.validate().unwrap();
+        assert_eq!(decoded.settlements[&1].founder, NPC_FOUNDER);
+        assert!(decoded.players.is_empty());
+        assert_eq!(decoded.settlements[&1].residents.len(), 10);
     }
 }

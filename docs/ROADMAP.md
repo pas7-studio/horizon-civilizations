@@ -1,3 +1,24 @@
+## v0.1.15 (Draft PR #34) — naturally founded independent NPC villages
+
+- [x] Pure domain separation between player-/NPC-founded towns: independent
+  NPC council without fake accounts, rank grants or initial player currency.
+- [x] No OP command required for a natural settlement: bounded, periodic
+  scan near **actual active Overworld explorers** using only loaded chunks,
+  5x5 natural clear plots and the existing ten-NPC safe spawn preflight.
+- [x] 192-block exclusion near existing towns, cap at eight NPC-founded
+  villages per world, no new dimensions or forced chunk generation.
+- [x] Reuse normal autonomous builder, farmer, baker, warehouse and village
+  startup rather than a parallel special NPC society path.
+- [x] Public read-only `/civ nearby` locates nearest towns and shows
+  coords/direction/construction state, enabling exploration.
+- [x] Authored six Rust unit regressions and eleven Python source contracts.
+- [ ] **Not verified in Minecraft:** worldgen site selection on real biomes,
+  singleplayer and dedicated-server player observation, ten native NPCs,
+  construction from physical supplies, restart and the eight-town cap.
+- [ ] Richer terrain/biome-aware site selection, multiple cultures, roads,
+  settlement name lore, organic migration and regional diplomacy.
+- [ ] Real native E2E build remains P0; no automatic-ready or playable claim.
+
 # Civilization mod roadmap
 
 These are separate acceptance gates. A source archive is **not** a gameplay

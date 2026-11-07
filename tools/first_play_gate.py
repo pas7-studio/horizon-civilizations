@@ -11,6 +11,7 @@ import argparse
 import hashlib
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -19,7 +20,7 @@ from dataclasses import asdict, dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 
-DEFAULT_BRANCH = "fix/first-play-binary-evidence-v0115"
+DEFAULT_BRANCH = "feat/guarded-partial-villager-recovery-v0115"
 
 
 @dataclass(frozen=True)
@@ -71,6 +72,33 @@ def git_value(root: Path, *args: str) -> str:
                                    stderr=subprocess.PIPE, timeout=20).strip()
 
 
+_DIAGNOSTIC_LINE = re.compile(
+    r"(?i)(?:\berror(?:\[[a-z0-9]+\])?:|\bfatal error\b|"
+    r"^\s*(?:FAIL:|FAILED\b|ERROR:|Traceback\b|Caused by:|"
+    r"ModuleNotFoundError:|AssertionError:|FileNotFoundError:))"
+)
+_ANSI_COLOR = re.compile(r"\x1b\[[0-9;]*m")
+
+
+def first_stage_error(log_path: Path) -> str:
+    """Summarize the first actionable failing line from a subprocess log.
+
+    Only called after a stage has failed. Keep memory bounded even when a
+    native compiler emits gigabytes of diagnostics; the full log remains
+    available alongside report.md.
+    """
+    last_output = None
+    with log_path.open("r", encoding="utf-8", errors="replace") as stream:
+        for raw_line in stream:
+            line = _ANSI_COLOR.sub("", raw_line).strip()
+            if not line or line.startswith("COMMAND:"):
+                continue
+            last_output = line[:400]
+            if _DIAGNOSTIC_LINE.search(line):
+                return line[:400]
+    return last_output or "nonzero exit without diagnostic output"
+
+
 def run_step(root: Path, output: Path, step: Step) -> StepResult:
     log_path = output / (step.name + ".log")
     started = time.monotonic()
@@ -89,6 +117,8 @@ def run_step(root: Path, output: Path, step: Step) -> StepResult:
             problem = f"timeout after {step.timeout_seconds} seconds"
         except OSError as exc:
             problem = f"could not start: {exc}"
+    if code not in (None, 0) and problem is None:
+        problem = first_stage_error(log_path)
     return StepResult(step.name, step.argv, "PASS" if code == 0 else "FAIL",
                       code, round(time.monotonic() - started, 3),
                       str(log_path.relative_to(root)), problem)
@@ -117,13 +147,27 @@ def verify_native_build_evidence(root: Path, log_path: Path,
         raise RuntimeError("native build returned wrong pinned Horizon revision")
     if record.get("cargo_check") != "PASS":
         raise RuntimeError("native build did not report a successful cargo check")
+    # A filtered Cargo test exits 0 even when the filter matches nothing.
+    # Require evidence for BOTH the domain logic and injected native glue.
+    suites = record.get("native_mod_tests")
+    expected_suites = ("civilizations_core::", "civilizations_glue::")
+    if not isinstance(suites, list) or len(suites) != len(expected_suites):
+        raise RuntimeError("native build must report both core and glue Rust test suites")
+    for selector in expected_suites:
+        matches = [entry for entry in suites if isinstance(entry, dict)
+                   and entry.get("filter") == selector]
+        if len(matches) != 1 or matches[0].get("status") != "PASS":
+            raise RuntimeError(f"native Rust test suite did not pass: {selector}")
+        count = matches[0].get("discovered")
+        if type(count) is not int or count < 1:
+            raise RuntimeError(f"native Rust test filter matched zero tests: {selector}")
     expected_stage = (root / "target/native-check/modded").resolve()
     if not isinstance(record.get("modded_horizon"), str) or not record["modded_horizon"]:
         raise RuntimeError("native build did not report the modded checkout path")
     if Path(record["modded_horizon"]).resolve() != expected_stage:
         raise RuntimeError("native build reported an unexpected modded checkout path")
     if not build_client:
-        return {"native_build_verified": True}
+        return {"native_build_verified": True, "native_mod_tests": suites}
     expected_binary = (expected_stage / "target/fast" /
                        ("horizon-client.exe" if os.name == "nt" else "horizon-client"))
     reported = record.get("native_client_binary")
@@ -138,7 +182,7 @@ def verify_native_build_evidence(root: Path, log_path: Path,
     with expected_binary.open("rb") as executable:
         for block in iter(lambda: executable.read(1024 * 1024), b""):
             hasher.update(block)
-    return {"native_build_verified": True,
+    return {"native_build_verified": True, "native_mod_tests": suites,
             "native_client_path": str(expected_binary),
             "native_client_bytes": expected_binary.stat().st_size,
             "native_client_sha256": hasher.hexdigest()}
@@ -153,6 +197,7 @@ def write_report(root: Path, output: Path, data: dict) -> None:
              f"- Working tree clean after checks: `{data['clean_end']}`",
              f"- Gate: **{data['gate']}**",
              f"- Native build evidence verified: `{data['native_build_verified']}`",
+             f"- Native Rust test suites: `{data['native_mod_tests']}`",
              f"- Native client: `{data['native_client_path']}`",
              f"- Native client SHA256: `{data['native_client_sha256']}`",
              "- Real Minecraft gameplay E2E: **NOT TESTED**", "",
@@ -199,7 +244,8 @@ def main(argv: list[str] | None = None) -> int:
                   "clean_start": False, "clean_end": False, "rustc": "UNKNOWN", "cargo": "UNKNOWN", "rustfmt": "UNKNOWN",
                   "python": sys.version.split()[0], "gate": "BLOCKED",
                   "gameplay_e2e": "NOT_TESTED", "blocking_reason": None,
-                  "native_build_verified": False, "native_client_path": None,
+                  "native_build_verified": False, "native_mod_tests": [],
+                  "native_client_path": None,
                   "native_client_bytes": None, "native_client_sha256": None, "steps": []}
     try:
         if sys.version_info < (3, 11):

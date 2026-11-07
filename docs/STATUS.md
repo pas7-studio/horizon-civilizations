@@ -1,3 +1,122 @@
+# v0.1.15 source — self-founded frontier settlements (unverified native)
+
+- Source design: native NPC settlements can now originate near real
+  Overworld explorers, with loaded natural 5×5 grounds and ten safe
+  spawn sites checked before the first durable settlement record.
+- One bounded survey per 2,400 loaded ticks; at most eight independently
+  founded villages, minimum 192-block separation near existing settlements.
+- No player ownership or free starting currency is invented; original
+  manually OP-founded villages preserve their prior semantics.
+- Public read-only `/civ nearby` for exploration and navigation.
+- Six Rust domain regressions plus eleven Python source contracts
+  authored. Runtime Rust/Horizon builds and Minecraft E2E **not executed**.
+
+---
+
+# PR #34 — Windows first-play correctness and recovery evidence
+
+- [x] Source fix for Windows GUI Horizon Launcher: import/prepare/play
+  are awaited with a pipeline and their actual exit statuses checked.
+- [x] Corrected PLAYTEST guide to the current PR #34 branch.
+- [x] Saved-state evidence now recognizes orphaned `world.json.tmp`
+  and persistent NPC recovery markers (including valid dead tombstones).
+- [x] Authored additional Windows launcher and Python saved-state
+  regression cases, with acceptance tests 301–306.
+- [ ] Python full-suite execution, Rust 1.95, Horizon EXE compilation,
+  Windows launcher and Minecraft E2E all remain unverified.
+
+---
+
+# Native Rust test inventory is now required
+
+- [x] The native build runs filtered `civilizations_core::` and
+  `civilizations_glue::` Rust tests, including newly authored filesystem
+  recovery tests in the glue module.
+- [x] Cargo test filters are listed first; zero matched tests block a
+  passing native build even when Cargo exits zero.
+- [x] Local first-play gate now requires both suite names, positive
+  discovered counts and PASS status from the pinned native build report.
+- [x] Authored three Python mock-Cargo tests plus two first-play gate
+  missing/zero-suite tests; updated native CLI source contracts.
+- [ ] No real Cargo, full Python suite or native Minecraft E2E yet.
+
+---
+
+# Latest source safety: incomplete first world save
+
+- [x] Detect orphaned `world.json.tmp` before treating a missing
+  `world.json` as a new empty world. The existing `world.json.swap`
+  fail-closed behavior remains intact.
+- [x] Refuse to overwrite any stale temporary/swap file on subsequent
+  writes, preserving original disk bytes for manual operator recovery.
+- [x] Authored three native Rust filesystem regressions and three Python
+  source-contract checks (six tests in world-switch module).
+- [ ] Rust execution, full Python suite, pinned native Horizon build and
+  Minecraft E2E are still not verified.
+
+---
+
+# Latest Draft — partial village NPC spawn recovery (source only)
+
+**Crash-safety and first compiler-diagnostic follow-up:** fixed the
+mutating command handler so an error after a durable write halts world
+mutations rather than restoring an old in-memory snapshot. Reconcile
+save failures now mark the command as already saved to prevent a blind
+second write. Both initial spawners inherit 3-block pairwise clearance
+between selected positions; the preflight still finds ten spots on a
+flat 7x7 survey grid. The local build gate now records the first
+compiler/test diagnostic, not just a nonzero exit. Source contracts
+updated (19 guarded actor tests and 14 build-gate harness tests authored).
+No real Rust build or full Python unittest suite has been run here.
+
+**First-spawn safety hardening (same PR #34):** removed fixed-coordinate
+OP spawning. Both OP `/civ actors` and automatic village initialization now
+require one shared preflight for ten living, unbound residents, absence of
+loaded matching tagged/legacy villagers, and ten surveyed, unoccupied native
+spawn points on loaded natural terrain. Survey fails before the persisted
+`actors_spawned` flag is set. Added four Python source regression contracts
+(16 total in `test_guarded_actor_recovery.py`), plus 17/17 connector-side
+source assertions PASS. No Rust compiler, native client or Minecraft E2E run.
+
+Branch `feat/guarded-partial-villager-recovery-v0115`, stacked on
+PR #33. Main unchanged, GitHub Actions OFF; no native Horizon compile
+or Minecraft playtest has run for this feature.
+
+- [x] Fixed a nonrecoverable lifecycle situation: automatic first
+  batch permanently reserves `actors_spawned=true` BEFORE native spawn.
+  A crash/refused spawn after 1–9 villagers leaves other residents
+  unbound and can remove the builder/merchant/miner needed for a village.
+- [x] Added explicit OP `/civ recoveractor NAME RESIDENT_ID attempt`:
+  requires reserved first batch, a living unbound resident, correct
+  dimension/nearby OP, fully loaded 96-block neighborhood sample,
+  no currently loaded matching tagged/legacy villager, and an
+  unoccupied surveyed natural spawn point.
+- [x] Persists `actor_recovery_issued` **before** native spawning.
+  Cannot re-issue the same resident's recovery after crash/native
+  refusal. UUID binding removes pending marker only in same saved
+  world state; if UUID/save fails, mutations stop. Old saves load
+  because the new field has serde default empty.
+- [x] `/civ roster NAME` now shows exact resident IDs, UUID-linked,
+  unbound and recovery-pending statuses. OP `/civ reconcile NAME`
+  is the FIRST step; no automatic duplicate villager spawning.
+- [x] Targeted single-resident recovery accepts fewer than ten
+  safe spots, while the original autonomous ten-worker batch still
+  requires all ten spots before any native spawn reservation.
+- [x] Eight Rust domain regressions and twelve Python static
+  source contracts authored; 22/22 source checks PASS.
+- [ ] Not executed: cargo test/rustfmt/Clippy, Python unittest
+  discovery, native Horizon compilation or actual Minecraft
+  recovery in a disposable world. This does not claim playability.
+- [x] A resident who dies after reservation retains a valid one-shot pending tombstone after restart; dead residents still cannot be recovered. This prevents a legitimate lifecycle change from invalidating the entire world save.
+- [ ] The recovery checks currently loaded native chunks; an
+  external actor could have wandered outside the tracked 96-block
+  area. Hence **OP confirmation** is required: no automatic
+  respawn after uncertain crash. No unbounded reset command exists.
+
+Acceptance: TEST_PLAN **272–283**.
+
+---
+
 # 2026-11-08 — compiler-first local diagnostics (updated PR #33)
 
 - [x] Release gate now runs real `cargo test` first, then Clippy,

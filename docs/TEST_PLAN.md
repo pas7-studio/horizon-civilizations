@@ -900,3 +900,202 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
 271. With all real source stages passing, the previous strict native
      client executable, SHA-256 and manual game-world gates still apply.
      This ordering improvement is not native compilation evidence.
+
+## Partial village spawn, UUID ownership and guarded recovery (unreleased)
+
+272. Use the current stacked branch with real local `cargo test`,
+     full Python unittest, native Horizon build and a fresh
+     disposable world. Record commit SHA, binary hash and logs.
+273. Create a village on natural loaded ground. Confirm all ten
+     initial NPCs receive distinct saved UUIDs. Stop/restart;
+     no duplicate batch. `/civ roster NAME` displays resident IDs.
+274. Simulate native refusal halfway through the first ten actor
+     spawns. `actors_spawned` remains reserved, with only successfully
+     UUID-linked residents saved; no automatic duplicate respawn.
+275. OP: `/civ reconcile NAME` before any recovery. If an original
+     tagged or legacy villager still exists, bind it once by UUID.
+     The existing NPC should remain intact and no new entity spawn.
+276. On an actually missing resident, use `/civ roster NAME` to
+     identify its numeric ID. Ensure the 96-block native neighborhood
+     is fully loaded and no matching entity exists. Run
+     `/civ recoveractor NAME RESIDENT_ID attempt` within 32 blocks
+     of the center, as OP level 2, in the correct dimension.
+277. The recovery command first persists `actor_recovery_issued`,
+     then issues a SINGLE native villager spawn at a genuinely clear
+     natural ground position, reads the real UUID, persists binding
+     and removes pending marker. Verify no other resident changes.
+278. Crash AFTER reservation but BEFORE native spawn. Reload
+     and verify a repeated recovery call is refused, no native
+     duplicate appears and original linked NPCs still work.
+279. Crash AFTER entity creation but BEFORE UUID save.
+     Do NOT respawn. Load the same chunk, run OP reconcile;
+     the unique original named villager binds to its real UUID
+     and clears the pending marker without creating another NPC.
+280. Block chunks in the 96-block scan, wrong dimension,
+     non-OP player, >32-block operator distance, missing
+     'attempt' confirmation or occupied site. Each refusal must
+     occur BEFORE saving recovery reservation or native spawning.
+281. Attempt recovery on already linked, dead, unknown or
+     previously reserved resident ID. No second native entity is
+     created. A saved invalid pending ID must fail world validation.
+282. Confirm ordinary village autonomy still starts with ten safe
+     surveyed positions, and 1–9 safe positions never starts a
+     new full batch. Single-target recovery can use one safe
+     unoccupied natural spot after explicit OP confirmation.
+     Re-run NPC builder, farm, warehouse and restarts. No game
+     readiness claim from source-contract checks alone.
+283. After reserving recovery, mark the resident dead before restart. The saved one-shot attempt must remain loadable and in the audit; the dead resident cannot be newly spawned or reserved again. The entire village must not fail validation.
+
+
+## Shared surveyed initial native spawning (unreleased PR #34)
+
+284. In a disposable world, obstruct the ten initial natural spawn spots
+     or unload surrounding chunks. Check that automatic initialization and
+     OP `/civ actors NAME` create **zero** entities and do **not** reserve
+     `actors_spawned`. Restore terrain/chunks and retry the pre-spawn survey.
+285. Place a living mob on an otherwise safe candidate position. Both
+     startup paths must skip occupied positions and only reserve/spawn if
+     ten other safe, loaded, natural-ground spots exist.
+286. Before first reservation, mark one of the first ten residents dead,
+     give one a UUID, or insert an already-loaded villager with its exact
+     tag or legacy name. The shared preflight must fail, with no reservation
+     and no duplicate or dead-resident spawn.
+287. On terrain with varying Y height, execute explicit OP
+     `/civ actors NAME`. All ten entities must appear at surveyed
+     positions, not the old hard-coded central Y. Verify ten unique UUIDs,
+     save/reload, and no repeated batch. Native tests and in-game evidence
+     are required; source assertions do not prove gameplay.
+
+288. On the current PR #34 branch, run
+     `py -3 tools/first_play_gate.py --dry-run --build-client` and then
+     the real non-dry-run command. It must identify the current branch
+     rather than the superseded PR #33 branch. With `--expected-sha`,
+     only the exact chosen head may produce a passing build report.
+
+
+## Crash-safe spawn spacing, save consistency, first error reporting (unreleased PR #34)
+
+289. On loaded flat natural terrain, the first preflight finds ten
+     non-overlapping positions at least three blocks apart. Confirm
+     native UUID-bound villagers do not collide with one another,
+     previously loaded mobs or blocked ground. Reload without duplicates.
+290. Force a save error during OP `/civ reconcile NAME` after UUID
+     binding in memory. Verify the dispatcher does not silently retry
+     the failed save or replace in-memory reservations with a stale
+     snapshot. The world must halt until the operator repairs storage.
+291. Fault-inject an error after a previously successful durable
+     command save. The dispatcher must never restore an older clone
+     over the committed `world.json`; it instead halts for inspection.
+     Never use valuable saves when testing fault injection.
+292. In the first-play CLI mock, make the Rust test stage emit
+     `error[E0425]: unknown value in native actor code` and exit 101.
+     `report.json`, `report.md` and console must surface that first
+     diagnostic and preserve `BLOCKED`. The complete stage log remains
+     available. Repeat using real Rust error logs when the actual
+     Windows build is run.
+
+
+## Aborted first save / temporary recovery artifacts (unreleased PR #34)
+
+293. On a disposable world, create only `world.json.tmp` containing
+     incomplete settlement JSON. With no `world.json` primary, starting
+     Horizon Civilizations must **NOT** initialize an empty world. It must
+     show an interrupted-save error and leave the temp bytes untouched.
+294. Leave a valid `world.json` alongside stale `world.json.tmp`.
+     The loader must refuse to proceed until the operator archives and
+     inspects both files; it must not select one silently.
+295. With stale `world.json.tmp`, attempt an ordinary world save.
+     The write must fail BEFORE opening/truncating the temp file; compare
+     exact original bytes. Existing `world.json.swap` protection must remain.
+296. Close/reopen after a fully successful save: neither temp nor swap
+     file should remain, and the identical settlement/UUID bindings should
+     reload. Record Rust and real Minecraft evidence before release.
+
+
+## Native Rust suite inventory and zero-match protection (unreleased PR #34)
+
+297. Run pinned `tools/native_build.py --test` with real Rust and the
+     exact Horizon revision. Both `civilizations_core::` and
+     `civilizations_glue::` must enumerate at least one Rust test and
+     pass their actual filtered executions; evidence must show counts.
+298. Simulate a Cargo `--list` success returning `0 tests, 0 benchmarks`
+     for `civilizations_glue::`. It must block native readiness **before**
+     running that empty suite; an exit code of zero alone is insufficient.
+299. Simulate failure of the Cargo test inventory command and ensure
+     that no filtered tests are launched afterward. Preserve the
+     first-failure log in the first-play report.
+300. Simulate native-build exit zero with a valid-looking client binary
+     but missing `civilizations_glue::` evidence, or evidence with a zero
+     discovered count. Both must produce `BLOCKED`, not
+     `READY_FOR_GAMEPLAY_E2E`. Only a real native successful run can
+     certify the build gate, not these mocks.
+
+
+## Windows launcher sequencing and read-only NPC recovery evidence (unreleased PR #34)
+
+301. On Windows PowerShell with the official GUI Horizon Launcher, verify
+     that `import-build` finishes and provides an exit code before
+     `prepare` runs. No unpiped GUI invocation may be treated as success.
+302. Force `import-build` to exit nonzero; `prepare` and `play` must not
+     run. Force `prepare` to exit nonzero; `play` must not run.
+     Capture the exit status without running a valuable Minecraft world.
+303. In read-only `playtest_evidence.py`, leave `world.json.tmp`
+     alongside an otherwise valid save, and then as the ONLY remaining
+     first-save artifact. Both must yield FAIL without editing either file.
+304. Supply a valid, UUID-unbound `actor_recovery_issued` entry for a live
+     resident. The saved-state audit reports pending recovery as a
+     warning and requires reconciliation before any further spawn.
+     A marker for a UUID-bound or nonexistent resident is a hard FAIL.
+305. A dead, unbound resident with a pending one-shot recovery tombstone
+     must remain loadable and must NOT be treated as a new NPC to respawn.
+     The audit reports the unresolved marker, not false corruption.
+306. Confirm that the current PLAYTEST guide selects the same Draft PR #34
+     source as `first_play_gate.py`. Do not reuse a passing old binary;
+     native build and in-game E2E evidence remain mandatory.
+
+
+## Autonomous NPC village founding and player discovery (PR #34 / v0.1.15)
+
+307. In a clean disposable Overworld with no existing civilizations, stand
+     on an active loaded plain for at least 2,400 authoritative ticks.
+     The source should select only a natural, 5x5 clear site about 88–91
+     blocks from a genuine nearby player. Confirm saved settlement founder
+     is `civilizations:npc`, not that player's UUID. No player title or
+     coin balance is created by the founding itself.
+308. With only trees/cliffs/foreign blocks or unloaded chunks at candidate
+     sites, no new civilization is persisted and no block/mob mutation
+     occurs. Restore load/terrain and wait for the next bounded survey.
+309. Ensure at least ten natural, clear, mutually separated native NPC spawn
+     positions before settlement creation. A seemingly clear 5x5 town hall
+     area with obstructed surrounding positions must NOT create a town.
+310. In a disposable world with one existing manual or autonomous village,
+     stay within 192 blocks of its center for multiple founding periods:
+     no second village appears just from staying there. On traveling
+     farther away, verify new towns respect minimum 192-block separation.
+311. Inspect an automatically founded community before joining:
+     ten residents, default autonomy ON, hall UNBUILT, physical storage
+     empty, no human Lord. `/civ join NAME` grants normal Citizen status;
+     OP `/civ found NAME` still grants the previous founder title.
+312. Observe autonomous NPC spawn, physical hall funding, worker gathering,
+     construction and farming through normal code paths (not a special
+     free-material path). Restart midway, then verify no duplicate town,
+     NPC UUID, hall or warehouse resources.
+313. Try in the Nether/End and on a dedicated server without active
+     players. No natural founding occurs. Verify host singleplayer and
+     genuine LAN/dedicated guests are both independently supported.
+314. Travel widely; no more than eight NPC-founded villages can exist.
+     Manual OP founding still works until the overall 64-settlement cap.
+315. Use `/civ nearby` in each dimension. Verify nearest-four ordering,
+     nonnegative distance, coordinates and correct hall status. A
+     settlement in another dimension must never appear in this list.
+     An empty result must explain how to explore.
+316. Leave `/civ nearby` running repeatedly: no player inventory, JSON
+     save, chunk loads, native commands or settlement state may change.
+     Compare before/after `world.json` and Minecraft block snapshots.
+317. Revisit identical terrain after a completed first founding, exit/restart
+     and wait additional founding periods: the original center remains
+     unique, ID monotonic, history no double-found event; full citizen
+     roster retains stable IDs across reload.
+318. On partial native spawn or a storage/persistence error, stop native
+     mutations according to the existing recovery gate. Auto-founding must
+     never bypass a blocked world or reissue one-shot NPC creation.

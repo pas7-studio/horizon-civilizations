@@ -556,3 +556,188 @@
   plus simulated format-only failure that still blocks full PASS.
 - Exact GitHub Python files matched the locally executed source by
   length and weighted checksum. No Rust build or Minecraft E2E run.
+
+## 2026-11-08 — recover a missing citizen without duplicate village spawning
+
+- Audited `auto_spawn_villagers`: it reserves `actors_spawned=true`
+  before creating any NPC, correctly blocking a duplicate whole batch
+  after restart, but partial native spawn leaves some worker IDs
+  permanently unbound with no targeted recovery.
+- Added serde-default `Settlement.actor_recovery_issued`, per-worker
+  durable one-shot recovery reservation. `reserve_actor_recovery`
+  requires original initial batch already reserved, matching living
+  unbound resident, and rejects repeated attempts.
+- `World::bind_actor` clears exactly the newly UUID-bound resident's
+  pending recovery marker, retaining previously recorded UUIDs for
+  every other villager.
+- Added operator-only `recoveractor NAME ID attempt` with explicit
+  confirmation, near-hall/dimension restriction, 96-block loaded
+  region preflight, duplicate name protection, free surveyed spawn
+  point and **save BEFORE native entity creation**. Ambiguous
+  UUID/save failure halts world mutations rather than replaying spawn.
+- Updated roster with resident ID + UUID/unbound/recovery state.
+  Existing `reconcile` may rebind a unique visible original
+  villager without additional spawn; automatic native spawn still
+  performs its original strict ten-safe-point preflight.
+- A pending spawn attempt remains a valid saved tombstone even if the resident later dies; this never permits spawning a dead NPC.
+- Added 8 Rust regression tests + 12 Python static tests; manual
+  E2E 272–283. Connector-side 22/22 source checks PASS.
+  Cargo, native Horizon build and game E2E still not executed.
+
+
+## 2026-11-08 — unify safe initial NPC spawn for OP and autonomy (PR #34)
+
+- Discovered that the explicit OP `/civ actors` command still used ten
+  fixed positions and central Y, bypassing the terrain survey used by
+  autonomous spawning. This could create villagers inside blocks or near
+  existing native mobs, despite a successful one-shot spawn reservation.
+- Added shared `surveyed_initial_actor_positions` for both paths.
+  Rejects dead/already UUID-linked initial residents, fewer than ten
+  residents, matching preexisting loaded tagged/legacy villagers and fewer
+  than ten unoccupied, loaded, natural-ground positions.
+- Extended `safe_actor_spawn_points` to reject live-mob-occupied locations.
+  Both paths finish preflight before durable `actors_spawned` reservation.
+  Manual spawning now uses surveyed positions, not center-based offsets.
+- Updated existing Python source contracts (16 authored); checked 17
+  exact-source safety assertions against GitHub PR #34, all PASS.
+- Evidence limit: **no** Rust compile, Python unittest execution,
+  native Horizon client build or Minecraft E2E in this environment.
+- Keep stacked PR Draft and main untouched; do not enable Actions or merge
+  before real Windows build evidence and disposable-world test.
+
+- Follow-up: corrected `tools/first_play_gate.py` default expected
+  branch to the actual PR #34 checkout and aligned the Python test
+  fixture. The user can now invoke `--build-client` on the correct
+  branch without an explicit `--expected-branch` override. Runtime
+  gate tests and actual native compilation remain unexecuted here.
+
+
+## 2026-11-08 — post-save rollback safety, pairwise spawn clearance, build diagnostics
+
+- Confirmed the mutating command handler could restore its pre-command
+  clone after a subsequent `Err` despite an earlier successful durable
+  save. After `already_saved`, errors now fail closed with
+  `state.problem` rather than overwriting in-memory committed state.
+- In `/civ reconcile`, save failure after an in-memory UUID binding
+  sets the already-saved guard so the outer handler cannot attempt an
+  unexpected second save. Manual disk review and restart are required.
+- The ten-position native spawn survey now checks separation between
+  positions already chosen during the batch survey, not only against
+  existing mobs. Independent in-memory flat-ground survey produced
+  ten candidates at squared distances >=9 (actual min 16).
+- `tools/first_play_gate.py` now streams failed stage logs to extract
+  their first actionable Rust/compiler/Python diagnostic into the
+  structured report and console, keeping a bounded summary. Added
+  Python mock stage for a compiler `error[E0425]` on POSIX/Windows.
+- Added three guarded actor source contracts and one build-gate harness
+  case; source total now 19 actor recovery, 14 build gate tests authored.
+- Independently executed seven regex pattern probes and a ten-position
+  flat-ground spacing simulation via local Python (both PASS). Those
+  probes are **not** a cargo test, full Python unittest, native client
+  build or Minecraft gameplay E2E.
+- PR #34 remains Draft, main unchanged, Actions OFF. Acceptance 289–292.
+
+
+## 2026-11-08 — guard orphaned `world.json.tmp` from interrupted first write
+
+- Compared the pinned Horizon native mob creation and entity UUID APIs.
+  `spawn_mob` inserts into `self.mobs` synchronously;
+  `native_entity` and `native_entity_uuid` can immediately inspect the
+  spawned actor. The suspected deferred-identity issue was **not** confirmed;
+  no unnecessary changes to native spawn identity were made.
+- Found the actual saved-world gap: `load` already rejected
+  `world.json.swap`, but treated missing primary + residual
+  `world.json.tmp` as a fresh empty world. Also, `save` would
+  truncate an existing temp file on its next attempt.
+- Fail-closed load now detects both temporary and swap artifacts before
+  opening the primary or creating any default world. Save rejects either
+  stale artifact BEFORE `fs::File::create(&temp)`; original bytes remain.
+- Added three Rust filesystem regression cases (authored in native glue)
+  and three Python source-contract cases. Acceptance tests 293–296.
+- Verification limitation: no local Rust/cargo toolchain or direct
+  GitHub DNS in the container. Exact-source checks run via GitHub;
+  full Python unittest, Rust and Minecraft E2E **not executed**.
+- Keep PR #34 Draft, no main merge or Actions changes.
+
+
+## 2026-11-08 — reject silently skipped native Rust tests
+
+- The native script previously used only the `civilizations_core::` Cargo
+  filter, so tests added to `civilizations_glue::` would never execute.
+- Added `run_filtered_native_tests`: enumerate tests with Cargo `--list`,
+  require a nonzero inventory, then run the exact filter. Both core and
+  glue suites are now mandatory and their results enter `native_mod_tests`.
+- The first-play gate verifies two unique suite entries, successful
+  status and integer `discovered >= 1` before accepting native client
+  evidence. A fake executable alone is no longer sufficient.
+- Added three standalone Python mock-Cargo enumeration tests and two
+  first-play gate false-positive cases, and updated native CLI contracts.
+- Verified upstream pinned `horizon-client/src/lib.rs` exposes a
+  library target compatible with `cargo test --lib`.
+- TEST_PLAN 297–300; no real Rust, native client or gameplay E2E run.
+
+
+## 2026-11-08 — Windows GUI launcher wait and real saved-state diagnostics
+
+- Compared the exact pinned Horizon launcher CLI and README. Its
+  `import-build`, `prepare` and `play` commands are supported, but
+  the launcher is a Windows GUI-subsystem executable. A bare PowerShell
+  `& horizon-launcher` call may return before the process ends, leaving
+  `$LASTEXITCODE` unset/stale. This could start preparation/play before
+  import completed or miss a failure.
+- Changed `scripts/start-windows-playtest.ps1` to pipe launcher output
+  to `Out-Host`, forcing a wait while preserving argument boundaries,
+  resetting the stale exit code first and requiring an actual zero exit
+  status before the next stage. Added Windows launcher source regression.
+- Extended `tools/playtest_evidence.py` to fail when orphaned
+  `world.json.tmp` exists, matching the real native save guard.
+- Inspected the core's custom `entity_uuid_hex` Serde adapter: saved
+  actor UUIDs are canonical 32-character hex strings. The existing
+  read-only UUID parser is correct and was not changed.
+- Added one-shot `actor_recovery_issued` journal validation and
+  `pending_actor_recoveries` counts to saved-state diagnostics.
+  Pending legitimate markers yield warnings; duplicate, unknown or
+  already UUID-bound markers fail; dead unbound tombstones remain valid.
+- Expanded Python evidence tests for interrupted temp writes and
+  pending/invalid/dead NPC recovery markers. Updated PLAYTEST's current
+  branch and acceptance cases 301–306.
+- These are **source changes only**. There is no working Rust toolchain,
+  direct GitHub DNS or Windows PowerShell in the current runner; real
+  Rust/Python full suite, Windows launcher and gameplay E2E not executed.
+  PR Draft, main untouched, Actions not enabled.
+
+
+## 2026-11-08 — autonomous NPC-founded frontier settlements (PR #34)
+
+- Chose the largest missing first-play game loop: source had autonomous
+  builders, farms, bakery, NPCs and physical goods, but **no natural
+  settlement founding**; an OP needed to type `/civ found`.
+- Refactored core World::found into a common founding path plus
+  `World::found_autonomous`. All initial residents/starting abstract stock,
+  native building invariants and 192-block spacing are shared. Only
+  player-founded towns grant a Lord title and +25 civic coins to a real
+  authenticated founder; NPC towns have an independent founder marker and
+  NO synthetic player record, title or payout. Cap NPC-founded towns at 8;
+  manual operator founding retains the overall 64-town rules.
+- Added bounded `autonomous_frontier_found` to authoritative loaded
+  Overworld level ticks every 2,400 ticks. It observes integrated single-
+  player host plus joined server guests; requires finite/bounded player
+  coordinates and skips explorers within 192 blocks of a known town.
+  Eight deterministic ~88–91 block offsets are scanned using only loaded
+  natural 5x5 areas with no non-air obstacles (no clearing or worldgen).
+- Critically, the trial settlement must also pass the EXACT shared
+  10-villager spawn-survey and unique-clear-position preflight BEFORE its
+  first durable save, preventing stranded paper settlements. After save,
+  existing autonomous logic owns real NPC spawning and physical work.
+- Added player-facing, read-only `/civ nearby` command: sorted by horizontal
+  distance in current dimension, bounded top four, coordinates/directions,
+  hall status and joining hint. Existing commands still available.
+- Added six Rust domain tests and eleven Python source contracts; checked
+  26/26 targeted exact-source invariants, but there is NO Rust compiler or
+  native Horizon client available in this execution environment.
+- New PLAYTEST and acceptance 307–318. No new physical resource mint,
+  external inventory effect or automatic chunk loading at founding.
+- Remaining: real native Rust/Horizon build, single-player/dedicated tests,
+  terrain generation and NPC navigation E2E, actual resource work,
+  gameplay usability and server performance. PR remains Draft, no main
+  merge/Actions enablement.

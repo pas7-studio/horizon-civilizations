@@ -35,9 +35,17 @@ static ACTIVE: Mutex<Option<ActiveWorld>> = Mutex::new(None);
 
 fn load(path: PathBuf) -> ActiveWorld {
     let file = path.join(SAVE);
-    if path.join("world.json.swap").exists() {
-        let message = "interrupted save detected (world.json.swap). Back up the folder, then restore the correct primary world.json manually".to_owned();
-        return ActiveWorld { path, world: None, problem: Some(message), physical_ticks: 0 };
+    // Either artifact signals an interrupted transaction. In particular,
+    // world.json.tmp may be the ONLY persisted bytes of a new settlement
+    // when the very first world save was interrupted before rename. Never
+    // mistake that for an empty world and overwrite the recovery evidence.
+    for remnant in ["world.json.swap", "world.json.tmp"] {
+        if path.join(remnant).exists() {
+            let message = format!(
+                "interrupted save detected ({remnant}). Back up the world folder and inspect primary/backup/temporary save files before restarting"
+            );
+            return ActiveWorld { path, world: None, problem: Some(message), physical_ticks: 0 };
+        }
     }
     let result = match fs::read_to_string(&file) {
         Ok(text) => serde_json::from_str::<World>(&text)
@@ -98,10 +106,10 @@ fn save(active: &ActiveWorld) -> Result<(), String> {
     // A stale swap marks an interrupted save. Refuse it before touching
     // either the previous backup or the next temporary file.
     let swap = active.path.join("world.json.swap");
-    if swap.exists() {
-        return Err("pending world.json.swap from interrupted save; inspect and recover before continuing".into());
-    }
     let temp = active.path.join("world.json.tmp");
+    if swap.exists() || temp.exists() {
+        return Err("pending world.json.swap or world.json.tmp from interrupted save; inspect and recover before continuing".into());
+    }
     let mut file = fs::File::create(&temp).map_err(|e| e.to_string())?;
     file.write_all(&output).map_err(|e| e.to_string())?;
     file.sync_all().map_err(|e| e.to_string())?;
@@ -150,7 +158,7 @@ pub fn closed() {
 
 pub fn register(commands: &mut Vec<NativeCommand>) {
     for usage in [
-        "civ", "civ help", "civ list", "civ info", "civ info <name:word>",
+        "civ", "civ help", "civ list", "civ nearby", "civ info", "civ info <name:word>",
         "civ roster <name:word>", "civ schedule <name:word>",
         "civ homes <name:word>", "civ survey <name:word>",
         "civ council <name:word>", "civ forecast <name:word>",
@@ -167,6 +175,7 @@ pub fn register(commands: &mut Vec<NativeCommand>) {
     for usage in [
         "civ found <name:word>", "civ actors <name:word>",
         "civ reconcile <name:word>",
+        "civ recoveractor <name:word> <resident:integer> <confirm:word>",
         "civ day [days:integer]", "civ construct <name:word>",
         "civ approvehouse <name:word> <slot:integer> <y:integer>",
         "civ autonomy <name:word> <mode:word>",
@@ -980,7 +989,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
     let actor = format!("{:032x}", player.uuid);
     let action = args.next().unwrap_or("help");
     if action == "help" {
-        reply(game, "Civilizations: /civ list | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | hall <name> | warehouse <name> | diagnose <name> | buyplot <name> | buyhouse <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, barrelcheck <name>, resolvebarrel <name> confirm|cancel <observed_count>, gathercheck <name>, discardgather <name> intact|empty, day [days], construct <name>, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
+        reply(game, "Civilizations: /civ list | nearby | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | hall <name> | warehouse <name> | diagnose <name> | buyplot <name> | buyhouse <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, recoveractor <name> <resident-id> attempt, barrelcheck <name>, resolvebarrel <name> confirm|cancel <observed_count>, gathercheck <name>, discardgather <name> intact|empty, day [days], construct <name>, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
         return;
     }
     if action == "list" {
@@ -988,7 +997,45 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
         for s in world.settlements.values().take(12) {
             items.push(format!("#{} {} [{}] pop={} houses={}", s.id, s.name, s.culture, s.population(), s.houses));
         }
-        reply(game, if items.is_empty() { "No settlements yet. OP: /civ found Ashford".into() } else { items.join(" | ") });
+        reply(game, if items.is_empty() { "No settlements yet. Explore loaded natural Overworld terrain; independent NPC pioneers will found new towns. OP /civ found NAME is optional.".into() } else { items.join(" | ") });
+        return;
+    }
+    if action == "nearby" {
+        // All information is derived from existing authoritative world.json.
+        // No chunk loads, scans, inventory access, markers, or transactions.
+        if !player.position.iter().all(|value| value.is_finite()) {
+            error(game, "unable to determine a finite player position");
+            return;
+        }
+        let mut villages: Vec<(f64, u64, String)> = world.settlements.values()
+            .filter(|v| v.dimension == player.dimension)
+            .map(|v| {
+                let dx = f64::from(v.center[0]) - player.position[0];
+                let dz = f64::from(v.center[2]) - player.position[2];
+                let distance = dx.hypot(dz);
+                let direction = format!(
+                    "{}{}", if dz < 0.0 { "N" } else { "S" },
+                    if dx < 0.0 { "W" } else { "E" }
+                );
+                let stage = if v.hall_complete { "hall built" }
+                    else if v.hall_job.is_some() { "hall building" }
+                    else { "starting" };
+                (distance, v.id, format!(
+                    "{} ({:.0}m {}, X{} Z{}, {})",
+                    v.name, distance, direction, v.center[0], v.center[2], stage
+                ))
+            }).collect();
+        villages.sort_by(|a, b| a.0.total_cmp(&b.0).then(a.1.cmp(&b.1)));
+        let shown: Vec<_> = villages.iter().take(4)
+            .map(|(_, _, description)| description.as_str()).collect();
+        reply(game, if shown.is_empty() {
+            "No known settlements in this dimension. Explore natural land; NPC communities can found on loaded, clear Overworld terrain.".to_owned()
+        } else {
+            format!(
+                "Nearest settlements ({} known): {}. Visit a village or talk to a resident; /civ join NAME to become a citizen.",
+                villages.len(), shown.join(" | ")
+            )
+        });
         return;
     }
     if action == "hall" || action == "warehouse" {
@@ -1483,8 +1530,15 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
         let name = args.next().unwrap_or("");
         let Some(s) = world.by_name(name) else { error(game, "unknown settlement: /civ roster <name>"); return; };
         let linked = loaded_actors(game, world, s.id);
-        let listing: Vec<_> = s.residents.iter().map(|r| format!("{}:{}", r.name, r.job.name())).collect();
-        reply(game, format!("{} actors: {}/{} nearby and loaded | {}", s.name, linked.len(), s.population(), listing.join(", ")));
+        let listing: Vec<_> = s.residents.iter().map(|r| format!(
+            "{}#{}:{} [{}]", r.name, r.id, r.job.name(),
+            if s.actor_recovery_issued.contains(&r.id) { "RECOVERY PENDING" }
+            else if r.entity_uuid.is_some() { "UUID saved" } else { "UNBOUND" }
+        )).collect();
+        reply(game, format!(
+            "{} actors: {}/{} nearby and loaded | {}. OP partial spawn: /civ reconcile {}, then /civ recoveractor {} <resident-id> attempt ONLY after native inspection.",
+            s.name, linked.len(), s.population(), listing.join(", "), s.name, s.name
+        ));
         return;
     }
     if action == "harvests" {
@@ -1958,6 +2012,11 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
                     continue;
                 }
                 if let Err(e) = save(state) {
+                    // A native UUID has already been bound in memory. Do not
+                    // let the outer command handler retry this failed save,
+                    // or restore an older clone over a partially committed
+                    // world.json. Stop writes until disk recovery.
+                    already_saved = true;
                     state.problem = Some(format!("actor identity save halted: {e}"));
                     return Ok(format!("Reconciled {linked} actors before save failure; world halted. Restore backup and restart. {e}"));
                 }
@@ -1965,6 +2024,96 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
                 linked += 1;
             }
             Ok(format!("Reconciled {linked} legacy actors; {ambiguous} ambiguous/conflicting skipped. /civ roster {name}. Missing actors are not spawned automatically."))
+        })(),
+        "recoveractor" if player.permission >= 2 => (|| {
+            let name = args.next().ok_or("usage: /civ recoveractor <name> <resident-id> attempt")?;
+            let resident_id = args.next().ok_or("resident ID required; /civ roster <name>")?
+                .parse::<u64>().map_err(|_| "invalid resident ID")?;
+            if args.next() != Some("attempt") || args.next().is_some() {
+                return Err("explicit OP confirmation required: /civ recoveractor <name> <resident-id> attempt".into());
+            }
+            let village = previous.by_name(name).ok_or("unknown settlement")?;
+            if !village.actors_spawned {
+                return Err("initial actor batch has not yet been reserved".into());
+            }
+            if village.dimension != player.dimension {
+                return Err("go to this settlement dimension first".into());
+            }
+            let dx = i64::from(village.center[0]) - player.position[0].floor() as i64;
+            let dz = i64::from(village.center[2]) - player.position[2].floor() as i64;
+            if dx * dx + dz * dz > 32 * 32 {
+                return Err("stand within 32 blocks of the settlement center".into());
+            }
+            let resident = village.residents.iter()
+                .find(|r| r.id == resident_id && r.alive && r.entity_uuid.is_none())
+                .ok_or("resident missing, dead or already UUID-linked; inspect /civ roster")?;
+            if village.actor_recovery_issued.contains(&resident_id) {
+                return Err("a recovery spawn was already issued for this resident; inspect and reconcile before any further action".into());
+            }
+            // All native chunks inside the normal 96-block identity
+            // neighborhood must be loaded. An unseen older actor in an
+            // unloaded chunk would make even an OP recovery duplicate it.
+            // This is intentionally strict; return when chunks are loaded.
+            for ox in (-96_i32..=96).step_by(16) {
+                for oz in (-96_i32..=96).step_by(16) {
+                    let x = village.center[0].checked_add(ox)
+                        .ok_or("spawn recovery scan outside world bounds")?;
+                    let z = village.center[2].checked_add(oz)
+                        .ok_or("spawn recovery scan outside world bounds")?;
+                    if !game.world.loaded(x, z) {
+                        return Err("native villager recovery needs all chunks in 96-block scan loaded; no spawn was reserved".into());
+                    }
+                }
+            }
+            let exact_name = village.actor_name(resident);
+            let legacy_name = format!("{} [{}]", resident.name, village.name);
+            // Never spawn while a tagged old entity is visible in the
+            // current loaded native dimension, even if its UUID was lost.
+            if game.mobs.iter().any(|mob|
+                mob.alive() && mob.kind.id == "minecraft:villager"
+                    && (mob.custom_name.as_deref() == Some(exact_name.as_str())
+                        || mob.custom_name.as_deref() == Some(legacy_name.as_str()))) {
+                return Err("matching native actor is already loaded: use /civ reconcile, do not spawn a duplicate".into());
+            }
+            // Recover only at surveyed natural ground with two blocks
+            // of air, never on occupied NPC coordinates.
+            let position = safe_actor_spawn_points(game, village).into_iter()
+                .find(|point| !game.mobs.iter().any(|mob| {
+                    let dx = mob.position.x - point[0];
+                    let dy = mob.position.y - point[1];
+                    let dz = mob.position.z - point[2];
+                    mob.alive() && dx * dx + dy * dy + dz * dz < 9.0
+                })).ok_or("no safe unoccupied loaded actor spawn point")?;
+            // Durable at-most-once reservation BEFORE native side effects.
+            state.world.as_mut().unwrap().reserve_actor_recovery(village.id, resident_id)?;
+            save(state)?;
+            already_saved = true;
+            let options = NativeSpawn {
+                name: Some(exact_name), ..NativeSpawn::default()
+            };
+            let Some(entity_id) = game.native_spawn_mob(
+                &village.dimension, "minecraft:villager", position, &options
+            ) else {
+                return Ok(format!(
+                    "One recovery attempt was reserved for #{resident_id} but native spawn was refused. Do NOT retry blindly. OP: /civ roster {name} then /civ reconcile {name}."
+                ));
+            };
+            let link = game.native_entity(entity_id)
+                .and_then(|handle| game.native_entity_uuid(handle))
+                .ok_or_else(|| "spawned entity UUID is unavailable".to_owned())
+                .and_then(|uuid| state.world.as_mut().unwrap()
+                    .bind_actor(village.id, resident_id, uuid).map(|_| ()))
+                .and_then(|_| save(state));
+            if let Err(e) = link {
+                state.problem = Some(format!("native actor recovery identity halted: {e}"));
+                log::error!("[civilizations] recovered actor without durable UUID identity: {e}");
+                return Ok(format!(
+                    "Recovery may have spawned resident #{resident_id}, but UUID persistence FAILED: {e}. World actions halted; inspect saved journal and native actor. Do NOT respawn."
+                ));
+            }
+            Ok(format!(
+                "Recovered one UUID-linked villager #{resident_id} in {name}. Other residents unchanged. /civ roster {name}."
+            ))
         })(),
         "actors" if player.permission >= 2 => (|| {
             let name = args.next().ok_or("usage: /civ actors <name>")?;
@@ -1976,6 +2125,10 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             let dx = i64::from(s.center[0]) - player.position[0].floor() as i64;
             let dz = i64::from(s.center[2]) - player.position[2].floor() as i64;
             if dx * dx + dz * dz > 32 * 32 { return Err("stand within 32 blocks of the settlement center".into()); }
+            // Manual spawning must use the SAME live preflight as automatic
+            // spawning. Never reserve ten actors on obstructed/unloaded
+            // ground, beside occupied mobs, or over tagged survivors.
+            let positions = surveyed_initial_actor_positions(game, s)?;
             // Persist one-shot reservation before the first spawn. A crash
             // cannot accidentally retrigger a full batch on next login.
             state.world.as_mut().unwrap().settlements.get_mut(&s.id).unwrap().actors_spawned = true;
@@ -1983,16 +2136,13 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             already_saved = true;
             let mut spawned = 0usize;
             let mut halted = false;
-            for (i, resident) in s.residents.iter().take(10).enumerate() {
-                let x = f64::from(s.center[0]) + (i as f64 % 5.0) * 2.0 - 4.0 + 0.5;
-                let z = f64::from(s.center[2]) + (i / 5) as f64 * 2.0 - 1.0 + 0.5;
+            for (resident, position) in s.residents.iter().take(10).zip(positions) {
                 let opts = NativeSpawn {
                     name: Some(s.actor_name(resident)),
                     ..NativeSpawn::default()
                 };
                 let Some(entity_id) = game.native_spawn_mob(
-                    &s.dimension, "minecraft:villager",
-                    [x, f64::from(s.center[1]), z], &opts
+                    &s.dimension, "minecraft:villager", position, &opts
                 ) else {
                     break;
                 };
@@ -2017,7 +2167,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
                 Ok(format!("Spawned and UUID-linked {spawned} villagers. Reopen world and verify /civ roster {name}."))
             }
         })(),
-        "found" | "day" | "war" | "peace" | "actors" | "construct" | "approvehouse" | "autonomy" | "farm" | "recoverfarm" | "reconcile" | "barrelcheck" | "resolvebarrel" | "gathercheck" | "discardgather" => Err("requires server operator level 2".into()),
+        "found" | "day" | "war" | "peace" | "actors" | "recoveractor" | "construct" | "approvehouse" | "autonomy" | "farm" | "recoverfarm" | "reconcile" | "barrelcheck" | "resolvebarrel" | "gathercheck" | "discardgather" => Err("requires server operator level 2".into()),
         _ => Err("unknown subcommand. Use /civ help".into()),
     };
     match result {
@@ -2030,8 +2180,21 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             } else { reply(game, message); }
         }
         Err(message) => {
-            state.world = Some(previous);
-            error(game, message);
+            if already_saved {
+                // A previous step committed world.json. Rolling back only
+                // RAM would make subsequent saves silently erase the
+                // committed identity/transaction record. Fail closed.
+                log::error!("[civilizations] command failed after durable save: {message}");
+                state.problem = Some(format!(
+                    "command failed after durable save; inspect before restarting: {message}"
+                ));
+                error(game, format!(
+                    "Command stopped after a durable save; world halted for inspection: {message}"
+                ));
+            } else {
+                state.world = Some(previous);
+                error(game, message);
+            }
         }
     }
 }
@@ -2063,14 +2226,70 @@ fn safe_actor_spawn_points(
                         .is_some_and(|block| is_ground(&block))
                     && world_block(game, &village.dimension, [x, y, z]).as_deref() == Some("minecraft:air")
                     && world_block(game, &village.dimension, [x, head_y, z]).as_deref() == Some("minecraft:air") {
-                    spots.push([f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5]);
+                    let point = [f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5];
+                    // Terrain may be clear while a living native entity
+                    // occupies the position. Skip it for BOTH autonomous
+                    // and OP spawning, before reserving the batch.
+                    if game.mobs.iter().any(|mob| {
+                        let dx = mob.position.x - point[0];
+                        let dy = mob.position.y - point[1];
+                        let dz = mob.position.z - point[2];
+                        mob.alive() && dx * dx + dy * dy + dz * dz < 9.0
+                    }) {
+                        continue;
+                    }
+                    // The preflight is a batch survey: selected citizens
+                    // must also be separated from EACH OTHER, not only from
+                    // mobs currently present before the first spawn.
+                    // Keep the same 3-block clearance used for live mobs.
+                    if spots.iter().any(|other: &[f64; 3]| {
+                        let dx = other[0] - point[0];
+                        let dy = other[1] - point[1];
+                        let dz = other[2] - point[2];
+                        dx * dx + dy * dy + dz * dz < 9.0
+                    }) {
+                        continue;
+                    }
+                    spots.push(point);
                     break;
                 }
             }
             if spots.len() == 10 { return spots; }
         }
     }
-    Vec::new()
+    // Return every available safe spot even if there are fewer than ten.
+    // The INITIAL batch still requires exactly ten before it reserves
+    // anything. The explicit single-resident recovery needs just one.
+    spots
+}
+
+/// Refuse to reserve the first batch if a citizen is already dead/linked,
+/// a matching older native actor is visible, or fewer than ten genuinely
+/// clear natural-ground spawn positions can be surveyed in loaded chunks.
+/// This is shared by autonomous startup and the explicit OP /civ actors path.
+fn surveyed_initial_actor_positions(
+    game: &Game<'_>, village: &crate::game::civilizations_core::Settlement,
+) -> Result<Vec<[f64; 3]>, String> {
+    if village.residents.len() < 10 || village.residents.iter().take(10)
+            .any(|r| !r.alive || r.entity_uuid.is_some()) {
+        return Err("initial batch requires ten living, UUID-unbound residents".into());
+    }
+    if village.residents.iter().take(10).any(|resident| {
+        let tagged = village.actor_name(resident);
+        let legacy = format!("{} [{}]", resident.name, village.name);
+        game.mobs.iter().any(|mob| {
+            mob.alive() && mob.kind.id == "minecraft:villager"
+                && (mob.custom_name.as_deref() == Some(tagged.as_str())
+                    || mob.custom_name.as_deref() == Some(legacy.as_str()))
+        })
+    }) {
+        return Err("matching native villager already loaded: reconcile identity before initial spawn".into());
+    }
+    let positions = safe_actor_spawn_points(game, village);
+    if positions.len() != 10 {
+        return Err("need ten loaded, natural, clear and unoccupied positions before initial spawn".into());
+    }
+    Ok(positions)
 }
 
 /// Vanilla villagers are UUID-bound, once, after a persistent one-shot
@@ -2081,8 +2300,10 @@ fn auto_spawn_villagers(
     let village = state.world.as_ref().unwrap().settlements
         .get(&village_id).ok_or("unknown settlement")?.clone();
     if village.actors_spawned || !village.autonomy_enabled { return Ok(()); }
-    let positions = safe_actor_spawn_points(game, &village);
-    if positions.len() != 10 { return Ok(()); } // unloaded / obstructed: retry later
+    // An incomplete preflight never reserves the one-shot batch. Missing
+    // chunks or occupied plots are normal: retry only the PRE-spawn survey.
+    let Ok(positions) = surveyed_initial_actor_positions(game, &village)
+    else { return Ok(()); };
     let prior = state.world.as_ref().unwrap().clone();
     state.world.as_mut().unwrap().settlements
         .get_mut(&village_id).unwrap().actors_spawned = true;
@@ -2518,6 +2739,119 @@ fn baker_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), St
             save_autonomous(state, before)?;
         }
         return Ok(());
+    }
+    Ok(())
+}
+
+/// Natural frontier founding: players may DISCOVER an independent town
+/// without operator commands, but the game never creates one on an unloaded
+/// chunk or modifies the user's immediate base. A successful write only adds
+/// the social record; the existing one-shot guarded actor startup and
+/// resource-backed town hall perform native work on subsequent ticks.
+const FRONTIER_OFFSETS: [[i32; 2]; 8] = [
+    [88, 0], [-88, 0], [0, 88], [0, -88],
+    [64, 64], [-64, 64], [64, -64], [-64, -64],
+];
+const FRONTIER_NAMES: [&str; 8] = [
+    "Oakford", "Stonevale", "Birchmere", "Redmoor",
+    "Rivermark", "Pinewatch", "Ashfield", "Dawnhold",
+];
+
+fn autonomous_frontier_found(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), String> {
+    let dimension = game.dim.id();
+    if dimension != "minecraft:overworld" { return Ok(()); }
+    let Some(world) = state.world.as_ref() else { return Ok(()); };
+    if world.settlements.len() >= crate::game::civilizations_core::MAX_SETTLEMENTS
+        || world.settlements.values().filter(|s|
+            s.founder == crate::game::civilizations_core::NPC_FOUNDER).count()
+            >= crate::game::civilizations_core::MAX_NPC_SETTLEMENTS {
+        return Ok(());
+    }
+
+    // Observe only real authoritative players in the currently ticked
+    // dimension. Include the integrated single-player host, which the
+    // upstream native_server_players() guest-only API intentionally omits.
+    let mut explorers = Vec::new();
+    if let Some(host) = game.player.as_ref() {
+        explorers.push([host.position.x, host.position.y, host.position.z]);
+    }
+    for player in game.native_server_players() {
+        if player.dimension == dimension {
+            explorers.push(player.position);
+        }
+    }
+    let first_direction = (state.physical_ticks / 2_400) as usize % FRONTIER_OFFSETS.len();
+    for explorer in explorers {
+        if !explorer.iter().all(|c| c.is_finite()) { continue; }
+        // Keep the candidate offsets and native block reads inside
+        // Minecraft's world boundary, away from arithmetic wraparound.
+        if explorer[0].abs() > 29_999_000.0
+            || explorer[2].abs() > 29_999_000.0
+            || explorer[1].abs() > 1_900.0 {
+            continue;
+        }
+        let origin = explorer.map(|v| v.floor() as i32);
+        // Do not generate another settlement just because the player is
+        // standing in their own town or has built a base around one.
+        let near_existing = world.settlements.values()
+            .filter(|s| s.dimension == dimension)
+            .any(|v| {
+                let dx = i64::from(v.center[0]) - i64::from(origin[0]);
+                let dz = i64::from(v.center[2]) - i64::from(origin[2]);
+                dx * dx + dz * dz < 192_i64 * 192
+            });
+        if near_existing { continue; }
+
+        for index in 0..FRONTIER_OFFSETS.len() {
+            let offset = FRONTIER_OFFSETS[(index + first_direction) % FRONTIER_OFFSETS.len()];
+            let (Some(x), Some(z)) = (
+                origin[0].checked_add(offset[0]),
+                origin[2].checked_add(offset[1])
+            ) else { continue; };
+            for dy in [0_i32, -1, 1, -2, 2, -3, 3] {
+                let Some(y) = origin[1].checked_add(dy) else { continue; };
+                let candidate = [x, y, z];
+                // The 5x5 site survey rejects trees, player structures,
+                // non-natural ground, unloaded chunks and terrain cliffs.
+                // Do not dig, level, clear or forcibly load ANY blocks.
+                if check_empty_hut_site(game, dimension, candidate).is_err() {
+                    continue;
+                }
+                let id = world.next_id;
+                let name = format!(
+                    "{}_{}", FRONTIER_NAMES[((id - 1) % FRONTIER_NAMES.len() as u64) as usize], id
+                );
+                // Recheck domain constraints against a trial, avoiding an
+                // unnecessary save on name or inter-village collisions.
+                let mut trial = world.clone();
+                let Ok(trial_id) = trial.found_autonomous(&name, dimension, candidate)
+                else { continue; };
+                // Do not leave behind an independent village whose first
+                // ten residents can never appear. Require the SAME full
+                // loaded-chunk, no-duplicate, collision-free ten-position
+                // NPC survey used for the actual native spawn reservation.
+                // This first-pass survey is read-only; the later real
+                // spawn path rechecks all preconditions before persistence.
+                if surveyed_initial_actor_positions(
+                    game, &trial.settlements[&trial_id]
+                ).is_err() {
+                    continue;
+                }
+                let before = state.world.as_ref().unwrap().clone();
+                state.world.as_mut().unwrap()
+                    .found_autonomous(&name, dimension, candidate)?;
+                save_autonomous(state, before)?;
+                log::info!(
+                    "[civilizations] independent NPC village {} founded at {:?}; loaded natural plot",
+                    name, candidate
+                );
+                game.native_broadcast(Text::literal(format!(
+                    "Explorers report a new independent settlement: {} near {}, {}. Visit its town hall or use /civ info {}.",
+                    name, x, z, name
+                )));
+                return Ok(());
+            }
+        }
     }
     Ok(())
 }
@@ -2993,6 +3327,18 @@ pub fn level_tick(game: &mut Game<'_>, dimension: &str) {
     let state = guard.as_mut().expect("active initialized");
     if state.problem.is_some() || state.world.is_none() { return; }
     state.physical_ticks = state.physical_ticks.saturating_add(1);
+    // Discover an independent frontier community at most once every
+    // 2,400 loaded overworld ticks. Never call this from a client tick,
+    // never found in the Nether/End or generate while no players are here.
+    if state.physical_ticks % 2_400 == 0 {
+        if let Err(error) = autonomous_frontier_found(game, state) {
+            log::warn!("[civilizations] frontier founding paused: {error}");
+            if error.starts_with("persistence:") {
+                state.problem = Some(error);
+                return;
+            }
+        }
+    }
     // Villages start their own visible work by default, without needing
     // OP construction/field/spawn commands. The planner is bounded and
     // *never* edits a block without the existing worker-aware tick.
@@ -3110,5 +3456,67 @@ pub fn tick(game: &mut Game<'_>) {
         state.world = Some(before);
         state.problem = Some(format!("host day synchronization halted: {error}"));
         log::error!("[civilizations] authoritative day synchronization stopped: {error}");
+    }
+}
+
+
+#[cfg(test)]
+mod interrupted_first_save_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static NEXT_DIR: AtomicU64 = AtomicU64::new(0);
+
+    fn sandbox() -> PathBuf {
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "horizon-civ-save-{}-{nanos}-{}",
+            std::process::id(), NEXT_DIR.fetch_add(1, Ordering::Relaxed),
+        ));
+        fs::create_dir(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn interrupted_first_write_cannot_look_like_a_new_empty_world() {
+        let path = sandbox();
+        let pending = path.join("world.json.tmp");
+        fs::write(&pending, b"{ interrupted first write").unwrap();
+        let loaded = load(path.clone());
+        assert!(loaded.world.is_none());
+        assert!(loaded.problem.as_deref().unwrap().contains("world.json.tmp"));
+        assert_eq!(fs::read(&pending).unwrap(), b"{ interrupted first write");
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn a_valid_primary_does_not_silently_discard_an_abandoned_tmp() {
+        let path = sandbox();
+        let world = World::default();
+        fs::write(path.join(SAVE), serde_json::to_vec(&world).unwrap()).unwrap();
+        fs::write(path.join("world.json.tmp"), b"unfinished newer state").unwrap();
+        let loaded = load(path.clone());
+        assert!(loaded.world.is_none());
+        assert!(loaded.problem.as_deref().unwrap().contains("world.json.tmp"));
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn stale_tmp_is_never_truncated_by_a_later_save() {
+        let path = sandbox();
+        let pending = path.join("world.json.tmp");
+        fs::write(&pending, b"recoverable pending bytes").unwrap();
+        let state = ActiveWorld {
+            path: path.clone(),
+            world: Some(World::default()),
+            problem: None,
+            physical_ticks: 0,
+        };
+        let failure = save(&state).unwrap_err();
+        assert!(failure.contains("world.json.tmp"));
+        assert_eq!(fs::read(&pending).unwrap(), b"recoverable pending bytes");
+        assert!(!path.join(SAVE).exists());
+        fs::remove_dir_all(path).unwrap();
     }
 }
