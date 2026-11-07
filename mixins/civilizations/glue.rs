@@ -149,6 +149,7 @@ pub fn register(commands: &mut Vec<NativeCommand>) {
         "civ roster <name:word>", "civ schedule <name:word>",
         "civ homes <name:word>", "civ survey <name:word>",
         "civ council <name:word>", "civ forecast <name:word>",
+        "civ plots <name:word>",
         "civ construction <name:word>", "civ farming <name:word>",
         "civ harvests <name:word>",
         "civ join <name:word>", "civ title", "civ promote", "civ history",
@@ -161,7 +162,9 @@ pub fn register(commands: &mut Vec<NativeCommand>) {
         "civ reconcile <name:word>",
         "civ day [days:integer]", "civ construct <name:word>",
         "civ approvehouse <name:word> <slot:integer> <y:integer>",
+        "civ autonomy <name:word> <mode:word>",
         "civ farm <name:word>", "civ recoverfarm <name:word>",
+        "civ buyplot <name:word>", "civ commission <name:word>",
         "civ war <from:word> <to:word>",
         "civ peace <from:word> <to:word>",
     ] {
@@ -556,7 +559,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
     let actor = format!("{:032x}", player.uuid);
     let action = args.next().unwrap_or("help");
     if action == "help" {
-        reply(game, "Civilizations: /civ list | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, day [days], construct <name>, approvehouse <name> <slot> <y>, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
+        reply(game, "Civilizations: /civ list | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | buyplot <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, day [days], construct <name>, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
         return;
     }
     if action == "list" {
@@ -565,6 +568,24 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             items.push(format!("#{} {} [{}] pop={} houses={}", s.id, s.name, s.culture, s.population(), s.houses));
         }
         reply(game, if items.is_empty() { "No settlements yet. OP: /civ found Ashford".into() } else { items.join(" | ") });
+        return;
+    }
+    if action == "plots" {
+        let name = args.next().unwrap_or("");
+        let Some(village) = world.by_name(name) else {
+            error(game, "unknown settlement: /civ plots <name>");
+            return;
+        };
+        let plots: Vec<String> = village.player_parcels.iter()
+            .filter(|plot| plot.owner == actor).take(32)
+            .map(|plot| format!(
+                "{:?} ({})", plot.origin, if plot.commissioned { "NPC commission" } else { "private, build freely" }
+            )).collect();
+        reply(game, format!(
+            "{} owns {} purchased plots; {} parcels registered in {}. {}. These protect against CIVILIZATIONS NPC edits only, not external players or mods.",
+            actor, plots.len(), village.player_parcels.len(), village.name,
+            if plots.is_empty() { "No purchased parcels".to_owned() } else { plots.join(" | ") }
+        ));
         return;
     }
     if action == "council" {
@@ -804,6 +825,68 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
     let previous = world.clone();
     let mut already_saved = false;
     let result: Result<String, String> = match action {
+        "autonomy" if player.permission >= 2 => (|| {
+            let name = args.next().ok_or("usage: /civ autonomy <village> on|off")?;
+            let mode = args.next().ok_or("specify on or off")?;
+            let enabled = match mode {
+                "on" => true, "off" => false,
+                _ => return Err("use on or off".into()),
+            };
+            let v = previous.by_name(name).ok_or("unknown settlement")?;
+            state.world.as_mut().unwrap().set_autonomy(v.id, enabled)?;
+            Ok(format!(
+                "{} autonomous physical development: {}. All villages start ON by default; off pauses new plans but not previously committed jobs.",
+                v.name, if enabled { "ON" } else { "OFF" }
+            ))
+        })(),
+        "buyplot" => (|| {
+            let name = args.next().ok_or("usage: /civ buyplot <village>")?;
+            let village = previous.by_name(name).ok_or("unknown settlement")?;
+            if village.dimension != player.dimension {
+                return Err("purchase the plot from within its settlement dimension".into());
+            }
+            if !player.position.iter().all(|x| x.is_finite()) {
+                return Err("invalid player position".into());
+            }
+            let origin = player.position.map(|x| x.floor() as i32);
+            // A land purchase is committed as a real persistent parcel; the
+            // world must have a clear loaded 5x5 footprint at purchase time.
+            check_empty_hut_site(game, &village.dimension, origin)?;
+            let price = state.world.as_mut().unwrap().buy_plot(&actor, village.id, origin)?;
+            Ok(format!(
+                "Bought a protected 5x5 plot at {:?} in {} for {} civic coins. Build your own blocks there or use /civ commission {} while standing on this lot. /civ plots {}",
+                origin, village.name, price, village.name, village.name
+            ))
+        })(),
+        "commission" => (|| {
+            let name = args.next().ok_or("usage: /civ commission <village>")?;
+            let village = previous.by_name(name).ok_or("unknown settlement")?;
+            if village.dimension != player.dimension {
+                return Err("commission construction in the settlement's own dimension".into());
+            }
+            if !player.position.iter().all(|x| x.is_finite()) {
+                return Err("invalid player position".into());
+            }
+            let mut eligible = village.player_parcels.iter()
+                .filter(|plot| plot.owner == actor && !plot.commissioned)
+                .filter_map(|plot| {
+                    let dx = f64::from(plot.origin[0]) + 0.5 - player.position[0];
+                    let dz = f64::from(plot.origin[2]) + 0.5 - player.position[2];
+                    let dy = (f64::from(plot.origin[1]) - player.position[1]).abs();
+                    (dx * dx + dz * dz <= 6.0 * 6.0 && dy <= 6.0)
+                        .then_some((dx * dx + dz * dz, plot.origin))
+                }).collect::<Vec<_>>();
+            eligible.sort_by(|a, b| a.0.total_cmp(&b.0));
+            let (_, site) = eligible.first().copied().ok_or(
+                "stand on a bought, uncommissioned plot; use /civ plots <village>"
+            )?;
+            check_empty_hut_site(game, &village.dimension, site)?;
+            let price = state.world.as_mut().unwrap().commission_house(&actor, village.id, site)?;
+            Ok(format!(
+                "Commissioned your own 5x5 hut at {:?} for {} civic coins, 8 village wood and 6 stone. A UUID-linked builder will physically build during work hours. /civ construction {}",
+                site, price, village.name
+            ))
+        })(),
         "recoverfarm" if player.permission >= 2 => (|| {
             let name = args.next().ok_or("usage: /civ recoverfarm <name>")?;
             let settlement = previous.by_name(name).ok_or("unknown settlement")?;
@@ -1052,7 +1135,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
                 Ok(format!("Spawned and UUID-linked {spawned} villagers. Reopen world and verify /civ roster {name}."))
             }
         })(),
-        "found" | "day" | "war" | "peace" | "actors" | "construct" | "approvehouse" | "farm" | "recoverfarm" | "reconcile" => Err("requires server operator level 2".into()),
+        "found" | "day" | "war" | "peace" | "actors" | "construct" | "approvehouse" | "autonomy" | "farm" | "recoverfarm" | "reconcile" => Err("requires server operator level 2".into()),
         _ => Err("unknown subcommand. Use /civ help".into()),
     };
     match result {
