@@ -4,6 +4,15 @@ The first-play gate now defaults to this branch, so on the current checkout
 `py -3 tools/first_play_gate.py --build-client` selects the correct branch.
 Use `--expected-sha` to pin an exact commit when collecting native evidence.
 
+**Latest crash-safety update:** the shared initial spawn survey now also
+requires all selected NPC positions to remain at least 3 blocks apart.
+The command dispatcher no longer rolls back RAM to an old snapshot after
+a durable world save followed by an error, and a failed reconcile save
+now freezes the world rather than implicitly retrying it. The local
+first-play gate extracts the first actionable failing line from the
+compiler/test log into `report.md` and `report.json`. These changes are
+not yet Rust-compiled or game-tested.
+
 **Startup safety update:** both autonomous first-village spawning and OP `/civ actors NAME`
 now share a live survey: ten living unbound residents, no already-loaded tagged
 villagers, and ten natural, loaded, two-air, unoccupied spawn spots. The older
