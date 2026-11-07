@@ -152,7 +152,7 @@
   three days (maximum seven for direct callers); no duplicate production
   model or simulated trade/war execution.
 - Added read-only `/civ council NAME` and `/civ forecast NAME`, eight
-  Rust regression cases, and six Python structural source contracts.
+  Rust regression cases, and eight Python structural source contracts.
 - Preserved schema=1 and the six existing native hooks. No new stock
   credits, actions, land claims, combat decisions, or world-save writes.
 - No GitHub Actions or actual Rust/Python/native/game executions. Only
