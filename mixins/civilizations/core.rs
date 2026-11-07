@@ -2559,6 +2559,41 @@ impl World {
         Ok(cost)
     }
 
+    /// Pure authorisation for native player block-breaking hook: purchased
+    /// land belongs to its authenticated owner, while shared civic plots,
+    /// native farms and physical workshop footprints are protected.
+    /// OP bypass is handled separately by the native host's permission.
+    pub fn player_may_break(&self, player: &str, dimension: &str, pos: [i32; 3]) -> bool {
+        let in_hut = |origin: [i32;3]| {
+            (i64::from(pos[0]) - i64::from(origin[0])).abs() <= 2
+                && (i64::from(pos[2]) - i64::from(origin[2])).abs() <= 2
+                && (i64::from(pos[1]) - i64::from(origin[1])).abs() <= 4
+        };
+        let in_field = |origin: [i32;3]| {
+            (i64::from(pos[0]) - i64::from(origin[0])).abs() <= 1
+                && (i64::from(pos[2]) - i64::from(origin[2])).abs() <= 1
+                && (i64::from(pos[1]) - i64::from(origin[1])).abs() <= 2
+        };
+        for v in self.settlements.values().filter(|v| v.dimension == dimension) {
+            // Private property is protected from other players; the owner
+            // retains the right to edit bought plots and completed houses.
+            if let Some(lot) = v.player_parcels.iter().find(|lot| in_hut(lot.origin)) {
+                if lot.owner != player { return false; }
+                continue;
+            }
+            if (v.hall_complete || v.hall_job.is_some()) && in_hut(v.center) {
+                return false;
+            }
+            if v.bakery.as_ref().is_some_and(|b| in_hut(b.origin))
+                || v.farm.as_ref().is_some_and(|f| in_field(f.origin))
+                || v.visual_sites.iter().any(|site| in_hut(*site))
+                || v.visual_job.as_ref().is_some_and(|job| in_hut(job.origin)) {
+                return false;
+            }
+        }
+        true
+    }
+
     pub fn relation(&self, a: u64, b: u64) -> i16 {
         self.settlements.get(&a).and_then(|x| x.relationships.get(&b).copied()).unwrap_or(0)
     }
