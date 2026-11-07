@@ -58,6 +58,7 @@ class LocalReleaseGateHarnessTests(unittest.TestCase):
         self._exe("rustfmt", '#!/bin/sh\necho "rustfmt 1.95.0 (mock)"\n')
         self._exe("cargo", '#!/bin/sh\n'
                   'if [ "$1" = "test" ] && [ "${FAIL_TEST:-}" = "yes" ]; then exit 9; fi\n'
+                  'if [ "$1" = "test" ] && [ "${COMPILER_DIAGNOSTIC:-}" = "yes" ]; then echo "error[E0425]: unknown value in native actor code"; exit 101; fi\n'
                   'if [ "$1" = "fmt" ] && [ "${FAIL_FORMAT:-}" = "yes" ]; then exit 8; fi\n'
                   'echo "cargo 1.95.0 (mock)"\n')
         self.git("init", "-q")
@@ -76,6 +77,7 @@ class LocalReleaseGateHarnessTests(unittest.TestCase):
             if name == "cargo":
                 text = ('@echo off\n'
                         'if "%1"=="test" if "%FAIL_TEST%"=="yes" exit /b 9\n'
+                        'if "%1"=="test" if "%COMPILER_DIAGNOSTIC%"=="yes" (echo error[E0425]: unknown value in native actor code& exit /b 101)\n'
                         'if "%1"=="fmt" if "%FAIL_FORMAT%"=="yes" exit /b 8\n'
                         'echo cargo 1.95.0 (mock)\n')
             elif name == "rustc":
@@ -123,6 +125,19 @@ class LocalReleaseGateHarnessTests(unittest.TestCase):
         self.assertEqual([step["name"] for step in data["steps"]], ["cargo-test"])
         self.assertEqual(data["steps"][0]["exit_code"], 9)
         self.assertEqual(data["gate"], "BLOCKED")
+
+    def test_first_realistic_rust_error_is_surfaced_in_report(self):
+        result = self.run_gate(extra_env={"COMPILER_DIAGNOSTIC": "yes"})
+        self.assertEqual(result.returncode, 1, result.stdout + result.stderr)
+        data = self.latest_report()
+        self.assertEqual(data["gate"], "BLOCKED")
+        self.assertEqual(data["steps"][0]["name"], "cargo-test")
+        self.assertEqual(data["steps"][0]["exit_code"], 101)
+        self.assertIn("error[E0425]: unknown value", data["steps"][0]["error"])
+        self.assertIn("error[E0425]: unknown value", data["blocking_reason"])
+        report = (self.repo / "target" / "first-play-gate" /
+                  data["created_utc"] / "report.md").read_text()
+        self.assertIn("error[E0425]: unknown value", report)
 
     def test_format_remains_mandatory_after_compilation(self):
         result = self.run_gate(extra_env={"FAIL_FORMAT": "yes"})
