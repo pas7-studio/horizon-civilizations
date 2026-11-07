@@ -5354,7 +5354,8 @@ mod verified_short_oak_stem_tests {
     fn legacy_world_without_new_field_still_loads() {
         let (world, id) = world_with_stem();
         let mut json = serde_json::to_value(&world).unwrap();
-        json["settlements"][id.to_string()].as_object_mut().unwrap()
+        json.get_mut("settlements").unwrap().as_object_mut().unwrap()
+            .get_mut(&id.to_string()).unwrap().as_object_mut().unwrap()
             .remove("oak_stem");
         let restored: World = serde_json::from_value(json).unwrap();
         assert!(restored.settlements[&id].oak_stem.is_none());
