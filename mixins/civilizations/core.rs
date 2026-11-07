@@ -12,6 +12,16 @@ pub const MAX_HOST_CATCHUP_DAYS: u32 = 30;
 /// Bounded on-disk audit of observed visual harvests.
 pub const MAX_HARVEST_RECEIPTS: usize = 32;
 pub const MIN_SETTLEMENT_DISTANCE: i64 = 192;
+/// Fixed, bounded rings for *suggested* plots. Numbers are 1-based in commands.
+/// These are not territorial claims or permission to edit blocks.
+pub const HOUSING_PLOT_OFFSETS: [[i32; 2]; 20] = [
+    [20, 0], [-20, 0], [0, 20], [0, -20],
+    [28, 14], [-28, 14], [28, -14], [-28, -14],
+    [14, 28], [-14, 28], [14, -28], [-14, -28],
+    [40, 0], [-40, 0], [0, 40], [0, -40],
+    [40, 24], [-40, 24], [40, -24], [-40, -24],
+];
+pub const MAX_HOUSING_SURVEY_RESULTS: usize = 5;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -907,26 +917,67 @@ impl World {
         Ok(id)
     }
 
-    /// Request one explicitly approved physical construction project.
-    /// Collision with world blocks is checked by the Horizon adapter first.
-    pub fn start_visual_house(&mut self, village_id: u64, origin: [i32; 3]) -> Result<(), String> {
-        let village = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?;
-        if village.pending_visual_buildings == 0 { return Err("no completed abstract house awaits visualization".into()); }
+    /// Domain-only collision policy: a house must not intersect any other
+    /// settlement's *recorded* building, active construction or farm in the
+    /// same dimension. Real blocks and player claims need a separate live
+    /// adapter preflight and explicit operator approval.
+    pub fn check_visual_house_site(&self, village_id: u64, origin: [i32; 3]) -> Result<(), String> {
+        let village = self.settlements.get(&village_id).ok_or("unknown settlement")?;
+        if village.pending_visual_buildings == 0 {
+            return Err("no completed abstract house awaits visualization".into());
+        }
+        if village.visual_job.is_some() {
+            return Err("construction already in progress".into());
+        }
+        if village.visual_sites.len() >= 32 {
+            return Err("physical housing site limit reached".into());
+        }
         if i64::from(origin[0]).abs() > 29_999_990 || i64::from(origin[2]).abs() > 29_999_990
             || !(-2048..=2048).contains(&origin[1]) {
             return Err("site too close to world border".into());
         }
-        if village.visual_job.is_some() { return Err("construction already in progress".into()); }
-        if village.visual_sites.len() >= 32 { return Err("physical housing site limit reached".into()); }
-        let dx = i64::from(origin[0]) - i64::from(village.center[0]);
-        let dz = i64::from(origin[2]) - i64::from(village.center[2]);
-        let dist = dx * dx + dz * dz;
-        if !(12 * 12..=80 * 80).contains(&dist) { return Err("build 12..80 blocks from village center".into()); }
-        for site in &village.visual_sites {
-            let sx = i64::from(origin[0]) - i64::from(site[0]);
-            let sz = i64::from(origin[2]) - i64::from(site[2]);
-            if sx * sx + sz * sz < 9 * 9 { return Err("too close to another civilization house".into()); }
+        let distance = |a: [i32; 3], b: [i32; 3]| {
+            let dx = i64::from(a[0]) - i64::from(b[0]);
+            let dz = i64::from(a[2]) - i64::from(b[2]);
+            dx * dx + dz * dz
+        };
+        if !(12_i64 * 12..=80_i64 * 80).contains(&distance(village.center, origin)) {
+            return Err("build 12..80 blocks from village center".into());
         }
+        for other in self.settlements.values().filter(|s| s.dimension == village.dimension) {
+            if other.visual_sites.iter().any(|&site| distance(site, origin) < 9_i64 * 9)
+                || other.visual_job.as_ref().is_some_and(|job| distance(job.origin, origin) < 9_i64 * 9)
+                || other.farm.as_ref().is_some_and(|farm| distance(farm.origin, origin) < 9_i64 * 9) {
+                return Err("plot overlaps an existing civilization structure or farm".into());
+            }
+        }
+        Ok(())
+    }
+
+    /// A read-only village proposal. Slot is 1-based and always resolves to
+    /// the same X/Z for this settlement. The operator supplies the exact Y
+    /// level after a *live* survey; nothing is reserved by this method.
+    pub fn proposed_hut(&self, village_id: u64, slot: usize, y: i32) -> Result<[i32; 3], String> {
+        let village = self.settlements.get(&village_id).ok_or("unknown settlement")?;
+        if village.physical_housing().2 == 0 {
+            return Err("all residents already have physical hut capacity".into());
+        }
+        let [dx, dz] = *HOUSING_PLOT_OFFSETS.get(slot.checked_sub(1).ok_or("invalid housing slot")?)
+            .ok_or("invalid housing slot")?;
+        let x = i64::from(village.center[0]) + i64::from(dx);
+        let z = i64::from(village.center[2]) + i64::from(dz);
+        let x = i32::try_from(x).map_err(|_| "housing candidate outside world bounds")?;
+        let z = i32::try_from(z).map_err(|_| "housing candidate outside world bounds")?;
+        let origin = [x, y, z];
+        self.check_visual_house_site(village_id, origin)?;
+        Ok(origin)
+    }
+
+    /// Reserve one operator-approved house; a later native level tick performs
+    /// one conditional placement at a time after checking live world blocks.
+    pub fn start_visual_house(&mut self, village_id: u64, origin: [i32; 3]) -> Result<(), String> {
+        self.check_visual_house_site(village_id, origin)?;
+        let village = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?;
         village.visual_job = Some(VisualBuildJob { origin, cursor: 0, blocked: false });
         Ok(())
     }
