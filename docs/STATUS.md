@@ -1,3 +1,35 @@
+# Physical resident bread meals — source complete, native unverified
+
+- [x] One real-bread daily meal per loaded UUID-bound citizen, with
+  merchant/steward witness and native barrel item-count confirmation
+- [x] Persistent meal day, resident-ID receipts, shortage-day streak,
+  read-only command and town hall signs
+- [x] Unissued meal canceled on changed recipient presence; Issued or
+  Blocked transaction never automatically reissued after restart
+- [x] Dead residents' meal receipts preserved, but counted separately
+  from the living; existing abstract food simulation unchanged
+- [x] Nine Rust regression cases and fifteen Python source contracts
+  authored; all remain pending actual native test execution
+- [ ] Rust 1.95, Clippy, full Python discovery, Horizon native client,
+  Windows launcher and actual gameplay E2E have not been run here
+
+---
+
+# v0.1.15 source — self-founded frontier settlements (unverified native)
+
+- Source design: native NPC settlements can now originate near real
+  Overworld explorers, with loaded natural 5×5 grounds and ten safe
+  spawn sites checked before the first durable settlement record.
+- One bounded survey per 2,400 loaded ticks; at most eight independently
+  founded villages, minimum 192-block separation near existing settlements.
+- No player ownership or free starting currency is invented; original
+  manually OP-founded villages preserve their prior semantics.
+- Public read-only `/civ nearby` for exploration and navigation.
+- Six Rust domain regressions plus eleven Python source contracts
+  authored. Runtime Rust/Horizon builds and Minecraft E2E **not executed**.
+
+---
+
 # PR #34 — Windows first-play correctness and recovery evidence
 
 - [x] Source fix for Windows GUI Horizon Launcher: import/prepare/play
