@@ -375,6 +375,8 @@ pub fn hut_plan(origin: [i32; 3]) -> Vec<HutBlock> {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct GatherJob {
     pub position: [i32; 3],
+    /// Verified empty two-high destination a worker can navigate toward.
+    pub stand: [i32; 3],
     pub good: Good, // only Wood (oak log) or Stone (natural stone)
     pub issued: bool,
     #[serde(default)]
@@ -1473,7 +1475,7 @@ impl World {
     /// Planning creates no items. Both native and domain checks forbid
     /// extraction inside the town hall, another structure or player lot.
     pub fn plan_gather(
-        &mut self, village_id: u64, good: Good, position: [i32; 3]
+        &mut self, village_id: u64, good: Good, position: [i32; 3], stand: [i32; 3]
     ) -> Result<(), String> {
         if !matches!(good, Good::Wood | Good::Stone) {
             return Err("only physical oak logs or exposed stone may be gathered".into());
@@ -1487,6 +1489,12 @@ impl World {
             || i64::from(position[2]).abs() > 29_999_988
             || !(-2046..=2046).contains(&position[1]) {
             return Err("gather point outside safe world bounds".into());
+        }
+        let wx = i128::from(stand[0]) - i128::from(position[0]);
+        let wy = i128::from(stand[1]) - i128::from(position[1]);
+        let wz = i128::from(stand[2]) - i128::from(position[2]);
+        if wx * wx + wy * wy + wz * wz > 16 {
+            return Err("worker stand is not reachable from resource within 4 blocks".into());
         }
         let dx = i128::from(position[0]) - i128::from(v.center[0]);
         let dz = i128::from(position[2]) - i128::from(v.center[2]);
@@ -1503,7 +1511,7 @@ impl World {
             }
         }
         self.settlements.get_mut(&village_id).unwrap().gather_job = Some(GatherJob {
-            position, good, issued: false, blocked: false,
+            position, stand, good, issued: false, blocked: false,
         });
         Ok(())
     }
@@ -1523,6 +1531,17 @@ impl World {
         let job = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?
             .gather_job.as_mut().ok_or("no gather job")?;
         job.blocked = true;
+        Ok(())
+    }
+
+    /// Discard an obstructed gather without any material credit, then retry
+    /// another site on the next planning cycle; no foreign blocks are edited.
+    pub fn discard_blocked_gather(&mut self, village_id: u64) -> Result<(), String> {
+        let v = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?;
+        if !v.gather_job.as_ref().is_some_and(|job| job.blocked) {
+            return Err("only a blocked gather can be discarded".into());
+        }
+        v.gather_job = None;
         Ok(())
     }
 
