@@ -2074,6 +2074,10 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             let dx = i64::from(s.center[0]) - player.position[0].floor() as i64;
             let dz = i64::from(s.center[2]) - player.position[2].floor() as i64;
             if dx * dx + dz * dz > 32 * 32 { return Err("stand within 32 blocks of the settlement center".into()); }
+            // Manual spawning must use the SAME live preflight as automatic
+            // spawning. Never reserve ten actors on obstructed/unloaded
+            // ground, beside occupied mobs, or over tagged survivors.
+            let positions = surveyed_initial_actor_positions(game, s)?;
             // Persist one-shot reservation before the first spawn. A crash
             // cannot accidentally retrigger a full batch on next login.
             state.world.as_mut().unwrap().settlements.get_mut(&s.id).unwrap().actors_spawned = true;
@@ -2081,16 +2085,13 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             already_saved = true;
             let mut spawned = 0usize;
             let mut halted = false;
-            for (i, resident) in s.residents.iter().take(10).enumerate() {
-                let x = f64::from(s.center[0]) + (i as f64 % 5.0) * 2.0 - 4.0 + 0.5;
-                let z = f64::from(s.center[2]) + (i / 5) as f64 * 2.0 - 1.0 + 0.5;
+            for (resident, position) in s.residents.iter().take(10).zip(positions) {
                 let opts = NativeSpawn {
                     name: Some(s.actor_name(resident)),
                     ..NativeSpawn::default()
                 };
                 let Some(entity_id) = game.native_spawn_mob(
-                    &s.dimension, "minecraft:villager",
-                    [x, f64::from(s.center[1]), z], &opts
+                    &s.dimension, "minecraft:villager", position, &opts
                 ) else {
                     break;
                 };
@@ -2161,7 +2162,19 @@ fn safe_actor_spawn_points(
                         .is_some_and(|block| is_ground(&block))
                     && world_block(game, &village.dimension, [x, y, z]).as_deref() == Some("minecraft:air")
                     && world_block(game, &village.dimension, [x, head_y, z]).as_deref() == Some("minecraft:air") {
-                    spots.push([f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5]);
+                    let point = [f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5];
+                    // Terrain may be clear while a living native entity
+                    // occupies the position. Skip it for BOTH autonomous
+                    // and OP spawning, before reserving the batch.
+                    if game.mobs.iter().any(|mob| {
+                        let dx = mob.position.x - point[0];
+                        let dy = mob.position.y - point[1];
+                        let dz = mob.position.z - point[2];
+                        mob.alive() && dx * dx + dy * dy + dz * dz < 9.0
+                    }) {
+                        continue;
+                    }
+                    spots.push(point);
                     break;
                 }
             }
@@ -2174,6 +2187,35 @@ fn safe_actor_spawn_points(
     spots
 }
 
+/// Refuse to reserve the first batch if a citizen is already dead/linked,
+/// a matching older native actor is visible, or fewer than ten genuinely
+/// clear natural-ground spawn positions can be surveyed in loaded chunks.
+/// This is shared by autonomous startup and the explicit OP /civ actors path.
+fn surveyed_initial_actor_positions(
+    game: &Game<'_>, village: &crate::game::civilizations_core::Settlement,
+) -> Result<Vec<[f64; 3]>, String> {
+    if village.residents.len() < 10 || village.residents.iter().take(10)
+            .any(|r| !r.alive || r.entity_uuid.is_some()) {
+        return Err("initial batch requires ten living, UUID-unbound residents".into());
+    }
+    if village.residents.iter().take(10).any(|resident| {
+        let tagged = village.actor_name(resident);
+        let legacy = format!("{} [{}]", resident.name, village.name);
+        game.mobs.iter().any(|mob| {
+            mob.alive() && mob.kind.id == "minecraft:villager"
+                && (mob.custom_name.as_deref() == Some(tagged.as_str())
+                    || mob.custom_name.as_deref() == Some(legacy.as_str()))
+        })
+    }) {
+        return Err("matching native villager already loaded: reconcile identity before initial spawn".into());
+    }
+    let positions = safe_actor_spawn_points(game, village);
+    if positions.len() != 10 {
+        return Err("need ten loaded, natural, clear and unoccupied positions before initial spawn".into());
+    }
+    Ok(positions)
+}
+
 /// Vanilla villagers are UUID-bound, once, after a persistent one-shot
 /// reservation. A partial spawn NEVER triggers an automatic second batch.
 fn auto_spawn_villagers(
@@ -2182,8 +2224,10 @@ fn auto_spawn_villagers(
     let village = state.world.as_ref().unwrap().settlements
         .get(&village_id).ok_or("unknown settlement")?.clone();
     if village.actors_spawned || !village.autonomy_enabled { return Ok(()); }
-    let positions = safe_actor_spawn_points(game, &village);
-    if positions.len() != 10 { return Ok(()); } // unloaded / obstructed: retry later
+    // An incomplete preflight never reserves the one-shot batch. Missing
+    // chunks or occupied plots are normal: retry only the PRE-spawn survey.
+    let Ok(positions) = surveyed_initial_actor_positions(game, &village)
+    else { return Ok(()); };
     let prior = state.world.as_ref().unwrap().clone();
     state.world.as_mut().unwrap().settlements
         .get_mut(&village_id).unwrap().actors_spawned = true;
