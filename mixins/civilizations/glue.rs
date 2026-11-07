@@ -597,6 +597,34 @@ fn farm_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), Str
     }
 }
 
+/// Public civic barrels are accounted stock, not free player loot. Only
+/// real server operators may open them to inspect native contents; ordinary
+/// villagers trade using the native inventory command path. This hook does
+/// not claim arbitrary vanilla barrels or player-owned storage.
+pub fn protect_hall_inventory(
+    game: &mut Game<'_>, player: u128, _name: &str,
+    position: [i32; 3], cancel: &mut bool,
+) {
+    if *cancel || !game.native_on(MOD_ID) { return; }
+    let dimension = game.dim.id().to_owned();
+    if world_block(game, &dimension, position).as_deref() != Some("minecraft:barrel") {
+        return;
+    }
+    let Some(dir) = game.native_world_dir() else { return; };
+    let guard = active(dir.join(DIR));
+    let is_public_barrel = guard.as_ref().and_then(|state| state.world.as_ref())
+        .is_some_and(|world| world.settlements.values()
+            .filter(|v| v.dimension == dimension && v.hall_complete)
+            .any(|v| hall_storage_positions(v.center).contains(&position)));
+    drop(guard);
+    if !is_public_barrel { return; }
+    if game.native_player_permission(player).unwrap_or(0) >= 2 { return; }
+    *cancel = true;
+    let _ = game.native_tell(player, Text::literal(
+        "This is the village's public warehouse. Trade with /civ sell and /civ buy; items are reserved for real NPC construction."
+    ).with_color(text::GOLD));
+}
+
 /// Right-click dialogue for a UUID-bound civilization villager. Unbound or
 /// vanilla villagers keep their normal Minecraft interaction.
 pub fn interact_entity(game: &mut Game<'_>, entity: i32, kind: &str, claimed: &mut bool) {
