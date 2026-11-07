@@ -1,3 +1,29 @@
+# Latest stacked local source handoff (2026-11-08)
+
+- Work from `feat/natural-forestry-gather-journal-v0115`, not `main`.
+  Stacked Draft PRs contain the latest native hall, warehouse, bakery,
+  operator recovery and conservative oak/stone gathering changes.
+- **GitHub Actions must stay OFF.** Do not merge or declare a playable build
+  on the basis of source-only static checks or historic CI.
+- First run `cargo fmt --all`, `cargo test`, Clippy, all Python tests,
+  `tools/package.py` and `tools/verify_static.py` with pinned Rust 1.95.
+  Then `tools/native_build.py --test --build-client` and isolate an actual
+  prepared Minecraft world. Record SHA/logs for each compile/test failure.
+- New `/civ diagnose NAME` shows a read-only NPC/world blocker;
+  `/civ gathercheck NAME` audits the persisted native wood/stone gather;
+  `/civ discardgather NAME intact|empty` is OP-only and abandons a blocked
+  **Issued** harvest with ZERO resource credit only after loaded native
+  evidence matches. Never blindly reissue an uncertain Minecraft edit.
+- Oak harvesting presently allows only the first soil-rooted trunk block,
+  not full-tree felling, replanting or a constructed lumberyard. The mod
+  cannot distinguish player-grown oak from worldgen oak outside claims by
+  block states alone. Preserve purchased land protection.
+- Tests and local playtest instructions: `docs/TEST_PLAN.md` cases 189-199
+  and `docs/PLAYTEST.md`. Keep all saves and actual Minecraft assets out of
+  this MIT repository.
+
+---
+
 # Local agent handoff: Horizon Civilizations
 
 Do not fork upstream Horizon for this project. It is a native mod with a pure
