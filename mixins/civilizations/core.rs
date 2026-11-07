@@ -1124,6 +1124,12 @@ pub struct Settlement {
     pub active_wars: BTreeSet<u64>,
     pub pending_visual_buildings: u32,
     pub actors_spawned: bool,
+    /// One-shot, durably reserved OP recovery attempts after partial native
+    /// actor spawning. A crash can occur AFTER the entity is created but
+    /// BEFORE its UUID is persisted: never automatically reissue this spawn.
+    /// The OP must first inspect/reconcile any already-existing villager.
+    #[serde(default)]
+    pub actor_recovery_issued: BTreeSet<u64>,
     /// Villages develop by default. OP can pause selected settlements.
     #[serde(default = "autonomous_by_default")]
     pub autonomy_enabled: bool,
@@ -1704,6 +1710,15 @@ impl World {
                 all_parcels.push((village.dimension.clone(), parcel.origin));
             }
             if village.residents.len() > 128 { return Err("resident cap exceeded".into()); }
+            if !village.actor_recovery_issued.is_empty() && !village.actors_spawned {
+                return Err("recovery attempts exist before actor spawn reservation".into());
+            }
+            for recovery_id in &village.actor_recovery_issued {
+                if !village.residents.iter().any(|r|
+                    r.id == *recovery_id && r.alive && r.entity_uuid.is_none()) {
+                    return Err("invalid pending actor recovery ID or already bound actor".into());
+                }
+            }
             let mut resident_ids = BTreeSet::new();
             for resident in &village.residents {
                 if !resident_ids.insert(resident.id) {
@@ -1873,6 +1888,7 @@ impl World {
             active_wars: BTreeSet::new(),
             pending_visual_buildings: 0,
             actors_spawned: false,
+            actor_recovery_issued: BTreeSet::new(),
             autonomy_enabled: true,
             player_parcels: Vec::new(),
             visual_sites: Vec::new(),
@@ -2965,6 +2981,29 @@ impl World {
 
     /// Bind a resident to the actual saved Horizon entity UUID, once.
     /// The operation is idempotent for the same identity and rejects reassignment.
+    /// The OP explicitly requested ONE missing villager after inspecting
+    /// loaded native actors. Save this reservation before sending any spawn
+    /// command, so a crash or native refusal does not cause a second entity
+    /// to be spawned by automated logic on a later tick.
+    pub fn reserve_actor_recovery(
+        &mut self, settlement_id: u64, resident_id: u64,
+    ) -> Result<(), String> {
+        let settlement = self.settlements.get_mut(&settlement_id)
+            .ok_or("unknown settlement")?;
+        if !settlement.actors_spawned {
+            return Err("initial villager batch has not been reserved".into());
+        }
+        let missing = settlement.residents.iter().any(|r|
+            r.id == resident_id && r.alive && r.entity_uuid.is_none());
+        if !missing {
+            return Err("resident is dead, missing or already UUID-linked".into());
+        }
+        if !settlement.actor_recovery_issued.insert(resident_id) {
+            return Err("actor recovery already attempted; inspect/reconcile, never spawn twice".into());
+        }
+        Ok(())
+    }
+
     pub fn bind_actor(&mut self, settlement_id: u64, resident_id: u64, uuid: u128) -> Result<bool, String> {
         if uuid == 0 {
             return Err("cannot bind zero entity UUID".into());
@@ -2988,6 +3027,9 @@ impl World {
             Some(_) => Err("resident already bound to a different entity UUID".into()),
             None => {
                 resident.entity_uuid = Some(uuid);
+                // Atomic in-memory state saved by the bridge. If the save
+                // fails, the disk retains the pending one-shot reservation.
+                settlement.actor_recovery_issued.remove(&resident_id);
                 Ok(true)
             }
         }
