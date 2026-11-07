@@ -383,6 +383,71 @@ pub struct GatherJob {
     pub blocked: bool,
 }
 
+/// A short oak stem is harvested one real block and one UUID-worker
+/// delivery at a time. The cursor tracks the NEXT block, not free wood.
+/// Existing saves without this field keep their ordinary one-block jobs.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct OakStem {
+    pub root: [i32; 3],
+    pub stand: [i32; 3],
+    /// Short, reachable stems only. A larger tree requires real scaffolding.
+    pub height: u8,
+    pub cursor: u8,
+}
+
+/// The native adapter first verifies a rooted leaf-bearing oak, then measures
+/// the whole short stem. Trees taller than four logs are deliberately skipped:
+/// our worker currently has no physical way to reach a taller canopy.
+pub fn short_oak_stem_height(
+    root: [i32; 3], mut read: impl FnMut([i32; 3]) -> Option<String>,
+) -> Option<u8> {
+    if !is_rooted_oak_harvest_origin(root, |pos| read(pos)) { return None; }
+    let mut count = 0_u8;
+    for offset in 0..=4_i32 {
+        let y = root[1].checked_add(offset)?;
+        match read([root[0], y, root[2]]).as_deref() {
+            Some("minecraft:oak_log") if offset < 4 => count += 1,
+            Some("minecraft:oak_log") => return None,
+            Some(_) => break,
+            None => return None,
+        }
+    }
+    (3..=4).contains(&count).then_some(count)
+}
+
+/// Observe every step of the SAME saved stem before dispatching its next
+/// world edit. Previous trunk logs must already be air, remaining ones
+/// unchanged vanilla oak. The upper crown must still exist and all reads
+/// must be loaded. No independent search for a second, possibly foreign tree.
+pub fn inspect_oak_stem(
+    stem: &OakStem, mut read: impl FnMut([i32; 3]) -> Option<String>,
+) -> bool {
+    if !(3..=4).contains(&stem.height) || stem.cursor >= stem.height {
+        return false;
+    }
+    for offset in 0..stem.height {
+        let Some(y) = stem.root[1].checked_add(i32::from(offset)) else {
+            return false;
+        };
+        let expected = if offset < stem.cursor { "minecraft:air" }
+            else { "minecraft:oak_log" };
+        if read([stem.root[0], y, stem.root[2]]).as_deref() != Some(expected) {
+            return false;
+        }
+    }
+    let Some(top_y) = stem.root[1].checked_add(i32::from(stem.height) - 1)
+    else { return false; };
+    let mut crown = false;
+    for (dx, dz) in [(1_i32, 0_i32), (-1, 0), (0, 1), (0, -1)] {
+        let (Some(x), Some(z)) =
+            (stem.root[0].checked_add(dx), stem.root[2].checked_add(dz))
+        else { return false; };
+        let Some(block) = read([x, top_y, z]) else { return false; };
+        if block == "minecraft:oak_leaves" { crown = true; }
+    }
+    crown
+}
+
 impl GatherJob {
     pub fn source_block(&self) -> &'static str {
         match self.good {
@@ -976,6 +1041,10 @@ pub struct Settlement {
     /// Pending actual tree/stone harvest; reconciled against native blocks.
     #[serde(default)]
     pub gather_job: Option<GatherJob>,
+    /// Optional continuation for a proven short native oak trunk.
+    /// Each log is still a separate issued gather and delivered receipt.
+    #[serde(default)]
+    pub oak_stem: Option<OakStem>,
     /// Player civic coin payments are transferred here, not silently burned.
     #[serde(default)]
     pub treasury_coins: u64,
@@ -1417,6 +1486,18 @@ impl World {
             if village.id != id { return Err("settlement id/key mismatch".into()); }
             let normalized = village.name.to_ascii_lowercase();
             if !seen.insert(normalized) { return Err("duplicate settlement names".into()); }
+            if let Some(stem) = &village.oak_stem {
+                let gather = village.gather_job.as_ref()
+                    .ok_or("oak stem saved without an active physical gather")?;
+                let expected_y = stem.root[1].checked_add(i32::from(stem.cursor))
+                    .ok_or("oak stem Y coordinate overflow")?;
+                if !(3..=4).contains(&stem.height) || stem.cursor >= stem.height
+                    || gather.good != Good::Wood
+                    || gather.position != [stem.root[0], expected_y, stem.root[2]]
+                    || gather.stand != stem.stand {
+                    return Err("invalid saved short oak stem continuation".into());
+                }
+            }
             if let Some(gather) = &village.gather_job {
                 let [x, y, z] = gather.position;
                 let [sx, sy, sz] = gather.stand;
@@ -1692,6 +1773,7 @@ impl World {
             hall_job: None,
             hall_complete: false,
             gather_job: None,
+            oak_stem: None,
             treasury_coins: 0,
             houses: 2,
             building_progress: 0,
@@ -2251,6 +2333,30 @@ impl World {
         Ok(())
     }
 
+    /// Start a whole SHORT tree only after the adapter observed all native
+    /// trunk and crown blocks. No wood is credited until individual segments
+    /// have actually disappeared and the bound lumberjack returns to hall.
+    pub fn plan_short_oak_stem(
+        &mut self, village_id: u64, root: [i32; 3], stand: [i32; 3], height: u8,
+    ) -> Result<(), String> {
+        if !(3..=4).contains(&height) {
+            return Err("only 3-4-log naturally reachable oak stems are supported".into());
+        }
+        let last_y = root[1].checked_add(i32::from(height) - 1)
+            .ok_or("oak tree height overflows native world coordinate")?;
+        if !(-2046..=2046).contains(&last_y) {
+            return Err("tree reaches outside safe native build height".into());
+        }
+        if self.settlements.get(&village_id)
+            .ok_or("unknown village")?.oak_stem.is_some() {
+            return Err("previous oak stem still pending".into());
+        }
+        self.plan_gather(village_id, Good::Wood, root, stand)?;
+        self.settlements.get_mut(&village_id).unwrap().oak_stem =
+            Some(OakStem { root, stand, height, cursor: 0 });
+        Ok(())
+    }
+
     pub fn mark_gather_issued(&mut self, village_id: u64) -> Result<(), String> {
         let job = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?
             .gather_job.as_mut().ok_or("no planned gather")?;
@@ -2277,6 +2383,7 @@ impl World {
             return Err("only a blocked gather can be discarded".into());
         }
         v.gather_job = None;
+        v.oak_stem = None;
         Ok(())
     }
 
@@ -2301,8 +2408,30 @@ impl World {
         if !job.issued || job.blocked { return Err("unproven gather cannot be credited".into()); }
         let good = job.good;
         let pos = job.position;
+        // Compute the exact next source before committing inventory, so a
+        // corrupted height cannot partially credit or advance this stem.
+        let continuation = if let Some(stem) = &v.oak_stem {
+            let next = stem.cursor.checked_add(1).ok_or("oak cursor overflow")?;
+            if next < stem.height {
+                let y = stem.root[1].checked_add(i32::from(next))
+                    .ok_or("oak height overflow")?;
+                Some((next, GatherJob {
+                    position: [stem.root[0], y, stem.root[2]],
+                    stand: stem.stand, good: Good::Wood,
+                    issued: false, blocked: false,
+                }))
+            } else {
+                None
+            }
+        } else { None };
         v.warehouse_credit(good, 1)?;
-        v.gather_job = None;
+        if let Some((cursor, next_job)) = continuation {
+            v.oak_stem.as_mut().unwrap().cursor = cursor;
+            v.gather_job = Some(next_job);
+        } else {
+            v.oak_stem = None;
+            v.gather_job = None;
+        }
         let name = v.name.clone();
         self.event(format!("{name}: physically gathered one {} at {pos:?}", good.as_str()));
         Ok(())
