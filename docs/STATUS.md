@@ -1,3 +1,17 @@
+# Latest source safety: incomplete first world save
+
+- [x] Detect orphaned `world.json.tmp` before treating a missing
+  `world.json` as a new empty world. The existing `world.json.swap`
+  fail-closed behavior remains intact.
+- [x] Refuse to overwrite any stale temporary/swap file on subsequent
+  writes, preserving original disk bytes for manual operator recovery.
+- [x] Authored three native Rust filesystem regressions and three Python
+  source-contract checks (six tests in world-switch module).
+- [ ] Rust execution, full Python suite, pinned native Horizon build and
+  Minecraft E2E are still not verified.
+
+---
+
 # Latest Draft — partial village NPC spawn recovery (source only)
 
 **Crash-safety and first compiler-diagnostic follow-up:** fixed the
