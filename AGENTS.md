@@ -1,3 +1,106 @@
+# Latest worktree — source pickup witness gate (2026-11-08)
+
+- `feat/source-pickup-witness-v0115` stacks after PR #29. Keep all
+  stacked PRs Draft; no Actions, no main merge, no playable claims
+  until actual cargo, Python and native Horizon game-world E2E.
+- `GatherJob.pickup_witnessed: bool` is serde-default false. New
+  issued native edits do NOT route the courier home until the same
+  saved UUID-bound source worker is seen at the original work stand,
+  within 3D reach, with source block air. Persist this phase BEFORE
+  worker moves toward the hall; only then may a separately observed
+  3D hall return credit one unit.
+- `witness_gather_pickup` checks issued/nonblocked and exact resident
+  ID; `confirm_gather` rejects unwitnessed source. New oak segments
+  keep worker ID but reset witness to false. Old saves remain loadable.
+- Exact native acceptance TEST_PLAN 234-244. No actual compiled client
+  or game-world E2E run here: local toolchain unavailable.
+
+---
+
+# Latest assignment gate — 2026-11-08
+
+- Work on `feat/assigned-resource-courier-v0115`, stacked on PR #28.
+  Do NOT enable GitHub Actions, merge Drafts, or claim a playable game.
+- `GatherJob.worker_id` is serde-default `Option<u64>`. Native worker
+  is selected from UUID-linked loaded 3D source actors and durably saved
+  before Issue. Same assigned resident ID is required at hall to credit
+  ONE physical wood/stone receipt, retained for each oak segment.
+- Old Issued records with worker_id None are quarantined and cannot
+  credit the village; OP recovery only with live evidence and no grant.
+  Dead/wrong-role/foreign workers cannot be newly assigned.
+- Verify Rust 1.95, Clippy, all Python source tests, pinned Horizon
+  native client compilation then disposable Minecraft TEST_PLAN 223-233.
+  Do not infer item-held animations or autonomous courier inventory.
+
+---
+
+# Newest stacked source branch — 3D native worker guards
+
+- Branch `feat/three-dimensional-native-worker-guards-v0115` now contains
+  all prior short-oak, journal, warehouse and bakery work. PR is Draft,
+  main unchanged, Actions OFF. 3D code is not a native/game PASS.
+- `native_worker_near` in core.rs rejects vertical cave/sky mismatch;
+  `native_worker_reaches_block` bounds eye-to-block 3D distance.
+  Always check the saved worker stand is loaded, two-high air, supported
+  on walkable native ground BEFORE issuing any world edit.
+- Added Rust pure numerical tests and Python source contract tests in
+  `tests/test_native_worker_3d.py`. Test cases 212-222 in
+  `docs/TEST_PLAN.md` must be run in a disposable native Minecraft world.
+- Handoff gate: build exact current SHA locally using Rust 1.95 + Python 3.11,
+  then capture errors and in-game evidence. Do not use an older main EXE
+  or auto-dispatch Actions.
+
+---
+
+# CURRENT SOURCE HANDOFF — verified short oak stem (2026-11-08)
+
+- Latest source branch: `feat/verified-oak-stem-harvest-v0115`, stacked after
+  PR #26. Keep Draft; **GitHub Actions OFF**, main unchanged. No native
+  compile/game-world proof yet. Do not publish playable claims.
+- New optional saved `Settlement.oak_stem` pairs with gather_job.
+  A confirmed **3–4-log** natural rooted oak is cut segment by segment,
+  with separate Issued state before each native edit, actual air
+  verification and UUID-bound lumberjack return before one-log credit.
+  Next log starts UNISSUED only after previous receipt is committed.
+- A failed planner save must restore the WHOLE world pre-image, including
+  oak_stem; an uncertain issued edit is quarantined, never auto-reissued.
+  OP gathercheck/discardgather recover only with live block evidence and
+  ZERO credit on abandoning uncertain segments.
+- Test suite in docs/TEST_PLAN.md cases 200–211; static tests in
+  tests/test_short_oak_stem.py and Rust module
+  verified_short_oak_stem_tests. Run full local Rust 1.95 and Python
+  toolchain tests plus pinned native Horizon compile before any merge.
+- Saplings and tree replanting, forestry/quarry buildings, real hand-carried
+  item entities and gameplay E2E are not done.
+
+---
+
+# Latest stacked local source handoff (2026-11-08)
+
+- Work from `feat/natural-forestry-gather-journal-v0115`, not `main`.
+  Stacked Draft PRs contain the latest native hall, warehouse, bakery,
+  operator recovery and conservative oak/stone gathering changes.
+- **GitHub Actions must stay OFF.** Do not merge or declare a playable build
+  on the basis of source-only static checks or historic CI.
+- First run `cargo fmt --all`, `cargo test`, Clippy, all Python tests,
+  `tools/package.py` and `tools/verify_static.py` with pinned Rust 1.95.
+  Then `tools/native_build.py --test --build-client` and isolate an actual
+  prepared Minecraft world. Record SHA/logs for each compile/test failure.
+- New `/civ diagnose NAME` shows a read-only NPC/world blocker;
+  `/civ gathercheck NAME` audits the persisted native wood/stone gather;
+  `/civ discardgather NAME intact|empty` is OP-only and abandons a blocked
+  **Issued** harvest with ZERO resource credit only after loaded native
+  evidence matches. Never blindly reissue an uncertain Minecraft edit.
+- Oak harvesting presently allows only the first soil-rooted trunk block,
+  not full-tree felling, replanting or a constructed lumberyard. The mod
+  cannot distinguish player-grown oak from worldgen oak outside claims by
+  block states alone. Preserve purchased land protection.
+- Tests and local playtest instructions: `docs/TEST_PLAN.md` cases 189-199
+  and `docs/PLAYTEST.md`. Keep all saves and actual Minecraft assets out of
+  this MIT repository.
+
+---
+
 # Local agent handoff: Horizon Civilizations
 
 Do not fork upstream Horizon for this project. It is a native mod with a pure

@@ -1,8 +1,9 @@
 # Local Horizon Civilizations playtest
 
-**Current assurance:** native `cargo check` and embedded core unit tests passed on
-the pinned Horizon revision. The 3D client has **not** been launched or verified
-with a Minecraft world. Building an executable is not an in-game E2E.
+**Current assurance:** an older pinned Horizon native branch previously passed
+`cargo check` and embedded Rust tests. The latest v0.1.14 stacked source in
+`feat/first-play-diagnostics-v0115` has **not** passed native compile or
+Minecraft E2E. Do not reuse an old binary as evidence for this stack.
 
 ## Build on your own development PC
 
@@ -124,7 +125,7 @@ and sufficient disk/RAM, run:
 
 ```powershell
 git fetch origin
-git switch feat/safe-village-housing-proposals-v019
+git switch feat/first-play-diagnostics-v0115
 cargo fmt --all
 cargo fmt --all --check
 cargo clippy --all-targets -- -D warnings
@@ -341,3 +342,173 @@ must still work.
 **This is source-only until tested.** GitHub Actions remain disabled.
 Stop at any blocked native transaction; never repeatedly retry a crashed
 order or force-merge into main. [TEST_PLAN](TEST_PLAN.md) cases 139–158.
+
+
+## Latest first-play quickstart — unreleased diagnostic branch
+
+Use **only a disposable world**, with a local Rust 1.95.x toolchain, Python
+3.11+, Git, MSVC/C++ build dependencies, sufficient RAM/disk and legal Minecraft
+Java resources. Old `main` builds do not contain this feature stack.
+
+```powershell
+git fetch origin
+git switch feat/first-play-diagnostics-v0115
+.\scripts\validate-local.ps1 -Format
+.\scripts\validate-local.ps1 -BuildClient
+```
+
+Do **not** run GitHub Actions. `-Format` changes formatting only in the local
+checkout; inspect the diff and do not auto-push it. On success, use the exact
+new client binary printed by the native builder with the official Horizon
+Launcher. Source-only `.hnmod` files are **not** Windows executables.
+
+In Minecraft creative (fresh disposable world), run:
+
+```text
+/civ found Ashford
+/civ diagnose Ashford
+/civ roster Ashford
+/civ hall Ashford
+/civ warehouse Ashford
+/civ bakery Ashford
+```
+
+Keep the area loaded. Do **not** run `/civ actors`, `/civ construct` or
+`/civ farm` when verifying default-on autonomy. Diagnose shows a single
+read-only snapshot; NPC movement and production still require visual checks.
+If the build or launcher fails, capture exact command, source SHA, error log
+and the first failing test rather than assuming the game code worked.
+
+## Physical bakery stock control (not yet game-verified)
+
+A completed bakery no longer attempts infinite bread production in source:
+it stops at two loaves per living resident, capped at 64, counting native
+barrel bread plus confirmed incoming bread and bread already carried by
+the baker. Player bread purchases can reopen demand. If the actual native
+barrel state is unavailable, wheat extraction and crafting pause. This
+does not count abstract day-simulation food. Test cases: 182–188.
+
+## Latest physical forestry / resource journal acceptance (unreleased)
+
+Use branch `feat/natural-forestry-gather-journal-v0115` on an isolated local
+checkout. It includes prior physical hall, warehouse, bakery, safe barrel
+recovery and diagnostics changes. It is **not** a game-verified binary.
+
+```powershell
+git fetch origin
+git switch feat/natural-forestry-gather-journal-v0115
+.\scripts\validate-local.ps1 -Format
+.\scripts\validate-local.ps1 -BuildClient
+```
+
+If both native build commands pass, launch the resulting exact-commit
+`horizon-client.exe` with your owned Minecraft Java resources and
+official launcher in a NEW disposable world. Keep loaded trees and
+stone near `/civ found Ashford`; observe `/civ diagnose Ashford`,
+`/civ roster Ashford`, `/civ warehouse Ashford`.
+For a blocked issued natural gather, use OP `/civ gathercheck Ashford`
+and only if original block evidence is directly inspected, OP
+`/civ discardgather Ashford intact` or `... empty`. This explicitly
+abandons any disputed resource with **zero** credit; it is NOT a replay
+or a refund. Preserve full world backup and logs before intervention.
+
+The forest predicate verifies a natural-looking rooted tree, not player
+provenance. A player-grown oak outside registered parcel protections
+looks identical to a world-generated oak. Do not use in important worlds.
+See TEST_PLAN 189-199; true multi-log tree felling and replanting
+remain separate work.
+
+## First-play: sequential short-oak logging (unreleased source)
+
+New stacked branch: `feat/verified-oak-stem-harvest-v0115`, **not** main.
+
+```powershell
+git fetch origin
+git switch feat/verified-oak-stem-harvest-v0115
+.\scripts\validate-local.ps1 -Format
+.\scripts\validate-local.ps1 -BuildClient
+```
+
+Do not start GitHub Actions. Build/check locally, then import the EXACT
+new compiled client EXE using the official Horizon launcher and legally
+owned Minecraft Java resources. Test only a disposable world.
+
+After /civ found Ashford, use /civ diagnose Ashford and /civ warehouse
+Ashford. A small 3-4 log natural oak can produce several physical logs,
+**one verified log for each returning lumberjack trip**. OP
+/civ gathercheck Ashford shows the step; it does not modify stock.
+Do not infer Minecraft item carrying animation from the domain delivery
+receipt. Unsupported tall trees are untouched. NO sapling replanting or
+whole-forest renewable production is implemented yet. Follow TEST_PLAN
+200–211 and back up the entire disposable save before fault injection.
+
+Older instructions below refer to historical releases and capabilities;
+their previous local/native assurance does NOT carry over to this branch.
+
+## Latest 3D physical-worker safety trial (unreleased source)
+
+To test all stacked changes, check out
+`feat/three-dimensional-native-worker-guards-v0115` on Windows with
+Rust 1.95, Git, Python 3.11+ and legal Minecraft Java resources:
+
+```powershell
+git fetch origin
+git switch feat/three-dimensional-native-worker-guards-v0115
+.\scripts\validate-local.ps1 -Format
+.\scripts\validate-local.ps1 -BuildClient
+```
+
+Do NOT enable GitHub Actions. Inspect any local source formatting changes
+before keeping them. Use only the fresh executable from this exact
+successful build and a disposable new world; source-only .hnmod is NOT a
+compiled mod. For vertical safety proof follow TEST_PLAN cases 212-222:
+a worker in a cave beneath the hall must not count as physically returned.
+A worker at a tree's X/Z without the saved clear work stand and eye-level
+reach may NOT mine it. These checks are implemented only in source until
+a real native gameplay E2E is recorded.
+
+## Same-worker wood/stone receipt trial — newest source, not yet game-verified
+
+Checkout `feat/assigned-resource-courier-v0115`, not `main`:
+
+```powershell
+git fetch origin
+git switch feat/assigned-resource-courier-v0115
+.\scripts\validate-local.ps1 -Format
+.\scripts\validate-local.ps1 -BuildClient
+```
+
+Rust 1.95, Git, Python 3.11+, native OS build dependencies, official
+Horizon launcher and legally owned Minecraft Java resources required.
+GitHub Actions remain intentionally disabled. Use the EXACT newly built
+client binary and a NEW disposable world only.
+
+A gather has an assigned `worker_id` in the saved journal before any
+block edit. The same UUID-linked resident must physically reach the
+source and return to the hall, not simply any same-job villager already
+standing near it. OP `/civ gathercheck NAME` shows the assigned resident.
+Legacy unknown-issued journals must remain quarantined, not granted.
+TEST_PLAN 223-233 documents exact crash/identity tests. This does NOT
+implement a visible item model in the NPC's hands.
+
+## Latest first-play checkpoint: source pickup before return to hall
+
+Newest source branch (still **not compiled or gameplay-verified**):
+`feat/source-pickup-witness-v0115`.
+
+```powershell
+git fetch origin
+git switch feat/source-pickup-witness-v0115
+.\scripts\validate-local.ps1 -Format
+.\scripts\validate-local.ps1 -BuildClient
+```
+
+Keep GitHub Actions OFF. Use only a newly compiled native Horizon game
+client with legitimately owned Minecraft Java assets and a disposable
+world. An issued log/stone gather must wait for its EXACT saved worker
+to witness the now-air source from the real work stand. Only after
+that durable witness does the worker navigate to the town hall, where
+a separate 3D return can release one source-backed resource receipt.
+`/civ gathercheck Ashford` and `/civ diagnose Ashford` now report
+whether pickup was witnessed. See TEST_PLAN 234-244 and retain full
+world/actor/log evidence. No claimed visible carried ItemStack.

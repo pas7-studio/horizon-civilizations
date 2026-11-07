@@ -303,3 +303,168 @@
 - Changes were written to GitHub; Rust/Python executable suites, Horizon
   native compilation and actual Minecraft gameplay were **not run**. No CI
   activation, no merge, no claim of playable binary.
+
+## 2026-11-08 — OP warehouse recovery + unified hall display (unreleased source)
+
+- Added an authenticated OP-only, read-only native barrel inspection command:
+  `/civ barrelcheck NAME`. It reports the specific saved native transaction
+  and actual observed official barrel quantity. Missing/unloaded containers
+  are reported as unknown rather than accepted as empty.
+- Added strict OP-only manual reconciliation commands. `cancel` is allowed
+  for unissued Planned intents when a fresh native count equals `before`.
+  `confirm` is allowed only for Blocked receipts when native count equals
+  `expected_after`; this changes only the persistent ledger and never
+  calls a native inventory mutation. Ambiguous counts remain quarantined.
+  Native market-purchase journals are explicitly outside this mechanism.
+- Hall bulletin shortage values use the combined bakery+hut actual material
+  calculation. An unresolved native receipt causes the sign to display
+  `STOCK CHECK / PENDING TX` rather than a potentially false shortage.
+- Added four Rust domain and six Python source tests; no Rust/Python suites
+  or live Horizon/Minecraft E2E were executed. Do not use on real worlds
+  until compile, migration, operator recovery and crash fault tests pass.
+
+## 2026-11-08 — First-play diagnostic milestone (unreleased source)
+
+- Added `/civ diagnose NAME` (ordinary users, read-only) to report actual
+  loaded UUID-linked roles, current daytime shift, civic hall construction,
+  native warehouse availability, bakery escrow/batches, planned gathering
+  and the first saved-state blocker. No native item transfer, block mutation
+  or persistent world change from the command.
+- Combined supply deficit in this command uses the same native barrel
+  snapshot and dual-project helper as warehouse planning, rather than the
+  abstract economy. Missing/unloaded vanilla block entities are reported
+  as unavailable, not as empty.
+- Fixed PLAYTEST quickstart guidance to use the newest stacked branch instead
+  of obsolete v0.1.9 checkout and to distinguish old native CI from this
+  unbuilt v0.1.14 source stack.
+- Added six Python source contracts and first-play acceptance tests 175–181.
+  Local executable Rust/Python tests, native compile and in-game verification
+  remain unperformed here. No GitHub Actions or merge.
+
+- Added physical bread-restocking backpressure at both native wheat pickup
+  and baking workbench. The pure helper uses 2 bread per living resident
+  (maximum 64), counts verified native barrel items + confirmed inbound
+  receipts + bakery bread-in-transit, not abstract daily stock.
+  Missing/unloaded barrel inventories pause bread production. Full bread
+  reserves do NOT starve the steward's other goods deliveries.
+- Three Rust domain cases and five Python source contracts authored for the
+  food buffer. No native build or game execution performed here.
+
+## 2026-11-08 — natural oak and write-ahead gather safety (unreleased source)
+
+- Replaced single-adjacent-leaf matching with pure native oak rooted-tree
+  inspection: real soil, at least three contiguous logs, upper oak canopy,
+  loaded block checks and conservative bounded height. This selects an
+  actual first trunk block at ground level; whole-tree felling/replanting
+  remain a later feature. Other native/player-placed trees outside mod
+  claims cannot be distinguished from naturally grown trees by block
+  states alone. Avoid production worlds.
+- Added shared `World::gather_site_unclaimed` policy used both at plan
+  creation and at actual issue, preventing a new player-purchased plot or
+  pending structure from being mined after the original plan.
+- Changed native wood/stone resource sequence to persist `Issued` BEFORE
+  native `setblock`, with fail-closed no-command-on-save-error. A crash
+  after issue can block without credit; the same source is never blindly
+  retried. Unissued failed plans can be discarded automatically; issued
+  blocked receipts are quarantined.
+- Added OP-only `gathercheck` and `discardgather NAME intact|empty`
+  for manual, evidence-matched abandonment with ZERO stock credit, rather
+  than any unobserved grant or automatic replay. Other village planner
+  work continues while a source job remains quarantined.
+- Strengthened persisted gather bounds and worker stand checks on load.
+  Nine new Rust tests and nine new Python source contracts authored.
+- No Rust/Python suite, formatter, Clippy, native game compile or in-world
+  execution was possible here. GitHub Actions remain OFF, main unchanged.
+
+## 2026-11-08 — short-oak stem continuation, one physically returned log per receipt
+
+- Added `OakStem {root, stand, height, cursor}` as an optional durable
+  settlement field. Old saves deserialize it to None. Domain validation
+  prevents orphaned/mismatched segment cursors, missing gather job,
+  invalid height or wrong physical source.
+- Native forester measures only a confirmed naturally rooted leaf-bearing
+  oak of 3–4 reachable logs. Extra-tall trees stay intact until an
+  appropriate scaffold/worker mechanic exists; a tree's root log alone is
+  no longer the complete harvest.
+- After the issued Minecraft conditional edit, native observation of air
+  AND actual UUID-bound lumberjack return to the town hall credit exactly
+  one oak log. Only then does the core advance to the next UNISSUED log.
+  Each next log checks the saved air prefix, live oak suffix, crown and
+  current land-ownership claims before any further native edit.
+- The planner previously rolled back only gather_job on save failure.
+  It now preserves the full previous World so the new oak_stem field
+  cannot be stranded without its gather. Quarantined issued receipts
+  remain manual-only and an abandonment yields zero materials.
+- Updated both /civ diagnose and OP /civ gathercheck with current oak
+  step N/total for actual first-play troubleshooting.
+- Eight new Rust tests and nine Python structural checks authored;
+  corrected stale test scopes after adding the OP gather commands.
+  They were NOT executed with Rust/Python toolchains in this environment.
+- Source-only; actual native compile, server tick behavior, loaded chunk
+  logic, legacy save migration and game E2E remain unverified.
+
+## 2026-11-08 — 3D worker presence, block reach and work-stand revalidation
+
+- Found native actors near hall/farm/bakery were recognized by horizontal X/Z
+  alone. This could let a UUID-linked villager below a village in a cave
+  authorize wood, stone, wheat or bread production while not physically
+  present. Added reusable finite-checked 3D actor proximity with vertical
+  bounds; used by all physical resource work and deliveries.
+- Resource extraction additionally requires 4.5 blocks of physical eye-to-
+  block reach and being near the saved accessible worker stand. That stand
+  is freshly re-observed (feet/head air, walkable floor) immediately
+  before issuing any native Minecraft block command. A new obstacle or
+  unloaded stand fails closed.
+- Navigation now considers vertical mismatch, rather than indefinitely
+  treating a vertically displaced NPC as arrived.
+- Source-only tests: 3 Rust numerical regression examples, 11 Python
+  source contracts. 17/17 initial static assertions passed before the
+  stand recheck; refreshed final checks pending. No runtime tests or native
+  game build were run. GitHub Actions intentionally remain off.
+
+## 2026-11-08 — assigned, durable resource courier identity (unreleased)
+
+- Audited native gather: one UUID-linked lumberjack could issue a physical
+  block edit, but ANY other same-role worker already at the hall could
+  complete `confirm_gather`. This incorrectly treated worker profession
+  and proximity as evidence of an actual return.
+- Introduced serde-default `GatherJob.worker_id: Option<u64>`. A new job
+  starts unassigned. After live 3D source-worker observation, a single
+  qualified, living village resident is assigned and saved as a separate
+  durable step before `Issued` and any native edit.
+- `mark_gather_issued` and `confirm_gather` reject unbound jobs.
+  `gather_one_step` accepts delivery ONLY by the previously assigned
+  UUID-linked resident at the real 3D hall. A legacy Issued journal
+  without worker_id is blocked/quarantined and never credited.
+- Bound worker ID persists into every subsequent short oak stem segment,
+  across reloads. Guide routing honors assignments so same-role
+  unassigned NPCs cannot take over someone else's saved task.
+- Added six Rust tests and ten Python source contracts covering
+  valid binding, theft prevention, old receipt handling, unknown
+  foreign resident ID, dead workers and crash/restart continuation.
+- Static inspection only. Rust/Python suites/native Horizon compilation
+  and actual Minecraft gameplay have NOT been executed.
+
+## 2026-11-08 — source witness gates NPC resource return
+
+- Problem: an assigned, UUID-linked worker could be sent to the hall
+  immediately after `Issued`, without observing its source already
+  changed to air. A save reload or unrelated native removal could
+  otherwise leave source-side work indistinguishable from a carried
+  resource receipt.
+- Added backward-compatible `GatherJob.pickup_witnessed` (false by
+  default). After an issued native block edit, `gather_one_step`
+  demands an actual loaded, linked **same resident** still at the
+  saved 3D source stand, within native eye-to-block reach, while the
+  source block is air. This saves the witness before route return.
+- `guide_actors` sends the bound resource worker home only when
+  `issued && pickup_witnessed`; otherwise they remain at the
+  original source stand. Blocked resource jobs return to ordinary
+  routines rather than repeatedly navigating into quarantined work.
+- A second, independent same-worker 3D hall arrival is still
+  necessary for one item-accounting receipt. Successor short-oak
+  segments reset to unwitnessed/unissued.
+- Added seven Rust tests and ten Python structural source contracts;
+  older tests updated so they cannot skip witnessing.
+- Source-only inspections performed; no Rust compile, Python unittest,
+  native Horizon build or Minecraft E2E. No change to main/Actions.

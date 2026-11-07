@@ -464,3 +464,322 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
      and E2E: NPC pathfinding, chunk unload/reload, two-building funding,
      actual game item counts, shift changes and crash windows. Preserve
      screenshots/world/logs; no GitHub Actions or automated merge.
+
+
+## OP warehouse recovery and bulletin acceptance (unreleased source)
+
+167. On disposable world from exact stacked latest branch, build native
+     Horizon, pass `cargo fmt --all --check`, `cargo test`, Clippy,
+     Python tests and package verification. Do not count source assertions
+     as a native build. Confirm current save backup and pinned Horizon SHA.
+168. Save a `Planned` deposit receipt with unchanged real barrel stock;
+     `/civ barrelcheck Ashford` must show saved before/after and actual
+     native count. Non-OP may not inspect or resolve. A loaded physical
+     barrel is required; no remote unloaded-JSON-only recovery is allowed.
+169. OP: `/civ resolvebarrel Ashford cancel 0` (with 0 equal to the
+     observed original count, replace with actual value in the test).
+     Original Planned receipt clears once, incoming goods remain pending.
+     No Minecraft items are inserted or removed by cancellation.
+170. After an `Issued` state, even if the current barrel count equals the
+     originally observed before-count, `cancel` must refuse. A Blocked
+     receipt must also refuse `cancel`; never silently refund inventory.
+171. Simulate a physically completed native deposit followed by a crash
+     before JSON confirmation: mark receipt `Blocked`, verify actual
+     count equals expected_after; OP explicitly enters
+     `/civ resolvebarrel Ashford confirm <actual_count>`. Only the saved
+     warehouse receipt is committed; exactly one native inventory change
+     must be observed across reload and subsequent planner ticks.
+172. If actual count differs, chunk is unloaded, wrong dimension, a market
+     order is present, input count is stale or receipt is not Blocked,
+     `confirm` must refuse and leave world.json and native items unchanged.
+     Test an accounting failure after preflight to ensure original blocked
+     journal is restored, not cleared.
+173. With a bakery plus unfinished public hut and empty barrels, town-hall
+     NEEDS sign and `/civ warehouse Ashford` must display the same 44
+     logs / 58 cobblestone. With any unsettled native receipt the sign must
+     display `STOCK CHECK / PENDING TX`, not guessed shortages. After
+     reconciliation and refresh, its normal shortages must return.
+174. Verify no stock duplication under restart, neighboring hopper action,
+     external OP barrel edits or native chunk save failure. A matching total
+     alone is not proof of origin; OP must compare detailed slots and logs.
+     Keep multiplayer disabled until verified.
+
+
+## First-play live diagnostics (unreleased source)
+
+175. In fresh disposable creative world on the **latest** stacked branch,
+     compile the pinned native Horizon client and record exact Git commit,
+     binary path and mods loaded. Run `/civ found Ashford` once; do NOT
+     manually run actors/construct/farm. `/civ diagnose Ashford` must exist.
+176. With all chunks loaded, compare `/civ diagnose Ashford` actual
+     UUID-linked resident count and job roles with `/civ roster Ashford`.
+     The diagnostic must NOT claim unloaded, unbound or renamed impostors
+     are present. Time changes should accurately show worker shift.
+177. Before the civic hall completes, diagnose must report the exact
+     incoming real wood/stone shortage and NOT use abstract daily stock.
+     Add physical oak logs/cobblestone with real inventory trades and observe
+     the reported deficit shrink only after an actual receipt is saved.
+178. After completing the hall, unload one public barrel chunk/entity or
+     remove the barrel in a disposable save. Diagnose must report native
+     barrels unavailable, not 0 goods. Reload/restore and observe the real
+     combined bakery+hut building deficit using actual native item counts.
+179. In a test save with a pending or blocked native barrel receipt,
+     `/civ diagnose Ashford` must report native journal unresolved and
+     direct the OP to `/civ barrelcheck Ashford` without moving items.
+     A pending market purchase must take precedence; never auto-refund.
+180. Use byte-for-byte save comparison and actual inventory snapshots to
+     verify 20 diagnostic calls do not mutate world.json, blocks, barrels,
+     player coins or inventory. Other autonomous ticks may naturally change
+     game state, so stop simulation or isolate command execution when
+     comparing before/after; never attribute unrelated ticks to diagnose.
+181. Test non-OP and wrong-dimension access, an off-shift builder, a blocked
+     hall construction job, an absent builder, an unfinished bakery and
+     unavailable natural plots. Each should produce a meaningful blocker
+     without changing the world or claiming gameplay acceptance.
+
+## Physical bread demand and warehouse backpressure (unreleased source)
+
+182. Build exact branch and confirm Rust/Python suite. Create settlement
+     with 10 living residents and completed native hall/bakery. The target
+     physical bread buffer should be 20 loaves. Record both actual barrels,
+     confirmed inbound bread, and baker-carried bread separately.
+183. With 20 native bread and plentiful wheat, verify baker withdraws no
+     wheat and crafts no additional loaf. Other warehouse delivery of
+     logs/stone/wheat must still proceed normally.
+184. With 15 on shelf, 4 confirmed inbound bread, zero in transit, one
+     new loaf is needed. After it is delivered, baking must pause at 20.
+185. With 18 bread on shelf and 2 baker-carried finished bread receipts,
+     baking must pause until those loaves are deposited. Save/reload
+     cannot cause an extra batch.
+186. Missing/unloaded official native barrel must pause wheat extraction
+     and crafting. Restoring both native block entities resumes work,
+     without treating an unavailable container as empty.
+187. Trade away 5 actual bread after reaching target: the baker should
+     resume bounded real-wheat restocking once the purchase is settled.
+188. Test no living baker/residents, shifts, saved journals, extra
+     already-extracted wheat and simultaneous hut funding. No parallel
+     warehouse goods should be starved by full bread buffer.
+
+## Native forestry, land reacquisition and crash-atomic gather (unreleased)
+
+189. On newest stacked commit, locally run Rust fmt, clippy, cargo test,
+     full Python tests and pinned Horizon native build. Record commit SHA
+     and build logs. Do not treat textual assertions as a compiled mod.
+190. In a disposable grassy world, position Ashford near ordinary oak trees.
+     Confirm a UUID-bound lumberjack selects a soil-rooted, crown-bearing
+     **LOWEST** oak trunk log with a physically accessible standing cell,
+     not an unreachable canopy block. Confirm one block mined and one
+     corresponding physical delivery receipt after returning to hall.
+191. Test an oak decorative log with leaves positioned near it, a floating
+     trunk, a trunk on cobblestone, a severed middle trunk and an unloaded
+     canopy. None may be automatically harvested as natural lumber.
+192. Mine an exposed natural stone resource. Confirm miner visits the
+     loaded real site, native command removes only that expected stone,
+     and one cobblestone appears in incoming physical warehouse receipt
+     only after that UUID-bound miner returns to the hall.
+193. After the gather job is planned but before worker reaches source,
+     register a player-purchased parcel or civic building claim that
+     overlaps source or stand. Native issued state must not be saved,
+     the claimed block must remain unchanged and no resource credited.
+194. Fault-inject failure when persisting `Issued` before native block
+     mutation. Confirm the command was NOT sent and the physical block
+     was NOT touched. Inspect unchanged world and previous saved journal.
+195. Stop process immediately after `Issued` persistence but BEFORE
+     native command. On resume, original block remains. Next tick may
+     mark Blocked but must NEVER issue a second native edit; zero
+     resource credit, and the planner must not silently discard this
+     uncertain issued receipt.
+196. Stop after native conditional block mutation but before observation.
+     On reboot, the saved issued journal must remain and native air
+     observation + physically returned UUID-linked worker must credit
+     exactly once. No additional harvesting of the same source.
+197. Attempt `/civ gathercheck Ashford` and `/civ discardgather Ashford
+     intact|empty` as non-OP, wrong dimension, unloaded native chunk,
+     on a not-blocked receipt, with mismatch between typed evidence and
+     actual block, and with no pending gather. All must refuse and
+     preserve stock; read-only audit must not mutate anything.
+198. With a Blocked+Issued receipt, inspect native source and manually
+     select the exact `intact` or `empty` mode; explicit abandonment
+     clears only the job, with **zero** resource credit. Unissued blocked
+     candidates may be auto discarded. Village hall, farm and bakery
+     planning must continue while an issued gather is quarantined.
+199. Test two settlements and multiple dimensions, replay from backed-up
+     world.json, whole daytime shift, native chunk unloads, resource
+     replenishment and bought claims. Record actual game logs, block
+     evidence and item counts. Whole-tree felling, sapling sourcing,
+     replanting, lumberyard/quarry buildings are NOT part of this PR.
+
+## Short rooted oak stem, per-log inventory and restart acceptance
+
+200. From the exact latest stacked branch, run local rustfmt check, cargo
+     test, clippy, full Python tests and pinned native Horizon client
+     compilation. Record SHA, first failure, versions and command output.
+     Previous Actions artifacts from main do not include this branch.
+201. In a fresh disposable world, choose a loaded ordinary rooted oak
+     with 3-4 vertically connected native logs, actual leaf crown,
+     unobstructed 2-high worker stand and village building demand.
+     Confirm one *saved* OakStem with cursor 0 and an unissued root gather.
+202. UUID-bound lumberjack arrives, original root log is removed by a
+     conditional native edit. No abstract virtual wood or player item is
+     created. Only after the same linked worker returns to the hall may
+     incoming physical wood increase from 0 to 1 and the next log at y+1
+     be planned unissued.
+203. Repeat for all 3-4 logs. Every log requires a distinct persisted
+     Issued state, actual changed native block, authoritative air read
+     and a real linked worker return. At final delivery oak_stem and
+     gather_job both disappear. Each log credits exactly one incoming
+     vanilla oak log; no duplicates after normal reload.
+204. Stop between previous log's native edit and the returning-worker
+     receipt. On restart, pending Issued state must not create a second
+     edit. When the saved job is safely observed as air and worker returns,
+     the next segment must be planned once only.
+205. Stop after one delivery saves the next unissued segment, before the
+     worker reaches it. On restart, previous log remains counted exactly
+     once, next segment unissued and its native block intact.
+206. Fault-inject failure persisting the initial multi-log plan and
+     verify old World is restored exactly, including both gather_job
+     and oak_stem. NO future tick may reference a dangling stem.
+207. Remove/replace any upper trunk log, crown leaf or source chunk
+     before its next unissued edit; job must fail closed and NEVER
+     overwrite a foreign block or issue a second native action.
+208. Purchase a player's 5x5 parcel covering tree or worker stand
+     after planning the stem (including between two logs). The next
+     segment must refuse despite saved original tree evidence.
+209. Force uncertain issued native operation, then OP
+     /civ gathercheck Ashford. Quarantined issued stem must NOT
+     auto-discard or replan; OP /civ discardgather Ashford intact|empty
+     only after live matching native observation, clearing all
+     remaining segments with ZERO extra wood credited.
+210. Test trees taller than four trunk logs, a single decorative oak log
+     with leaves, floating wood, canopy across unloaded chunk and
+     old saved single-log GatherJob without oak_stem. The new planner
+     refuses unsupported tall/uncertain stems, legacy jobs remain
+     single-log with no imaginary continuation.
+211. With multiple settlements/dimensions, compare /civ diagnose,
+     /civ gathercheck, /civ warehouse and actual world blocks/barrels,
+     after two or more relogs and day/night transitions. Keep complete
+     crash logs/screenshots. No claim of real sapling replanting,
+     full forestry building or rendered item courier at this stage.
+
+## Native 3D actor presence and resource work-stand acceptance (unreleased)
+
+212. On exact latest branch, run rustfmt, cargo check/test, clippy,
+     the full Python suite and pinned native Horizon client build locally.
+     Record SHA and first failure; old CI/Windows binaries are not proof.
+213. Place UUID-linked lumberjack/miner in the cave 15-25 blocks vertically
+     below a saved natural gather site while retaining identical X/Z.
+     No native block edit, Issued journal or resource credit may occur.
+214. Move the worker onto the saved clear two-high natural stand at the
+     correct Y. A normal 3–4-log tree harvest can proceed one log per
+     return, with actual 4.5-block eye-to-source-block reach.
+215. Move a worker near the source only in X/Z but to Y +10 and Y -10;
+     even if their name and UUID are valid, no mining command is allowed.
+216. After planning a gather but before its native Issued action, place a
+     stone wall in the saved stand (or one block above it). Preflight
+     must block safely, neither overwrite the foreign block nor credit wood.
+217. After planning but before issue, remove/replace the worker stand's
+     walkable floor or unload that chunk. Native extraction must refuse.
+     Restore source/stand and replan only after safe settlement state.
+218. Place the steward 15 blocks above/below the completed town hall while
+     keeping X/Z identical. Warehouse barrel insertion/extraction must
+     not be authorized until a true 3D presence at the hall.
+219. Place the returning miner and farmer in a cave directly underneath
+     the hall. Their issued physical receipts must not be credited as
+     delivered until an actual UUID-linked worker returns to hall height.
+220. Test bakery crafter far above/below crafting table: cannot consume
+     wheat or produce bread. Test builder directly below/above an
+     unfinished hut/civic hall/bakery: cannot place native blocks.
+221. Confirm vertical navigation correction triggers when resident is at
+     target X/Z but wrong Y, and that missing/blocked path does not
+     silently teleport, complete jobs or mint resource credits.
+222. Test non-finite actor positions, negative/nonfinite radii in Rust,
+     dimension mismatch, two villages and short-tree upper logs. No
+     cross-dimensional, off-shift or fake remote worker confirmation.
+
+## Assigned UUID-bound gather courier, identity & crash continuity
+
+223. Compile the exact latest stacked source locally with rustfmt, cargo,
+     Clippy, complete Python unittest and native Horizon client. Record
+     commit SHA, exact binary and any first failing test; old build
+     artifacts are not evidence for this code.
+224. In a fresh disposable world, select a natural loaded oak or exposed
+     stone. Confirm initial `GatherJob.worker_id` is absent; the worker
+     must be physically at the recorded work stand with 3D reach before
+     assigning. The saved resident ID must be persisted **before**
+     `Issued` and the first native conditional block command.
+225. Make another qualified worker appear at the source/hall while the
+     first saved worker is assigned. The identity must NOT change;
+     only that resident may mine or claim the returned item receipt.
+226. Have another same-role, UUID-linked NPC stand at the hall while
+     the assigned worker is still at the tree/mine. Confirm zero wood
+     or stone gets credited until the actual assigned worker returns.
+227. On the assigned worker's correct 3D return to hall, confirm exactly
+     one resource receipt; duplicate ticks/relog must not credit twice.
+228. For a short 3-4-log oak, check each saved next segment carries the
+     SAME worker_id, begins unissued and cannot reassign to a substitute.
+     After the last confirmed segment, both job and tree cursor clear.
+229. Crash after assignment is saved but before Issued. Reload and
+     verify the same resident ID is still bound and the block untouched.
+     Next valid source action must issue at most once.
+230. Crash immediately after Issued, before the original block disappears,
+     and then after native deletion but before return. Neither crash
+     may cause blind replay or allow another worker to finish the receipt.
+231. Deserialize a legacy Issued gather journal without `worker_id`:
+     no worker, even at the hall, can credit it. Job must be marked
+     blocked/quarantined; OP audit and evidence-matched discard supply
+     ZERO material. An old unissued journal may receive a new valid
+     durable assignment and continue safely.
+232. Kill, unload or unbind the assigned UUID-linked NPC mid-delivery.
+     Different NPCs may NOT release its saved receipt. Use OP
+     `/civ gathercheck` and careful recovery on disposable backed-up
+     saves. Observe that a dead resident is not newly assignable.
+233. Run simultaneous village jobs across two settlements/dimensions,
+     using at least two workers of the same profession where feasible.
+     Worker IDs are scoped to the settlement and wrong-role/foreign
+     IDs fail domain validation. Record blocks, native actor UUIDs,
+     receiving area and JSON before/after. This is an identity-backed
+     delivery gate, NOT proof of a rendered item in the NPC's hands.
+
+## Source-witnessed native resource pickup / courier return (unreleased)
+
+234. On the exact newest stacked branch, run Rust formatter, cargo check,
+     Clippy, cargo test, full Python unittest and pinned Horizon native
+     client compile. Record SHA and logs. Do not use a previous main build.
+235. Start fresh disposable Ashford, select physically accessible native
+     stone and short rooted oak. Verify planned gather has no pickup
+     witness and no credit. Bind a specific UUID-linked worker at source;
+     persist worker_id, then persist Issued before native edit.
+236. Confirm a native conditional block edit removed the exact source
+     (air observed). BEFORE any hall movement/credit, the same assigned
+     worker must still be physically near the saved clear work stand and
+     within 4.5-block eye-to-native-source reach.
+237. At Issued + native air but no bound worker at source, the job
+     remains unwitnessed, no hall routing and zero material credit.
+     A second same-role villager nearby cannot substitute as a witness.
+238. After witnessing, inspect durable world JSON (pickup_witnessed=true)
+     and prove that the same worker is NOW routed toward the real
+     town-hall receiving area. A different worker already at the hall
+     must not credit the pending resource.
+239. After the correct worker actually reaches the hall in X/Y/Z,
+     exactly ONE wood/stone appears in the confirmed physical queue.
+     Repeat update ticks and reload to prove no duplicate credit.
+240. Kill/unload/change the worker identity after native edit but before
+     source witness. The job waits or remains quarantined with zero
+     credit; never move or grant material based only on an air block.
+241. Stop/restart between Issued and source witness and again after
+     witness save before hall delivery. Confirm no blind native
+     block-edit retries and same durable worker, source/cursor and
+     pickup state after both crashes.
+242. For a 3-4-log native oak, confirm EVERY next saved log has same
+     resident ID but resets issued=false and pickup_witnessed=false.
+     Repeat complete source-and-hall evidence for each log separately.
+243. Load a legacy saved Issued job missing pickup_witnessed: the
+     field defaults false. The worker must first revisit loaded native
+     source and witness air, not automatically grant stock at hall.
+     Legacy unassigned issued receipts remain OP-quarantined.
+244. Modify source/stand after issue, obstruct NPC route, test
+     multiple villages/dimensions and OP abandon. No foreign
+     block replacement, unstaged virtual inventory or silent
+     recovery. Collect logs, source block/actor UUID checks and
+     actual barrel item counts. This proves a receipt witness only,
+     NOT a visually held Minecraft ItemStack.

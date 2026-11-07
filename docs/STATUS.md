@@ -1,3 +1,233 @@
+# Latest unreleased source — witnessed physical resource pickup (PR pending)
+
+Branch `feat/source-pickup-witness-v0115`, based on Draft PR #29.
+This is **source code, NOT a native-compiled or gameplay-verified release**.
+Version remains 0.1.14, `main` unchanged, GitHub Actions OFF.
+
+- [x] An issued wood/stone job now has a persisted `pickup_witnessed`
+  flag (serde default false for existing saves). The same UUID-linked,
+  durably assigned resident must be observed at the original loaded work
+  stand, in 3D reach of a confirmed native air source, after issue.
+- [x] The worker is routed back to the town hall **only after** this
+  witnessed source state has been persisted. The subsequent separate
+  3D return to the village releases exactly one receipt to the physical
+  warehouse queue. `confirm_gather` rejects premature/no-witness calls.
+- [x] Each next short oak segment starts **unissued, unwitnessed**, with
+  the same resident ID; crashes/reloads preserve the two-part courier
+  path. Foreign workers and legacy unassigned Issued receipts cannot
+  bypass the checks; blocked jobs no longer route workers to source.
+- [x] Added seven Rust domain tests and ten Python static contracts,
+  updated older source tests and Rust tests to enforce the new transition.
+- [ ] These tests have NOT run: the available container has no cargo/rustc
+  and no direct GitHub checkout. A passing structural check is not a
+  compiled executable or proof that NPC navigation reaches either site.
+- [ ] Real native `ItemStack` custody, physical item pickup/rendering,
+  pathfinding/line-of-sight guarantees, lumberyard/quarry buildings and
+  replanting remain unimplemented. An observed air block is not, by
+  itself, cryptographic evidence the NPC created the block change.
+
+Acceptance: TEST_PLAN cases **234-244**; see PLAYTEST for local commands.
+
+---
+
+# Unreleased: same-resident wood/stone courier receipts (source-only)
+
+Latest stacked branch: `feat/assigned-resource-courier-v0115`, based on
+Draft PR #28. `main` remains unchanged, GitHub Actions OFF, native
+Horizon compilation/gameplay E2E not executed.
+
+- [x] Each physical `GatherJob` has a backward-compatible optional
+  stable resident `worker_id`. The source worker is selected only after
+  observing its UUID-bound native NPC at the saved 3D work stand and
+  within actual 4.5-block reach, and the assignment is **saved before**
+  `Issued` or any native Minecraft block mutation.
+- [x] Only this exact assigned resident can later confirm delivery from
+  the real town-hall receiving area. Another lumberjack/miner standing
+  at the hall cannot credit someone else's resource.
+- [x] All further logs of a 3-4-block native oak retain that same
+  resident assignment across receipt, save and reload. After assignment,
+  other same-role NPCs stop following this gather route.
+- [x] Domain disallows issuing unassigned gathers and crediting
+  unassigned Issued jobs. Legacy unbound Issued journals are quarantined
+  in the adapter and may be manually abandoned by OP **without credit**;
+  unissued legacy jobs can be assigned safely.
+- [x] Saved worker IDs validated against a real resident with matching
+  job; a dead resident cannot be assigned to a new job. No physical
+  inventory items are created by assignment.
+- [x] Six new Rust domain regression cases plus ten Python source
+  contracts authored (not executed). Real worker route, inventory
+  escrow and actual NPC-held item visual E2E remain unverified.
+- [ ] Cargo, native Horizon client compilation, all Python tests and
+  Minecraft E2E MUST pass before marking playable or merging.
+- [ ] This establishes identity continuity only; an actual carried
+  ItemStack model/animation and physical lumberyard/quarry remain future work.
+
+Use TEST_PLAN cases 223-233 for same-worker acceptance.
+
+---
+
+# Unreleased: 3D native worker proximity and real work-stand enforcement
+
+Current branch: `feat/three-dimensional-native-worker-guards-v0115`, stacked
+on Draft PR #27. GitHub Actions stay OFF; `main` remains unchanged.
+**Not compiled or tested in a real Minecraft world.** Source manifest stays
+at 0.1.14 pending native build evidence.
+
+- [x] Pure finite-checked `native_worker_near` checks X, Y and Z; workers
+  above/below the hall can no longer trigger wood/stone/wheat deliveries,
+  bakery production or physical construction from the same X/Z point.
+- [x] `native_worker_reaches_block` compares 3D eye position with actual
+  block center, 4.5-block reach, before any mining command or Issued save.
+  The NPC must also be within 2.5 horizontal / 2 vertical blocks of the
+  **saved** natural source work stand.
+- [x] Native source work stand gets a fresh loaded observation immediately
+  before issuing: feet air, head air, real walkable floor. Any new wall,
+  unobserved chunk or missing ground blocks the operation with no credit.
+- [x] Live actor binding rejects residents >48 Y blocks away from their
+  village even if X/Z matches. Navigation wakes up for vertical mismatch.
+- [x] Applied 3D guard to the real native builders, farmer, baker,
+  warehouse steward, wheat and mined-material receipts.
+- [x] Three Rust numerical regression cases and 11 Python source contract
+  tests **written** (not executed); source consistency checks only.
+- [ ] Full Rust/Python tests, native Horizon mixin/client compile and
+  first Minecraft gameplay E2E STILL REQUIRED. No claim of playable build.
+- [ ] Height-aware 3D proximity is not line-of-sight/pathfinder proof.
+  Native replay safety from prior PRs remains essential.
+- [ ] True item-rendered couriers, saplings/replanting and real lumberyard/
+  quarry buildings remain future work.
+
+Refer to TEST_PLAN 212–222 for a disposable-world vertical exploit matrix.
+
+---
+
+# Unreleased source: short-oak stem harvesting with per-log receipts
+
+Branch `feat/verified-oak-stem-harvest-v0115`, stacked after Draft PR #26.
+**No new playable release.** Manifest is still 0.1.14, GitHub Actions are OFF,
+and these changes have not passed native compile or Minecraft E2E.
+
+- [x] Verified naturally soil-rooted, leaf-bearing **3–4-log oak stems** now
+  produce a persisted multi-segment job, not merely one removed root block.
+  Tall/uncertain trees are deliberately skipped; no magical reach/scaffolding.
+- [x] Each log is separately conditional-edited with write-ahead Issued state,
+  later verified as air and credited **once** to the physical delivery queue
+  only after a UUID-bound lumberjack has returned to the town hall.
+  A following segment is created as a fresh UNISSUED gather only after
+  that confirmation; no multi-log batch credit.
+- [x] Before each upper segment, re-read the entire stem: previous native
+  blocks must be air, remaining blocks must be actual oak logs, leaf crown
+  must remain and no block may be unloaded. Revalidate purchased land.
+- [x] On planning save failure, roll back BOTH gather_job and oak_stem using
+  a full original world snapshot. On uncertain Issued crash/refusal,
+  quarantine the current segment and remaining stem; OP abandonment
+  destroys the task with ZERO credit. Legacy single-log saves migrate
+  through serde default without minting any continuation.
+- [x] /civ diagnose and /civ gathercheck report stem segment N / total.
+- [x] Eight Rust domain regression cases and nine Python source contracts
+  authored; adjusted prior diagnosis/forestry source tests for new routing.
+- [ ] Cargo/rustfmt/Clippy/full Python/native pinned Horizon/game E2E
+  unverified. No toolchain/network from working container.
+- [ ] Sapling collection/consumption, actual planting and growth,
+  fully visible lumberyard and quarry structures, and item-rendered
+  haulers are still NOT implemented. No free tree regeneration.
+
+Follow disposable-world TEST_PLAN cases 200–211. Do not merge to main.
+
+---
+
+# Unreleased native forestry & resource-journal hardening
+
+Branch `feat/natural-forestry-gather-journal-v0115`, stacked after Draft PR #25.
+No verified release or compiled client: manifest stays **0.1.14**, `main`
+unchanged, GitHub Actions remain deliberately disabled.
+
+- [x] Lumberjack now selects a loaded, soil-rooted, vertically continuous
+  native oak trunk with a leaf-bearing upper crown (rather than a random log
+  beside a leaf). Only the lowest rooted log is a safe first extraction;
+  **whole-tree felling and replanting are NOT implemented yet**.
+- [x] Before mining/harvesting, native adapter rechecks source provenance
+  and current town, player-parcel, farm, bakery and public-building protection.
+  A player buying a plot after the plan blocks subsequent NPC destruction.
+- [x] Physical gather uses write-ahead `Issued` persistence **before** the
+  conditional native Minecraft edit. If save fails, no edit occurs. An
+  uncertain issued receipt is never auto-replayed or discarded.
+- [x] OP-only read-only `/civ gathercheck NAME` inspects the saved receipt
+  and live source block. OP-only `/civ discardgather NAME intact|empty`
+  abandons a blocked issued receipt only after matching freshly observed
+  native block evidence. It always grants ZERO resources.
+- [x] Saved gather records validate world bounds, worker-stand distance and
+  mining radius. Added 9 Rust regression tests and 9 Python source contracts,
+  **authored only**.
+- [ ] Rust/Python execution, pinned Horizon native compile and actual
+  Minecraft NPC E2E have **not run**. Prior static tests are not compiler
+  evidence. Do not merge or label playable.
+- [ ] A proper physical lumberyard, tree replanting, quarry building,
+  multi-log tree felling, hand-held courier items and paths remain incomplete.
+
+See TEST_PLAN 189–199 and PLAYTEST for the explicit acceptance gate.
+
+---
+
+# Current unreleased source: first-play settlement diagnostics
+
+Branch `feat/first-play-diagnostics-v0115`, stacked on Draft PR #24 and all earlier
+physical hall/bakery/warehouse work. The package remains **0.1.14 source-only**:
+there is no successful native build or real gameplay proof for this branch.
+GitHub Actions remain deliberately disabled.
+
+- [x] New read-only `/civ diagnose NAME` for ordinary citizens/OPs, with
+  live UUID-bound actor count and loaded jobs, actual native hall barrel
+  availability, workshop status, current worker shift and ordered potential
+  blockers. Includes aggregate bakery + hut real-resource requirements.
+- [x] No new world mutation path, saved state, external item transfer or
+  worldgen side effects introduced by this diagnostic.
+- [x] Bounded real-bread restocking: baker stops requesting wheat or crafting
+  once native barrel bread plus confirmed pending delivery reaches two loaves
+  per living resident (max 64). Unavailable barrels pause production; full
+  bread buffer does not block unrelated warehouse deposits.
+- [x] Three Rust domain tests and eleven Python source contracts written;
+  executable and native gameplay verification still pending.
+- [ ] Local Rust/Python suites, pinned native Horizon compilation, Windows
+  executable and disposable game E2E required. Use latest branch; an old
+  `main` executable does NOT include this diagnostic or warehouse changes.
+- [ ] Physical lumberyard/quarry and courier transport remain future work,
+  not implemented by this PR.
+
+See TEST_PLAN 175–181 and PLAYTEST quickstart.
+
+---
+# Unreleased source: operator-assisted warehouse recovery and accurate hall signs
+
+Branch `feat/operator-warehouse-recovery-v0115` (stacked on PR #23).
+No new verified release: package still **0.1.14**, GitHub Actions remain OFF.
+
+- [x] Added OP-only read-only `/civ barrelcheck <village>`. Shows native
+  physical barrel item count next to saved `before`, `expected_after`,
+  direction, phase and source position. Does not change items or save state.
+- [x] Added OP-only `/civ resolvebarrel <village> cancel <observed_count>`
+  for **Planned only** with unchanged actual native count. It cannot cancel
+  Issued or Blocked receipts, because they may have changed Minecraft items.
+- [x] Added OP-only `/civ resolvebarrel <village> confirm <observed_count>`
+  for **Blocked only** when freshly observed native after-count equals the
+  saved expected value. Reuses the one-time domain receipt reconciliation,
+  never repeats Minecraft item insertion/extraction. An accounting failure
+  restores the blocked journal. A market order always blocks recovery.
+- [x] Native signs now use the same combined construction-demand function as
+  actual village material gathering and operator warehouse diagnostics.
+  When any native journal is unresolved, they display `STOCK CHECK` and
+  `PENDING TX` instead of unverified stock shortfalls.
+- [x] Four Rust domain regression cases and six Python source contracts
+  **written**; game/native verification and Rust/Python execution NOT RUN.
+- [ ] Manual comparison of logs, official Minecraft barrels and save backup
+  is still mandatory; a matching item count alone cannot prove item identity
+  or cross-file crash atomicity. Never auto-confirm or auto-refund.
+- [ ] Native Horizon build and real game-world tests before enabling normal
+  multiplayer usage or calling the mod playable.
+
+See TEST_PLAN 167–174 for a disposable-world verification matrix.
+
+---
+
 # Current unreleased source stabilization — physical logistics hardening
 
 Branch `feat/physical-logistics-hardening-v0115`, stacked on Draft PR #22 (bakery).
