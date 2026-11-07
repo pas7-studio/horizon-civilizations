@@ -47,7 +47,7 @@ python3 tools/package.py
 python3 tools/verify_static.py
 ```
 
-Packaging produces `target/civilizations-0.1.13.hnmod` (source-only; the
+Packaging produces `target/civilizations-0.1.14.hnmod` (source-only; the
 launcher compiles it). The template is based on the **native hook-point**
 pattern used by the official Horizon SMP mod. The compatibility pin is in
 `compatibility.json`; the source was inspected but not compiled in this workspace.
@@ -78,7 +78,7 @@ to compile/trust the native mod before the game can run.
 
 1. Install the official Horizon launcher from <https://playhorizon.dev/>.
 2. Create a separate test instance and back up the world.
-3. Put `civilizations-0.1.13.hnmod` in that instance's `horizon-native-mods/`
+3. Put `civilizations-0.1.14.hnmod` in that instance's `horizon-native-mods/`
    directory. The native build requires the launcher's explicit trust action.
 4. Let the launcher **build** the modded game and review build logs. If you see
    `target not found`, hook schema incompatibility, or Rust errors, stop: the
@@ -611,3 +611,86 @@ git switch feat/native-barrel-inventory-v0113
 ```
 
 GitHub Actions remain deliberately disabled.
+
+## v0.1.14 — first actually productive public workshop: the bakery
+
+**Branch:** `feat/physical-bakery-economy-v0114` (stacked after PR #21).
+Villages develop by default: an existing physical hall plus loaded
+UUID-bound Bakers/Builders allow one **real 5×5 bakery** to be autonomously
+reserved at a natural, loaded, unclaimed site. A new world is still founded
+via `/civ found NAME`; spontaneous world-generation founding is future
+work. No manual construction permission is needed for this building.
+
+The native blueprint has floor, walls, roof, doorway, a **real vanilla
+crafting table** and a **smoker** as bakery workplace. Builders must fetch
+**24 actual oak logs and 33 actual cobblestone** from the hall's native
+barrels into a dedicated bakery material escrow before they place any
+blocks. A modified/unloaded work site pauses without overwriting objects.
+
+### Three physical wheat → one physical bread
+
+1. A UUID-bound Baker walks to the completed town hall and takes up to
+   **three real plain wheat items** from the physical barrels through the
+   same saved, rechecked native inventory transaction as the builder.
+2. Once three extracted wheat are saved in the Baker's work escrow, the
+   NPC navigates to the separate bakery.
+3. The native server verifies **every block** of the bakery blueprint,
+   including the actual crafting table and smoker, and a live UUID-bound
+   Baker within 6 blocks of the workstation. Only then can the persistent
+   recipe consume **3 physical wheat → 1 new bread receipt** (one batch
+   per bounded production tick).
+4. The Baker visibly returns to the hall. The pending bread is credited
+   only at this receiving point, then a UUID-bound steward inserts an
+   actual `minecraft:bread` ItemStack into the hall's vanilla barrels.
+5. `/civ buy bread COUNT` obtains these exact real native stacks under
+   the same precharged, fail-closed market transaction rules as other goods.
+
+No part of this cycle can use the older abstract `stock` counter or
+daily bonus to craft bread. A real baker with no wheat in native barrels
+cannot produce food. No hidden infinite-bread timer runs.
+
+Inspect the process through:
+
+```text
+/civ bakery Ashford
+/civ warehouse Ashford
+/civ development Ashford
+/civ farming Ashford
+/civ roster Ashford
+```
+
+The bakery report shows build cursor, funding, actual block integrity,
+physical material escrow, extracted wheat, bread still being carried and
+confirmed batches. Native item slots and work locations remain the
+authoritative sources.
+
+### Protection (new native hooks)
+
+The existing public-barrel inventory-open hook is joined by two new
+pinned Horizon server hooks (9 native injections total):
+
+- **API 334 hopper item move cancellation:** prevent vanilla hopper
+  insertion/extraction to either registered public hall barrel. Other
+  containers and hoppers are untouched.
+- **API 14 native player block-break cancellation:** protect real public
+  halls, active/completed bakeries, fields, public huts and another
+  player's purchased plot. The authenticated owner may alter their own
+  parcel; OP can intervene for recovery.
+
+These controls do NOT cover explosions, fire, all automated block
+replacement, external mod inventory writes, or unclaimed land outside the
+mod's ownership registry. The world-JSON save and native Minecraft block/
+inventory saves are not a single atomic commit. An interrupted external
+item move is quarantined rather than automatically replayed; a controlled
+manual recovery interface remains unfinished.
+
+**Status:** source changes only, NOT yet successfully Rust-compiled,
+Windows-native built or proven in game. Rust/Python tests are authored,
+not executed here. GitHub Actions remain intentionally disabled.
+
+```powershell
+git fetch origin
+git switch feat/physical-bakery-economy-v0114
+.\scripts\validate-local.ps1 -Format
+.\scripts\validate-local.ps1 -BuildClient
+```
