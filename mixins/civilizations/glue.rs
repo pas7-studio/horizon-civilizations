@@ -3,6 +3,7 @@
 use crate::game::{
     civilizations_core::{farm_plan, hut_plan, town_hall_plan, bakery_plan, hall_storage_positions,
         BarrelDirection, BarrelPhase, inspect_farm, inspect_hut, inspect_town_hall, inspect_bakery, is_ground,
+        is_rooted_oak_harvest_origin,
         BuildInspection, DailyPhase, FarmBlock, FarmDecision, FarmStage, Good, HomeSlot, Job, VisualBuildJob,
         World, inspect_home, hall_board_positions, HOUSING_PLOT_OFFSETS, MAX_HOUSING_SURVEY_RESULTS,
         MAX_SIM_DAYS},
@@ -169,6 +170,8 @@ pub fn register(commands: &mut Vec<NativeCommand>) {
         "civ approvehouse <name:word> <slot:integer> <y:integer>",
         "civ autonomy <name:word> <mode:word>",
         "civ barrelcheck <name:word>",
+        "civ gathercheck <name:word>",
+        "civ discardgather <name:word> <observed:word>",
         "civ resolvebarrel <name:word> <mode:word> <count:integer>",
         "civ farm <name:word>", "civ recoverfarm <name:word>",
         "civ buyplot <name:word>", "civ buyhouse <name:word>", "civ commission <name:word>",
@@ -981,7 +984,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
     let actor = format!("{:032x}", player.uuid);
     let action = args.next().unwrap_or("help");
     if action == "help" {
-        reply(game, "Civilizations: /civ list | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | hall <name> | warehouse <name> | diagnose <name> | buyplot <name> | buyhouse <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, barrelcheck <name>, resolvebarrel <name> confirm|cancel <observed_count>, day [days], construct <name>, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
+        reply(game, "Civilizations: /civ list | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | hall <name> | warehouse <name> | diagnose <name> | buyplot <name> | buyhouse <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, barrelcheck <name>, resolvebarrel <name> confirm|cancel <observed_count>, gathercheck <name>, discardgather <name> intact|empty, day [days], construct <name>, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
         return;
     }
     if action == "list" {
@@ -1131,7 +1134,11 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             .is_some_and(|job| job.blocked) {
             "bakery construction blocked by modified ground; inspect blocks".to_owned()
         } else if v.gather_job.as_ref().is_some_and(|job| job.blocked) {
-            "natural gathering attempt blocked; planner will discard without credit".to_owned()
+            if v.gather_job.as_ref().is_some_and(|job| job.issued) {
+                "issued wood/stone gather QUARANTINED; OP: /civ gathercheck NAME, then inspect before /civ discardgather NAME intact|empty".to_owned()
+            } else {
+                "never-issued gather candidate blocked; planner may discard without credit".to_owned()
+            }
         } else if !loaded_role(Job::Builder) {
             "no loaded UUID-bound builder; required for real buildings".to_owned()
         } else if !phase.on_shift(Job::Builder) {
@@ -1153,6 +1160,32 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             loaded_role(Job::Baker), loaded_role(Job::Merchant),
             phase.name(), hall_status, bakery_status, v.farm.is_some(),
             v.gather_job.is_some(), blocker
+        ));
+        return;
+    }
+    if action == "gathercheck" {
+        if player.permission < 2 {
+            error(game, "resource gathering audit requires server operator level 2");
+            return;
+        }
+        let name = args.next().unwrap_or("");
+        let Some(v) = world.by_name(name) else {
+            error(game, "unknown settlement: /civ gathercheck <name>");
+            return;
+        };
+        if v.dimension != player.dimension {
+            error(game, "visit the settlement dimension for native block inspection");
+            return;
+        }
+        let Some(job) = &v.gather_job else {
+            reply(game, format!("{}: no pending natural wood/stone gather", v.name));
+            return;
+        };
+        let observed = world_block(game, &v.dimension, job.position);
+        reply(game, format!(
+            "{} gather audit: {:?} at {:?}, worker stand {:?}, planned native block {}, issued={}, blocked={}, live native block {:?}. Blocked ISSUED receipts are quarantined. Inspect world save and original block before OP /civ discardgather {} intact|empty; abandonment provides ZERO materials.",
+            v.name, job.good, job.position, job.stand, job.source_block(),
+            job.issued, job.blocked, observed, v.name
         ));
         return;
     }
@@ -1620,6 +1653,36 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
                 site, price, village.name
             ))
         })(),
+        "discardgather" if player.permission >= 2 => (|| {
+            let name = args.next().ok_or("usage: /civ discardgather <village> intact|empty")?;
+            let evidence = args.next().ok_or("confirm actual observed block: intact or empty")?;
+            if args.next().is_some() {
+                return Err("unexpected arguments for gather abandonment".into());
+            }
+            let v = previous.by_name(name).ok_or("unknown settlement")?;
+            if v.dimension != player.dimension {
+                return Err("inspect resource inside its own settlement dimension".into());
+            }
+            let job = v.gather_job.as_ref().ok_or("no gather receipt")?;
+            if !job.blocked || !job.issued {
+                return Err("only a blocked ISSUED gather can be manually abandoned".into());
+            }
+            let observed = world_block(game, &v.dimension, job.position)
+                .ok_or("original native source block unavailable; load the chunk")?;
+            let matches_evidence = match evidence {
+                "intact" => observed == job.source_block(),
+                "empty" => observed == "minecraft:air",
+                _ => return Err("use intact or empty after /civ gathercheck".into()),
+            };
+            if !matches_evidence {
+                return Err("native block changed since audit; gather receipt still quarantined".into());
+            }
+            state.world.as_mut().unwrap().abandon_blocked_issued_gather(v.id)?;
+            Ok(format!(
+                "{}: abandoned uncertain {:?} gather with {} source observed. ZERO resource credit. New physical jobs may be planned after the next tick.",
+                v.name, job.good, evidence
+            ))
+        })(),
         "resolvebarrel" if player.permission >= 2 => (|| {
             let name = args.next().ok_or(
                 "usage: /civ resolvebarrel <village> confirm|cancel <observed_count>"
@@ -1938,7 +2001,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
                 Ok(format!("Spawned and UUID-linked {spawned} villagers. Reopen world and verify /civ roster {name}."))
             }
         })(),
-        "found" | "day" | "war" | "peace" | "actors" | "construct" | "approvehouse" | "autonomy" | "farm" | "recoverfarm" | "reconcile" | "barrelcheck" | "resolvebarrel" => Err("requires server operator level 2".into()),
+        "found" | "day" | "war" | "peace" | "actors" | "construct" | "approvehouse" | "autonomy" | "farm" | "recoverfarm" | "reconcile" | "barrelcheck" | "resolvebarrel" | "gathercheck" | "discardgather" => Err("requires server operator level 2".into()),
         _ => Err("unknown subcommand. Use /civ help".into()),
     };
     match result {
@@ -2477,12 +2540,18 @@ fn autonomous_village_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Resu
         && actors.iter().any(|(known, _)| *known == r.id));
     // Recover from a refused/modified extraction without paying any wood or
     // stone; the next planning cycle may choose another untouched source.
-    if village.gather_job.as_ref().is_some_and(|job| job.blocked) {
+    if village.gather_job.as_ref().is_some_and(|job| job.blocked && !job.issued) {
+        // No Minecraft edit was dispatched. Discard this stale Planned
+        // candidate without a receipt and survey a different source later.
         let before = state.world.as_ref().unwrap().clone();
         state.world.as_mut().unwrap().discard_blocked_gather(id)?;
         save_autonomous(state, before)?;
         return Ok(());
     }
+    // A blocked *Issued* gather might already have changed native blocks.
+    // Keep its durable receipt quarantined until OP inspection. Planning
+    // other civic tasks may continue, but no further gather is scheduled
+    // while the uncertain source remains recorded.
 
     // Resource demand MUST include real native barrel contents, saved
     // incoming deliveries and physically extracted, project-specific
@@ -2714,33 +2783,18 @@ fn gather_stand(game: &Game<'_>, dimension: &str, pos: [i32; 3]) -> Option<[i32;
 /// exclusion remain mandatory; no guaranteed anti-grief for other mods.
 fn seems_natural_resource(game: &Game<'_>, dimension: &str, point: [i32; 3], good: Good) -> bool {
     match good {
-        Good::Wood => {
-            if world_block(game, dimension, point).as_deref() != Some("minecraft:oak_log") {
-                return false;
-            }
-            // A leaf-bearing oak tree, not a bare timber log in a wall.
-            for (dx, dy, dz) in [(0_i32, 1_i32, 0_i32), (1, 1, 0),
-                                 (-1, 1, 0), (0, 1, 1), (0, 1, -1)] {
-                let (Some(x), Some(y), Some(z)) = (
-                    point[0].checked_add(dx), point[1].checked_add(dy),
-                    point[2].checked_add(dz)
-                ) else { continue; };
-                if world_block(game, dimension, [x, y, z]).as_deref()
-                    == Some("minecraft:oak_leaves") {
-                    return true;
-                }
-            }
-            false
-        }
+        Good::Wood => is_rooted_oak_harvest_origin(point, |pos|
+            world_block(game, dimension, pos)),
         Good::Stone => world_block(game, dimension, point).as_deref() == Some("minecraft:stone"),
         _ => false,
     }
 }
 
-/// A resource may be credited ONLY after: (1) plan saved; (2) the conditional
-/// block command was dispatched; (3) its issued state saved; (4) a later tick
-/// observes the block as air. If a crash happens between steps 2 and 3,
-/// the resource is lost to the village, not counted twice.
+/// A resource may be credited ONLY after: (1) plan saved; (2) Issued
+/// journal persisted; (3) native conditional block edit attempted; (4) later
+/// observation verifies air and a UUID-linked worker returns to the hall.
+/// If the process crashes after Issued but before the actual edit, the
+/// resulting uncertainty is quarantined; no automatic native retry or credit.
 fn gather_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), String> {
     if !DailyPhase::at(game.world.day_time).on_shift(Job::Miner) { return Ok(()); }
     let dimension = game.dim.id().to_owned();
@@ -2779,7 +2833,12 @@ fn gather_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
         }
         return save_autonomous(state, before);
     }
-    if name != job.source_block() {
+    if name != job.source_block()
+        || !seems_natural_resource(game, &dimension, job.position, job.good)
+        || !state.world.as_ref().unwrap().gather_site_unclaimed(id, job.position, job.stand) {
+        // Physical resource or land ownership may change after a saved plan.
+        // Recheck tree/stone provenance and every registered parcel/worksite
+        // immediately before authorizing a Minecraft world mutation.
         state.world.as_mut().unwrap().block_gather(id)?;
         return save_autonomous(state, before);
     }
@@ -2801,12 +2860,19 @@ fn gather_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
         "execute in {dimension} if block {x} {y} {z} {} run setblock {x} {y} {z} minecraft:air replace",
         job.source_block()
     );
+    // Persist Issued *before* executing the conditional Minecraft edit.
+    // A crash after changing the block cannot revive a Planned job that
+    // would be reissued. If persistence fails, no native command is sent.
+    state.world.as_mut().unwrap().mark_gather_issued(id)?;
+    save_autonomous(state, before)?;
     if !game.native_run_command(&cmd) {
+        // Uncertain or refused native commands never auto-retry. Preserve
+        // Blocked in the durable journal for explicit no-credit discard.
+        let issued = state.world.as_ref().unwrap().clone();
         state.world.as_mut().unwrap().block_gather(id)?;
-    } else {
-        state.world.as_mut().unwrap().mark_gather_issued(id)?;
+        save_autonomous(state, issued)?;
     }
-    save_autonomous(state, before)
+    Ok(())
 }
 
 /// Runs after an authoritative level tick: the selected dimension and its

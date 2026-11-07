@@ -1,3 +1,36 @@
+# Unreleased native forestry & resource-journal hardening
+
+Branch `feat/natural-forestry-gather-journal-v0115`, stacked after Draft PR #25.
+No verified release or compiled client: manifest stays **0.1.14**, `main`
+unchanged, GitHub Actions remain deliberately disabled.
+
+- [x] Lumberjack now selects a loaded, soil-rooted, vertically continuous
+  native oak trunk with a leaf-bearing upper crown (rather than a random log
+  beside a leaf). Only the lowest rooted log is a safe first extraction;
+  **whole-tree felling and replanting are NOT implemented yet**.
+- [x] Before mining/harvesting, native adapter rechecks source provenance
+  and current town, player-parcel, farm, bakery and public-building protection.
+  A player buying a plot after the plan blocks subsequent NPC destruction.
+- [x] Physical gather uses write-ahead `Issued` persistence **before** the
+  conditional native Minecraft edit. If save fails, no edit occurs. An
+  uncertain issued receipt is never auto-replayed or discarded.
+- [x] OP-only read-only `/civ gathercheck NAME` inspects the saved receipt
+  and live source block. OP-only `/civ discardgather NAME intact|empty`
+  abandons a blocked issued receipt only after matching freshly observed
+  native block evidence. It always grants ZERO resources.
+- [x] Saved gather records validate world bounds, worker-stand distance and
+  mining radius. Added 9 Rust regression tests and 9 Python source contracts,
+  **authored only**.
+- [ ] Rust/Python execution, pinned Horizon native compile and actual
+  Minecraft NPC E2E have **not run**. Prior static tests are not compiler
+  evidence. Do not merge or label playable.
+- [ ] A proper physical lumberyard, tree replanting, quarry building,
+  multi-log tree felling, hand-held courier items and paths remain incomplete.
+
+See TEST_PLAN 189–199 and PLAYTEST for the explicit acceptance gate.
+
+---
+
 # Current unreleased source: first-play settlement diagnostics
 
 Branch `feat/first-play-diagnostics-v0115`, stacked on Draft PR #24 and all earlier

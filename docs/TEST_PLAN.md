@@ -559,3 +559,52 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
 188. Test no living baker/residents, shifts, saved journals, extra
      already-extracted wheat and simultaneous hut funding. No parallel
      warehouse goods should be starved by full bread buffer.
+
+## Native forestry, land reacquisition and crash-atomic gather (unreleased)
+
+189. On newest stacked commit, locally run Rust fmt, clippy, cargo test,
+     full Python tests and pinned Horizon native build. Record commit SHA
+     and build logs. Do not treat textual assertions as a compiled mod.
+190. In a disposable grassy world, position Ashford near ordinary oak trees.
+     Confirm a UUID-bound lumberjack selects a soil-rooted, crown-bearing
+     **LOWEST** oak trunk log with a physically accessible standing cell,
+     not an unreachable canopy block. Confirm one block mined and one
+     corresponding physical delivery receipt after returning to hall.
+191. Test an oak decorative log with leaves positioned near it, a floating
+     trunk, a trunk on cobblestone, a severed middle trunk and an unloaded
+     canopy. None may be automatically harvested as natural lumber.
+192. Mine an exposed natural stone resource. Confirm miner visits the
+     loaded real site, native command removes only that expected stone,
+     and one cobblestone appears in incoming physical warehouse receipt
+     only after that UUID-bound miner returns to the hall.
+193. After the gather job is planned but before worker reaches source,
+     register a player-purchased parcel or civic building claim that
+     overlaps source or stand. Native issued state must not be saved,
+     the claimed block must remain unchanged and no resource credited.
+194. Fault-inject failure when persisting `Issued` before native block
+     mutation. Confirm the command was NOT sent and the physical block
+     was NOT touched. Inspect unchanged world and previous saved journal.
+195. Stop process immediately after `Issued` persistence but BEFORE
+     native command. On resume, original block remains. Next tick may
+     mark Blocked but must NEVER issue a second native edit; zero
+     resource credit, and the planner must not silently discard this
+     uncertain issued receipt.
+196. Stop after native conditional block mutation but before observation.
+     On reboot, the saved issued journal must remain and native air
+     observation + physically returned UUID-linked worker must credit
+     exactly once. No additional harvesting of the same source.
+197. Attempt `/civ gathercheck Ashford` and `/civ discardgather Ashford
+     intact|empty` as non-OP, wrong dimension, unloaded native chunk,
+     on a not-blocked receipt, with mismatch between typed evidence and
+     actual block, and with no pending gather. All must refuse and
+     preserve stock; read-only audit must not mutate anything.
+198. With a Blocked+Issued receipt, inspect native source and manually
+     select the exact `intact` or `empty` mode; explicit abandonment
+     clears only the job, with **zero** resource credit. Unissued blocked
+     candidates may be auto discarded. Village hall, farm and bakery
+     planning must continue while an issued gather is quarantined.
+199. Test two settlements and multiple dimensions, replay from backed-up
+     world.json, whole daytime shift, native chunk unloads, resource
+     replenishment and bought claims. Record actual game logs, block
+     evidence and item counts. Whole-tree felling, sapling sourcing,
+     replanting, lumberyard/quarry buildings are NOT part of this PR.

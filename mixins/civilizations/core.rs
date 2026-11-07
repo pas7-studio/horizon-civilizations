@@ -393,6 +393,56 @@ impl GatherJob {
     }
 }
 
+/// Verify a *rooted*, leaf-bearing oak trunk before issuing any native
+/// lumberjack destruction. A leaf next to an arbitrary isolated oak log is
+/// not evidence of a natural tree: a genuine candidate must begin on real
+/// soil, contain at least three vertically contiguous logs, and reach a
+/// leaf-bearing upper crown. Only the lowest rooted log qualifies as the
+/// first resource; upper floating/player-placed logs are never selected.
+/// The caller supplies loaded, observed vanilla block states and must also
+/// enforce native claim protection and a reachable worker stand.
+/// This is conservative physical evidence, NOT provenance against a player
+/// who deliberately plants a real tree outside registered claims.
+pub fn is_rooted_oak_harvest_origin(
+    origin: [i32; 3], mut read: impl FnMut([i32; 3]) -> Option<String>,
+) -> bool {
+    let [x, y, z] = origin;
+    if read(origin).as_deref() != Some("minecraft:oak_log") {
+        return false;
+    }
+    let Some(soil_y) = y.checked_sub(1) else { return false; };
+    if !matches!(
+        read([x, soil_y, z]).as_deref(),
+        Some("minecraft:grass_block" | "minecraft:dirt" | "minecraft:podzol" |
+             "minecraft:coarse_dirt" | "minecraft:rooted_dirt")
+    ) {
+        return false;
+    }
+    let mut upper_logs = 0_usize;
+    let mut crown = false;
+    // A bounded search avoids scanning remote/unloaded chunks. We deliberately
+    // reject taller/uncertain trees until supported by an explicit tree claim.
+    for step in 1..=8_i32 {
+        let Some(top_y) = y.checked_add(step) else { return false; };
+        match read([x, top_y, z]).as_deref() {
+            Some("minecraft:oak_log") => {}
+            Some(_) => break,
+            None => return false,
+        }
+        upper_logs += 1;
+        if step < 2 { continue; }
+        for (dx, dz) in [(1_i32, 0_i32), (-1, 0), (0, 1), (0, -1)] {
+            let (Some(tx), Some(tz)) = (x.checked_add(dx), z.checked_add(dz))
+            else { return false; };
+            let Some(leaf) = read([tx, top_y, tz]) else {
+                return false; // unloaded evidence cannot approve extraction
+            };
+            if leaf == "minecraft:oak_leaves" { crown = true; }
+        }
+    }
+    upper_logs >= 2 && crown
+}
+
 /// Founding civic hall uses the existing 5x5 safe physical shell, with an
 /// identifiable mayor desk, two resource barrels and two bulletin signs.
 /// Barrel contents are not treated as a vanilla chest inventory: the guarded
@@ -1369,10 +1419,22 @@ impl World {
             if !seen.insert(normalized) { return Err("duplicate settlement names".into()); }
             if let Some(gather) = &village.gather_job {
                 let [x, y, z] = gather.position;
+                let [sx, sy, sz] = gather.stand;
+                let walk_dx = i128::from(sx) - i128::from(x);
+                let walk_dy = i128::from(sy) - i128::from(y);
+                let walk_dz = i128::from(sz) - i128::from(z);
+                let village_dx = i128::from(x) - i128::from(village.center[0]);
+                let village_dz = i128::from(z) - i128::from(village.center[2]);
                 if !matches!(gather.good, Good::Wood | Good::Stone)
                     || i64::from(x).abs() > 29_999_988
                     || i64::from(z).abs() > 29_999_988
-                    || !(-2046..=2046).contains(&y) {
+                    || !(-2046..=2046).contains(&y)
+                    || i64::from(sx).abs() > 29_999_988
+                    || i64::from(sz).abs() > 29_999_988
+                    || !(-2046..=2046).contains(&sy)
+                    || walk_dx * walk_dx + walk_dy * walk_dy + walk_dz * walk_dz > 16
+                    || !(12_i128 * 12..=80_i128 * 80)
+                        .contains(&(village_dx * village_dx + village_dz * village_dz)) {
                     return Err("invalid physical gather record".into());
                 }
             }
@@ -2126,6 +2188,31 @@ impl World {
         Ok(())
     }
 
+    /// Re-evaluate live settlement ownership before executing an already
+    /// planned physical resource action. Land may be bought or new buildings
+    /// reserved between the initial plan and the worker reaching its target.
+    /// This is shared with planning so neither path can bypass a new parcel.
+    pub fn gather_site_unclaimed(
+        &self, village_id: u64, position: [i32; 3], stand: [i32; 3],
+    ) -> bool {
+        let Some(village) = self.settlements.get(&village_id) else { return false; };
+        let protected = |other: &Settlement| {
+            near_plot(other.center, position) || near_plot(other.center, stand)
+                || other.player_parcels.iter().any(|lot|
+                    near_plot(lot.origin, position) || near_plot(lot.origin, stand))
+                || other.visual_sites.iter().any(|site|
+                    near_plot(*site, position) || near_plot(*site, stand))
+                || other.visual_job.as_ref().is_some_and(|job|
+                    near_plot(job.origin, position) || near_plot(job.origin, stand))
+                || other.farm.as_ref().is_some_and(|farm|
+                    near_plot(farm.origin, position) || near_plot(farm.origin, stand))
+                || other.bakery.as_ref().is_some_and(|b|
+                    near_plot(b.origin, position) || near_plot(b.origin, stand))
+        };
+        !self.settlements.values().filter(|other| other.dimension == village.dimension)
+            .any(protected)
+    }
+
     /// Planning creates no items. Both native and domain checks forbid
     /// extraction inside the town hall, another structure or player lot.
     pub fn plan_gather(
@@ -2155,19 +2242,8 @@ impl World {
         if !(12_i128 * 12..=80_i128 * 80).contains(&(dx * dx + dz * dz)) {
             return Err("gather only in the village outer work area".into());
         }
-        for other in self.settlements.values().filter(|s| s.dimension == v.dimension) {
-            if near_plot(other.center, position) || near_plot(other.center, stand)
-                || other.player_parcels.iter().any(|lot|
-                    near_plot(lot.origin, position) || near_plot(lot.origin, stand))
-                || other.visual_sites.iter().any(|site|
-                    near_plot(*site, position) || near_plot(*site, stand))
-                || other.visual_job.as_ref().is_some_and(|job| near_plot(job.origin, position))
-                || other.farm.as_ref().is_some_and(|farm| near_plot(farm.origin, position))
-                || other.bakery.as_ref().is_some_and(|b| {
-                    near_plot(b.origin, position) || near_plot(b.origin, stand)
-                }) {
-                return Err("natural resource overlaps a building, town hall or player claim".into());
-            }
+        if !self.gather_site_unclaimed(village_id, position, stand) {
+            return Err("natural resource overlaps a building, town hall or player claim".into());
         }
         self.settlements.get_mut(&village_id).unwrap().gather_job = Some(GatherJob {
             position, stand, good, issued: false, blocked: false,
@@ -2201,6 +2277,21 @@ impl World {
             return Err("only a blocked gather can be discarded".into());
         }
         v.gather_job = None;
+        Ok(())
+    }
+
+    /// Explicit operator decision after checking native block evidence.
+    /// The adapter MUST require an OP in the correct dimension and a loaded,
+    /// observed source block (or air). This method only abandons a blocked,
+    /// previously issued receipt: it never credits wood/stone or issues edits.
+    pub fn abandon_blocked_issued_gather(&mut self, village_id: u64) -> Result<(), String> {
+        let v = self.settlements.get(&village_id).ok_or("unknown settlement")?;
+        if !v.gather_job.as_ref().is_some_and(|job| job.issued && job.blocked) {
+            return Err("only a blocked issued gather may be manually abandoned".into());
+        }
+        let name = v.name.clone();
+        self.discard_blocked_gather(village_id)?;
+        self.event(format!("{name}: operator abandoned an uncertain gather; zero resource credit"));
         Ok(())
     }
 
@@ -4900,5 +4991,141 @@ mod physical_bakery_stock_control_tests {
         let target = physical_bread_target(village);
         assert!(!needs_real_bread(village, target - 2));
         assert!(needs_real_bread(village, target - 3));
+    }
+}
+
+#[cfg(test)]
+mod native_forest_origin_tests {
+    use super::*;
+
+    fn growing_tree() -> BTreeMap<[i32; 3], String> {
+        let mut blocks = BTreeMap::new();
+        blocks.insert([0, 69, 0], "minecraft:grass_block".into());
+        for y in 70..=73 {
+            blocks.insert([0, y, 0], "minecraft:oak_log".into());
+        }
+        blocks.insert([1, 73, 0], "minecraft:oak_leaves".into());
+        blocks
+    }
+
+    #[test]
+    fn real_rooted_oak_qualifies_at_base_not_upper_trunk() {
+        let b = growing_tree();
+        let read = |p| Some(b.get(&p).cloned().unwrap_or("minecraft:air".into()));
+        assert!(is_rooted_oak_harvest_origin([0, 70, 0], read));
+        assert!(!is_rooted_oak_harvest_origin([0, 71, 0], |p|
+            Some(b.get(&p).cloned().unwrap_or("minecraft:air".into()))));
+    }
+
+    #[test]
+    fn decorated_timber_and_disconnected_leaves_are_not_forestry_receipts() {
+        let mut b = growing_tree();
+        b.remove(&[0, 72, 0]);
+        assert!(!is_rooted_oak_harvest_origin([0, 70, 0], |p|
+            Some(b.get(&p).cloned().unwrap_or("minecraft:air".into()))));
+        b.insert([0, 72, 0], "minecraft:oak_log".into());
+        b.insert([0, 69, 0], "minecraft:cobblestone".into());
+        assert!(!is_rooted_oak_harvest_origin([0, 70, 0], |p|
+            Some(b.get(&p).cloned().unwrap_or("minecraft:air".into()))));
+    }
+
+    #[test]
+    fn unloaded_crown_is_not_proof_of_harvestable_wood() {
+        let b = growing_tree();
+        assert!(!is_rooted_oak_harvest_origin([0, 70, 0], |p|
+            if p == [1, 72, 0] { None }
+            else { Some(b.get(&p).cloned().unwrap_or("minecraft:air".into())) }));
+    }
+
+
+    #[test]
+    fn resource_job_queued_before_lot_purchase_loses_permission() {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0, 70, 0], "owner").unwrap();
+        let origin = [24, 70, 0];
+        let stand = [25, 70, 0];
+        assert!(world.gather_site_unclaimed(id, origin, stand));
+        world.plan_gather(id, Good::Wood, origin, stand).unwrap();
+        world.settlements.get_mut(&id).unwrap().player_parcels.push(PlayerParcel {
+            origin, owner: "owner".into(), commissioned: false,
+        });
+        assert!(!world.gather_site_unclaimed(id, origin, stand));
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn worksite_cannot_approach_occupied_housing_or_bakery_from_side() {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0,70,0], "owner").unwrap();
+        let origin = [32,70,0];
+        assert!(world.gather_site_unclaimed(id, origin, [33,70,0]));
+        world.settlements.get_mut(&id).unwrap().player_parcels.push(PlayerParcel {
+            origin: [42,70,0], owner: "owner".into(), commissioned: false,
+        });
+        // The harvesting BLOCK is distant, but the worker stand touches
+        // somebody else's registered parcel exclusion radius.
+        assert!(!world.gather_site_unclaimed(id, origin, [34,70,0]));
+    }
+
+    #[test]
+    fn legacy_world_roundtrip_needs_no_new_forestry_save_fields() {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0, 70, 0], "owner").unwrap();
+        world.validate().unwrap();
+        let restored: World = serde_json::from_str(&serde_json::to_string(&world).unwrap()).unwrap();
+        assert!(restored.settlements[&id].gather_job.is_none());
+        restored.validate().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod native_gather_quarantine_tests {
+    use super::*;
+
+    #[test]
+    fn issued_blocked_mining_receipt_requires_explicit_abandonment() {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0,70,0], "owner").unwrap();
+        // This record is a durable receipt of an issued natural stone edit.
+        world.settlements.get_mut(&id).unwrap().gather_job = Some(GatherJob {
+            position: [16,70,0], stand: [17,70,0],
+            good: Good::Stone, issued: true, blocked: true,
+        });
+        world.validate().unwrap();
+        let before = world.settlements[&id].warehouse_quantity(Good::Stone);
+        let restored: World = serde_json::from_str(&serde_json::to_string(&world).unwrap()).unwrap();
+        assert!(restored.settlements[&id].gather_job.as_ref().unwrap().blocked);
+        assert!(world.mark_gather_issued(id).is_err());
+        world.abandon_blocked_issued_gather(id).unwrap();
+        assert!(world.settlements[&id].gather_job.is_none());
+        assert_eq!(world.settlements[&id].warehouse_quantity(Good::Stone), before);
+        assert!(world.abandon_blocked_issued_gather(id).is_err());
+        world.validate().unwrap();
+    }
+
+
+    #[test]
+    fn corrupted_gather_worker_stand_is_rejected_on_load() {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0,70,0], "owner").unwrap();
+        world.plan_gather(id, Good::Stone, [16,70,0], [17,70,0]).unwrap();
+        world.validate().unwrap();
+        world.settlements.get_mut(&id).unwrap().gather_job.as_mut().unwrap().stand =
+            [i32::MAX, 70, 0];
+        assert!(world.validate().is_err());
+    }
+
+    #[test]
+    fn manually_abandoning_unissued_or_unblocked_gather_is_forbidden() {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0,70,0], "owner").unwrap();
+        world.settlements.get_mut(&id).unwrap().gather_job = Some(GatherJob {
+            position: [16,70,0], stand: [17,70,0],
+            good: Good::Wood, issued: false, blocked: true,
+        });
+        assert!(world.abandon_blocked_issued_gather(id).is_err());
+        world.settlements.get_mut(&id).unwrap().gather_job.as_mut().unwrap().issued = true;
+        world.settlements.get_mut(&id).unwrap().gather_job.as_mut().unwrap().blocked = false;
+        assert!(world.abandon_blocked_issued_gather(id).is_err());
     }
 }
