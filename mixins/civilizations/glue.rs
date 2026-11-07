@@ -895,7 +895,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             }
             let mut available: Vec<_> = village.visual_sites.iter()
                 .filter(|site| !village.player_parcels.iter().any(|plot| {
-                    crate::game::civilizations_core::near_plot_public(plot.origin, **site)
+                    crate::game::civilizations_core::near_plot(plot.origin, **site)
                 }))
                 .filter_map(|site| {
                     let dx = f64::from(site[0]) + 0.5 - player.position[0];
