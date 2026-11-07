@@ -877,11 +877,16 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             t.direction, t.good, t.good.item(), t.count, t.position,
             t.before, t.phase
         )).unwrap_or_else(|| "none".to_owned());
+        let purchase = village.market_purchase.as_ref().map(|order| format!(
+            "{} bought {} x{} for {} coins, source {:?}, phase {:?}; no automatic retries",
+            order.buyer, order.good.as_str(), order.count, order.price,
+            order.position, order.phase
+        )).unwrap_or_else(|| "none".to_owned());
         if action == "warehouse" {
             reply(game, format!(
-                "{} ACTUAL BARRELS [{}]. Awaiting steward delivery [{}]. Physically extracted building escrow [{}]. Next hut still needs {} logs / {} cobble. Durable transfer: {}. Physical items in the two native containers are authoritative after the hall is complete; abstract daily stock is separate.",
-                village.name, physical, incoming, escrow,
-                hut_wood, hut_stone, transfer
+                "{} ACTUAL BARRELS [{}]. Awaiting steward delivery [{}]. Farmer carrying {} wheat. Physically extracted building escrow [{}]. Next hut needs {} logs / {} cobble. Durable transfer: {}. Market order: {}. Physical items in the two native containers are authoritative after hall completion; abstract daily stock is separate.",
+                village.name, physical, incoming, village.wheat_delivery_pending(), escrow,
+                hut_wood, hut_stone, transfer, purchase
             ));
         } else {
             let building = village.hall_job.as_ref().map(|job| format!(
