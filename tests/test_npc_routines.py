@@ -41,8 +41,7 @@ class RoutineContracts(unittest.TestCase):
     def test_version_consistent_and_save_schema_unchanged(self):
         cargo = tomllib.loads((ROOT / "Cargo.toml").read_text())
         manifest = tomllib.loads((ROOT / "mixins/civilizations/horizon-mixin.toml").read_text())
-        self.assertEqual(cargo["package"]["version"], "0.1.7")
-        self.assertEqual(manifest["mod"]["version"], "0.1.7")
+        self.assertEqual(cargo["package"]["version"], manifest["mod"]["version"])
         self.assertIn("pub const SCHEMA: u32 = 1", CORE)
 
 
