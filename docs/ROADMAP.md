@@ -209,3 +209,10 @@ play. That was a **product gap**, not cosmetic polish.
 - [ ] Player parcel protections against vanilla multiplayer block edits
   require a dedicated supported engine hook or interoperable claim system.
 - [ ] More home archetypes, blueprints, roads, expansions and town planning.
+
+- [x] Transfer title of already completed, **block-verified** village huts
+  to a player for 35 civic coins, credit village treasury, and free the
+  property from NPC public housing use.
+- [x] Restock public abstract housing via existing material-consuming
+  economic simulation after a private sale instead of minting free
+  replacement huts.
