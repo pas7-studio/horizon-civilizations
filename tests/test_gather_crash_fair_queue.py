@@ -93,6 +93,8 @@ class NativeGatherFairQueueAndCrashReceiptContracts(unittest.TestCase):
         self.assertNotIn("native_take_items(", runner)
         self.assertIn("return save_autonomous(state, before);", runner)
         self.assertIn("save_autonomous(state, issued)?;", runner)
+        self.assertIn("native edit confirmed={}", GLUE)
+        self.assertIn("job.native_edit_confirmed, job.pickup_witnessed", GLUE)
 
 
 if __name__ == "__main__":
