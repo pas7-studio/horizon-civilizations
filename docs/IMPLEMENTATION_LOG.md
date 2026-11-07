@@ -583,3 +583,24 @@
 - Added 8 Rust regression tests + 12 Python static tests; manual
   E2E 272–283. Connector-side 22/22 source checks PASS.
   Cargo, native Horizon build and game E2E still not executed.
+
+
+## 2026-11-08 — unify safe initial NPC spawn for OP and autonomy (PR #34)
+
+- Discovered that the explicit OP `/civ actors` command still used ten
+  fixed positions and central Y, bypassing the terrain survey used by
+  autonomous spawning. This could create villagers inside blocks or near
+  existing native mobs, despite a successful one-shot spawn reservation.
+- Added shared `surveyed_initial_actor_positions` for both paths.
+  Rejects dead/already UUID-linked initial residents, fewer than ten
+  residents, matching preexisting loaded tagged/legacy villagers and fewer
+  than ten unoccupied, loaded, natural-ground positions.
+- Extended `safe_actor_spawn_points` to reject live-mob-occupied locations.
+  Both paths finish preflight before durable `actors_spawned` reservation.
+  Manual spawning now uses surveyed positions, not center-based offsets.
+- Updated existing Python source contracts (16 authored); checked 17
+  exact-source safety assertions against GitHub PR #34, all PASS.
+- Evidence limit: **no** Rust compile, Python unittest execution,
+  native Horizon client build or Minecraft E2E in this environment.
+- Keep stacked PR Draft and main untouched; do not enable Actions or merge
+  before real Windows build evidence and disposable-world test.
