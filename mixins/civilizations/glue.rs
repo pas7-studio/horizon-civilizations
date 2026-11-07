@@ -52,15 +52,32 @@ fn load(path: PathBuf) -> ActiveWorld {
 
 fn active(path: PathBuf) -> MutexGuard<'static, Option<ActiveWorld>> {
     let mut locked = ACTIVE.lock().unwrap_or_else(|poison| poison.into_inner());
-    if locked.as_ref().is_none_or(|x| x.path != path) {
-        if let Some(old) = locked.as_ref() {
-            if old.problem.is_none() {
-                if let Err(error) = save(old) {
-                    log::error!("[civilizations] outgoing world save: {error}");
-                }
-            }
+    match locked.as_ref() {
+        None => {
+            *locked = Some(load(path));
         }
-        *locked = Some(load(path));
+        Some(old) if old.path == path => {}
+        Some(old) if old.world.is_none() => {
+            // No in-memory state to lose; invalid on-disk world remains untouched.
+            *locked = Some(load(path));
+        }
+        Some(old) => {
+            // Retry saving even if a previous operation had failed. Never
+            // discard a valid mutated world unless persistence succeeds.
+            if let Err(error) = save(old) {
+                log::error!(
+                    "[civilizations] refusing world switch; outgoing save failed: {error}"
+                );
+                // All hooks for the requested new world stop on this problem.
+                if let Some(state) = locked.as_mut() {
+                    state.problem = Some(format!(
+                        "world switch prevented; outgoing save failed: {error}"
+                    ));
+                }
+                return locked;
+            }
+            *locked = Some(load(path));
+        }
     }
     locked
 }
@@ -71,6 +88,12 @@ fn save(active: &ActiveWorld) -> Result<(), String> {
     fs::create_dir_all(&active.path).map_err(|e| e.to_string())?;
     let output = serde_json::to_vec_pretty(world).map_err(|e| e.to_string())?;
     let dest = active.path.join(SAVE);
+    // A stale swap marks an interrupted save. Refuse it before touching
+    // either the previous backup or the next temporary file.
+    let swap = active.path.join("world.json.swap");
+    if swap.exists() {
+        return Err("pending world.json.swap from interrupted save; inspect and recover before continuing".into());
+    }
     let temp = active.path.join("world.json.tmp");
     let mut file = fs::File::create(&temp).map_err(|e| e.to_string())?;
     file.write_all(&output).map_err(|e| e.to_string())?;
@@ -83,8 +106,6 @@ fn save(active: &ActiveWorld) -> Result<(), String> {
     // Windows cannot rename a file over an existing destination. Keep a
     // recoverable swap file between the two renames; never overwrite a stale
     // swap left by a crash (that must be inspected manually).
-    let swap = active.path.join("world.json.swap");
-    if swap.exists() { return Err("pending world.json.swap from interrupted save; inspect and recover before continuing".into()); }
     if dest.exists() { fs::rename(&dest, &swap).map_err(|e| e.to_string())?; }
     if let Err(e) = fs::rename(&temp, &dest) {
         if swap.exists() { let _ = fs::rename(&swap, &dest); }
@@ -103,9 +124,17 @@ fn save(active: &ActiveWorld) -> Result<(), String> {
 pub fn closed() {
     let mut guard = ACTIVE.lock().unwrap_or_else(|poison| poison.into_inner());
     if let Some(state) = guard.as_ref() {
-        if state.problem.is_none() {
+        if state.world.is_some() {
+            // Keep in-memory data on write failure until the disk is fixed,
+            // instead of silently discarding it on close.
             if let Err(error) = save(state) {
-                log::error!("[civilizations] shutdown save failed: {error}");
+                log::error!(
+                    "[civilizations] shutdown save failed; retaining in-memory world: {error}"
+                );
+                if let Some(state) = guard.as_mut() {
+                    state.problem = Some(format!("shutdown save failed: {error}"));
+                }
+                return;
             }
         }
     }

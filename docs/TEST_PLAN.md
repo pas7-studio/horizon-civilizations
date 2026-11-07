@@ -64,6 +64,12 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
 44. **Persistence and bounded history:** reopen world and confirm receipt identity; after more than 32 completed harvests only latest 32 remain while lifetime sequence increases. Legacy v0.1.4 farms load with no fabricated receipts.
 45. **Corrupt audit:** invalid crop count, duplicate/non-increasing sequence, future observed world day and oversized history must reject the world save. No crops, money, stock or player items may be minted by audit creation.
 
+## World-switch persistence regression
+
+46. Force a read-only/full disk so outgoing world A cannot save, then ask Horizon to open world B. Civilizations must retain A in memory and refuse mutations/physical edits in B; do not replace A with an empty B world. Restore disk access and reattempt saving/closing.
+47. Force a shutdown save failure while A is dirty. State must remain resident until the process exits; the mod must log a recoverable error instead of discarding it, and a later close after disk access is restored must succeed.
+48. Pre-create a stale world.json.swap and attempt an ordinary save. Verify neither world.json.bak nor world.json.tmp are touched and the world is blocked until manual recovery of the swap. Test with copy-back of a valid backup in a disposable instance.
+
 49. **Time bootstrap:** create a pre-v0.1.6 world with a valid save but no last_host_day, load it on an advanced Horizon day, confirm zero phantom production and a new persisted anchor.
 50. **Day crossing and reload:** keep world open across a real Horizon day boundary (or sleep/skip-night), verify one abstract economy day. Close/reopen on the same host day and verify no second credit.
 51. **Time rewinds:** use /time set to an earlier day, re-open, and verify no replay until the previous maximum observed day is exceeded.
