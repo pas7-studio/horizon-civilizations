@@ -158,6 +158,50 @@ impl DailyPhase {
     }
 }
 
+/// Experimental physical home assignment: only completed visual 5x5 huts.
+/// Three indoor standing spots per hut, not beds or a legal claim of land.
+pub const PHYSICAL_HOME_CAPACITY: usize = 3;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct HomeSlot {
+    pub site: [i32; 3],
+    /// Indoor lane: 0 = west, 1 = center, 2 = east.
+    pub lane: u8,
+}
+
+impl HomeSlot {
+    pub fn foot(self) -> [i32; 3] {
+        [self.site[0] + i32::from(self.lane) - 1, self.site[1], self.site[2] - 1]
+    }
+
+    pub fn doorway(self) -> [i32; 3] {
+        [self.site[0], self.site[1], self.site[2] - 2]
+    }
+}
+
+/// Never route an actor into a saved "home" unless the corresponding real
+/// blocks exist in already-loaded chunks. Does not repair/overwrite blocks.
+pub fn inspect_home(home: HomeSlot, mut read: impl FnMut([i32; 3]) -> Option<String>) -> bool {
+    if usize::from(home.lane) >= PHYSICAL_HOME_CAPACITY {
+        return false;
+    }
+    let [x, y, z] = home.foot();
+    let [dx, dy, dz] = home.doorway();
+    for (position, expected) in [
+        ([x, y - 1, z], "minecraft:cobblestone"),
+        ([x, y, z], "minecraft:air"),
+        ([x, y + 1, z], "minecraft:air"),
+        ([dx, dy - 1, dz], "minecraft:cobblestone"),
+        ([dx, dy, dz], "minecraft:air"),
+        ([dx, dy + 1, dz], "minecraft:air"),
+    ] {
+        if read(position).as_deref() != Some(expected) {
+            return false;
+        }
+    }
+    true
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Resident {
     pub id: u64,
@@ -565,6 +609,28 @@ impl Settlement {
 
     pub fn population(&self) -> u32 {
         self.residents.iter().filter(|r| r.alive).count() as u32
+    }
+
+    /// Derived physical housing capacity. Abstract houses are NOT included.
+    /// Allocations are recalculated from the current living roster and ordered
+    /// completed sites; no new data is serialized to legacy world saves.
+    pub fn physical_housing(&self) -> (usize, usize, usize) {
+        let capacity = self.visual_sites.len() * PHYSICAL_HOME_CAPACITY;
+        let residents = self.residents.iter().filter(|resident| resident.alive).count();
+        (capacity, residents.min(capacity), residents.saturating_sub(capacity))
+    }
+
+    /// Stable for the same roster/sites, independent of resident vector order.
+    /// The first three living IDs get the first completed hut, next three the
+    /// second hut; no spot is invented in an abstract or unfinished house.
+    pub fn home_slot(&self, resident_id: u64) -> Option<HomeSlot> {
+        let mut ids: Vec<u64> = self.residents.iter()
+            .filter(|resident| resident.alive).map(|resident| resident.id).collect();
+        ids.sort_unstable();
+        let position = ids.binary_search(&resident_id).ok()?;
+        let site = *self.visual_sites.get(position / PHYSICAL_HOME_CAPACITY)?;
+        let lane = (position % PHYSICAL_HOME_CAPACITY) as u8;
+        Some(HomeSlot { site, lane })
     }
 
     pub fn quantity(&self, good: Good) -> u32 {
@@ -2012,5 +2078,108 @@ mod npc_daily_routine_tests {
         assert!(encoded.get("routine").is_none());
         let recovered: World = serde_json::from_value(encoded).unwrap();
         recovered.validate().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod physical_home_tests {
+    use super::*;
+
+    fn village() -> World {
+        let mut world = World::default();
+        world.found("Ashford", "minecraft:overworld", [0, 70, 0], "op").unwrap();
+        world
+    }
+
+    #[test]
+    fn abstract_or_pending_houses_are_never_allocated_as_real_homes() {
+        let mut world = village();
+        let settlement = world.settlements.get_mut(&1).unwrap();
+        settlement.houses = 5;
+        settlement.pending_visual_buildings = 5;
+        assert_eq!(settlement.physical_housing(), (0, 0, 10));
+        for resident in &settlement.residents {
+            assert_eq!(settlement.home_slot(resident.id), None);
+        }
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn completed_huts_allocate_three_spots_in_immutable_site_order() {
+        let mut world = village();
+        let settlement = world.settlements.get_mut(&1).unwrap();
+        settlement.houses = 3;
+        settlement.visual_sites.push([20, 70, 10]);
+        let mut ids: Vec<u64> = settlement.residents.iter().map(|r| r.id).collect();
+        ids.sort_unstable();
+        assert_eq!(settlement.physical_housing(), (3, 3, 7));
+        for (lane, id) in ids.iter().take(3).enumerate() {
+            assert_eq!(settlement.home_slot(*id), Some(HomeSlot {
+                site: [20, 70, 10], lane: lane as u8
+            }));
+        }
+        assert_eq!(settlement.home_slot(ids[3]), None);
+        let previous: Vec<_> = ids.iter().take(3)
+            .map(|id| settlement.home_slot(*id)).collect();
+        settlement.visual_sites.push([40, 70, 10]);
+        assert_eq!(settlement.physical_housing(), (6, 6, 4));
+        for (index, id) in ids.iter().enumerate().take(6) {
+            let site = if index < 3 { [20, 70, 10] } else { [40, 70, 10] };
+            assert_eq!(settlement.home_slot(*id), Some(HomeSlot {
+                site, lane: (index % 3) as u8
+            }));
+        }
+        settlement.residents.reverse();
+        assert_eq!(previous, ids.iter().take(3)
+            .map(|id| settlement.home_slot(*id)).collect::<Vec<_>>());
+        world.validate().unwrap();
+        let encoded = serde_json::to_string(&world).unwrap();
+        assert!(!encoded.contains("home_slot"));
+        let loaded: World = serde_json::from_str(&encoded).unwrap();
+        loaded.validate().unwrap();
+        assert_eq!(loaded.settlements[&1].home_slot(ids[0]), previous[0]);
+    }
+
+    #[test]
+    fn home_inspection_is_fail_closed_for_unloaded_or_modified_blocks() {
+        use std::collections::BTreeMap;
+        let home = HomeSlot { site: [20, 70, 10], lane: 0 };
+        let [x, y, z] = home.foot();
+        let [dx, dy, dz] = home.doorway();
+        assert_eq!([x, y, z], [19, 70, 9]);
+        assert_eq!([dx, dy, dz], [20, 70, 8]);
+        let mut world = BTreeMap::from([
+            ([x, y - 1, z], "minecraft:cobblestone".to_owned()),
+            ([x, y, z], "minecraft:air".to_owned()),
+            ([x, y + 1, z], "minecraft:air".to_owned()),
+            ([dx, dy - 1, dz], "minecraft:cobblestone".to_owned()),
+            ([dx, dy, dz], "minecraft:air".to_owned()),
+            ([dx, dy + 1, dz], "minecraft:air".to_owned()),
+        ]);
+        assert!(inspect_home(home, |p| world.get(&p).cloned()));
+        world.insert([x, y, z], "minecraft:chest".into());
+        assert!(!inspect_home(home, |p| world.get(&p).cloned()));
+        world.remove(&[x, y, z]);
+        assert!(!inspect_home(home, |p| world.get(&p).cloned()));
+        assert!(!inspect_home(home, |_| None));
+        assert!(!inspect_home(HomeSlot { lane: 3, ..home }, |_| {
+            Some("minecraft:air".into())
+        }));
+    }
+
+    #[test]
+    fn housing_rebalances_on_death_but_never_targets_dead_residents() {
+        let mut world = village();
+        let village = world.settlements.get_mut(&1).unwrap();
+        village.houses = 1;
+        village.visual_sites.push([20, 70, 10]);
+        let mut ids: Vec<u64> = village.residents.iter().map(|r| r.id).collect();
+        ids.sort_unstable();
+        let index = village.residents.iter().position(|r| r.id == ids[0]).unwrap();
+        village.residents[index].alive = false;
+        assert_eq!(village.home_slot(ids[0]), None);
+        assert_eq!(village.home_slot(ids[1]).unwrap().lane, 0);
+        assert_eq!(village.physical_housing(), (3, 3, 6));
+        world.validate().unwrap();
     }
 }
