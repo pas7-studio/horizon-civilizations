@@ -1,3 +1,40 @@
+# Latest unreleased source: native edit acknowledgement + fair gathering
+
+Branch: `fix/gather-crash-proof-fair-queue-v0115`, stacked on PR #30.
+**Not playable-proven.** `main` unchanged, GitHub Actions disabled,
+0.1.14 manifest remains. Rust/native build and game E2E not run here.
+
+- [x] Physically gathered resources now require a THREE-step durable
+  lifecycle: Issued write-ahead → actual native conditional command
+  succeeded AND immediate freshly observed source air →
+  `native_edit_confirmed` persisted → same UUID worker witnessed at
+  original work stand → same worker returns to town hall → ONE credit.
+- [x] Crash between Issued save and native result/confirmation is
+  quarantined even if block is air on restart. A player removing the
+  block while the server was down cannot create a false wood/stone
+  receipt. Failed/native-no-op commands also quarantine with ZERO credit.
+- [x] Existing PR #30 saves with pickup_witnessed=true and no newer
+  native_edit_confirmed field remain deserializable, but cannot be
+  automatically credited; their ambiguous issued job is blocked for
+  operator inspection. Other village records stay accessible.
+- [x] Native gather work now rotates among all eligible loaded villages,
+  rather than choosing the first active village forever. Selection is
+  deterministic every 8 ticks and skips blocked/unloaded jobs; the
+  actual worker profession determines its shift.
+- [x] New 8 Rust domain regression tests and 10 Python static source
+  contracts **authored**; prior tests updated for new acknowledgement
+  transition. Static 30/30 consistency checks pass, braces balanced.
+- [ ] NOT RUN: cargo/rustfmt/Clippy/Python unittest/full Horizon native
+  compile/client executable/Minecraft E2E. The current container lacks
+  rustc and cargo and cannot resolve GitHub or Rust download hosts.
+- [ ] Native command success + observed air is still not fully atomic
+  with mod JSON; uncertain crash windows deliberately reject credit.
+  True carried ItemStack and item animation remain unimplemented.
+
+See TEST_PLAN 245–254 for acceptance and PLAYTEST for Windows commands.
+
+---
+
 # Latest unreleased source — witnessed physical resource pickup (PR pending)
 
 Branch `feat/source-pickup-witness-v0115`, based on Draft PR #29.
