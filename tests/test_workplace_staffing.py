@@ -73,5 +73,36 @@ class WorkplaceStaffingContracts(unittest.TestCase):
         self.assertNotIn("has no farmer", farm)
 
 
+    def test_sand_and_dirt_pits_are_real_workplaces(self):
+        for token in ("    Sand,", "    Dirt,", 'Self::Sand => "minecraft:sand"',
+                      'Self::Dirt => "minecraft:dirt"', 'Self::Sand => "sand",',
+                      'Self::Dirt => "dirt",'):
+            self.assertIn(token, CORE)
+        self.assertIn('Self::Sand => "SAND PIT",', CORE)
+        self.assertIn('Self::Dirt => "DIRT PIT",', CORE)
+        self.assertIn("Self::Sand | Self::Dirt => Job::Digger,", CORE)
+        self.assertIn("Self::Digger => \"digger\",", CORE)
+        self.assertIn("Self::Sand | Self::Dirt => Some(Job::Digger),", CORE)
+        self.assertIn("Good::Sand => \"minecraft:sand\",", CORE)
+        self.assertIn("pub fn for_good(good: Good) -> Self {", CORE)
+
+    def test_pits_produce_only_through_a_real_receipt(self):
+        body = CORE.split("pub fn plan_gather(", 1)[1].split("\n    }", 1)[0]
+        self.assertIn("let Some(worker_job) = good.job()", body)
+        self.assertIn("v.count(worker_job) == 0", body)
+        self.assertNotIn("native_", body)
+        planner = GLUE.split("fn autonomous_village_step(", 1)[1].split("\n}", 1)[0]
+        self.assertIn("const PIT_TARGET: u32 = 32;", planner)
+        self.assertIn("if !village.posts.iter().any(|post| post.kind == pit)", planner)
+        self.assertIn("plan_gather(id, good, position, stand)", planner)
+
+    def test_role_changes_are_announced_readably(self):
+        staff = GLUE.split("fn staff_village(", 1)[1].split("\n}", 1)[0]
+        self.assertIn("native_broadcast(", staff)
+        self.assertIn("is now the village", staff)
+        self.assertIn('if action == "status" {', GLUE)
+        self.assertIn('"civ status <name:word>"', GLUE)
+
+
 if __name__ == "__main__":
     unittest.main()

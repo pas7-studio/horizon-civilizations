@@ -124,3 +124,27 @@ bindings = [
   { name = "pos", ty = "[i32; 3]", value = "pos" },
   { name = "cancel", ty = "&mut bool", value = "&mut *canceled" },
 ]
+
+# Village boards are records, not notes: right-click never opens their editor
+# and any submitted sign text for them is refused. Other signs are untouched.
+[[injection]]
+id = "sign_click"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_right_click_block"
+helper = "sign_click.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "pos", ty = "[i32; 3]", value = "pos" },
+  { name = "canceled", ty = "&mut bool", value = "&mut *canceled" },
+]
+
+[[injection]]
+id = "sign_edit"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_sign_changed"
+helper = "sign_edit.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "pos", ty = "[i32; 3]", value = "pos" },
+  { name = "cancel", ty = "&mut bool", value = "&mut *cancel" },
+]

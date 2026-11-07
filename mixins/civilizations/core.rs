@@ -59,6 +59,8 @@ pub enum Good {
     Wood,
     Stone,
     Iron,
+    Sand,
+    Dirt,
 }
 
 impl Good {
@@ -69,6 +71,8 @@ impl Good {
             "wood" | "logs" => Some(Self::Wood),
             "stone" => Some(Self::Stone),
             "iron" => Some(Self::Iron),
+            "sand" => Some(Self::Sand),
+            "dirt" | "earth" | "soil" => Some(Self::Dirt),
             _ => None,
         }
     }
@@ -80,6 +84,8 @@ impl Good {
             Self::Wood => "minecraft:oak_log",
             Self::Stone => "minecraft:cobblestone",
             Self::Iron => "minecraft:iron_ingot",
+            Self::Sand => "minecraft:sand",
+            Self::Dirt => "minecraft:dirt",
         }
     }
 
@@ -90,6 +96,18 @@ impl Good {
             Self::Wood => 3,
             Self::Stone => 2,
             Self::Iron => 15,
+            Self::Sand => 1,
+            Self::Dirt => 1,
+        }
+    }
+
+    /// The only role that may physically extract this good from the world.
+    pub fn job(self) -> Option<Job> {
+        match self {
+            Self::Wood => Some(Job::Lumberjack),
+            Self::Stone => Some(Job::Miner),
+            Self::Sand | Self::Dirt => Some(Job::Digger),
+            Self::Wheat | Self::Bread | Self::Iron => None,
         }
     }
 
@@ -100,6 +118,8 @@ impl Good {
             Self::Wood => "wood",
             Self::Stone => "stone",
             Self::Iron => "iron",
+            Self::Sand => "sand",
+            Self::Dirt => "dirt",
         }
     }
 }
@@ -117,6 +137,9 @@ pub enum Job {
     /// No workplace currently needs this resident. A laborer is a real
     /// role: they are not claimed to farm, bake or mine anything.
     Laborer,
+    /// Digs sand and dirt at a pit camp. Kept apart from the miner so a
+    /// quarry and a sand pit never compete for the same worker seat.
+    Digger,
 }
 
 /// A persistent work camp. Gathering is restricted to its radius so a
@@ -126,6 +149,8 @@ pub enum Job {
 pub enum PostKind {
     Lumber,
     Quarry,
+    Sand,
+    Dirt,
 }
 
 impl PostKind {
@@ -133,31 +158,48 @@ impl PostKind {
         match self {
             Self::Lumber => "lumber",
             Self::Quarry => "quarry",
+            Self::Sand => "sand",
+            Self::Dirt => "dirt",
         }
     }
     pub fn parse(text: &str) -> Option<Self> {
         match text {
             "lumber" | "lumberjack" | "wood" => Some(Self::Lumber),
             "quarry" | "stone" | "mine" => Some(Self::Quarry),
+            "sand" | "sandpit" => Some(Self::Sand),
+            "dirt" | "earth" | "soil" | "dig" => Some(Self::Dirt),
             _ => None,
+        }
+    }
+    pub fn for_good(good: Good) -> Self {
+        match good {
+            Good::Stone => Self::Quarry,
+            Good::Sand => Self::Sand,
+            Good::Dirt => Self::Dirt,
+            _ => Self::Lumber,
         }
     }
     pub fn good(self) -> Good {
         match self {
             Self::Lumber => Good::Wood,
             Self::Quarry => Good::Stone,
+            Self::Sand => Good::Sand,
+            Self::Dirt => Good::Dirt,
         }
     }
     pub fn job(self) -> Job {
         match self {
             Self::Lumber => Job::Lumberjack,
             Self::Quarry => Job::Miner,
+            Self::Sand | Self::Dirt => Job::Digger,
         }
     }
     pub fn label(self) -> &'static str {
         match self {
             Self::Lumber => "LUMBER CAMP",
             Self::Quarry => "QUARRY",
+            Self::Sand => "SAND PIT",
+            Self::Dirt => "DIRT PIT",
         }
     }
 }
@@ -176,6 +218,53 @@ pub struct WorkPost {
 /// How far from its camp a worker may search for natural resources.
 pub const POST_RADIUS: i32 = 24;
 pub const MAX_POSTS: usize = 4;
+
+/// A village keeps its own work area ticking even with nobody standing in
+/// it. Chunks are the smallest horizontal unit the engine can load, so the
+/// goal is to hold FEW chunks, not smaller ones: only the chunk of the civic
+/// centre, the chunk of every real workplace, and the corridor a villager
+/// must cross to reach it. Everything else stays unloaded, and the engine
+/// still gives each held chunk's immediate neighbours a lighter load level.
+pub const HALL_CHUNK_RADIUS: i32 = 1;
+pub const MAX_HELD_VILLAGE_CHUNKS: usize = 48;
+
+/// The exact chunks a village needs loaded to keep building and gathering
+/// while the player is away. Deterministic, sorted and bounded: the civic
+/// centre block plus one chunk per workplace and per corridor step. If that
+/// exceeds the budget, corridors are dropped first, then everything but the
+/// civic block.
+pub fn village_chunk_footprint(center: [i32; 3], sites: &[[i32; 3]]) -> Vec<[i32; 2]> {
+    let chunk_of = |block: [i32; 3]| [block[0].div_euclid(16), block[2].div_euclid(16)];
+    let hall = chunk_of(center);
+    let mut core_set = BTreeSet::new();
+    for dz in -HALL_CHUNK_RADIUS..=HALL_CHUNK_RADIUS {
+        for dx in -HALL_CHUNK_RADIUS..=HALL_CHUNK_RADIUS {
+            core_set.insert([hall[0] + dx, hall[1] + dz]);
+        }
+    }
+    let mut full = core_set.clone();
+    for site in sites {
+        full.insert(chunk_of(*site));
+        // Sample the walking line every four blocks: with the engine's
+        // neighbour ring that keeps the whole corridor loaded, without
+        // holding a square block of countryside nobody uses.
+        let dx = site[0].saturating_sub(center[0]);
+        let dz = site[2].saturating_sub(center[2]);
+        let steps = (dx.abs().max(dz.abs()) / 4).max(1);
+        for step in 0..=steps {
+            let x = center[0].saturating_add(dx.saturating_mul(step) / steps);
+            let z = center[2].saturating_add(dz.saturating_mul(step) / steps);
+            full.insert([x.div_euclid(16), z.div_euclid(16)]);
+        }
+    }
+    let chosen = if full.len() <= MAX_HELD_VILLAGE_CHUNKS { full } else { core_set.clone() };
+    let chosen = if chosen.len() <= MAX_HELD_VILLAGE_CHUNKS {
+        chosen
+    } else {
+        BTreeSet::from([hall])
+    };
+    chosen.into_iter().collect()
+}
 
 /// Physical actor presence is an authoritative 3D observation, not an
 /// X/Z-only check. A villager in a cave below the hall is not a courier.
@@ -223,6 +312,7 @@ impl Job {
             Self::Guard => "guard",
             Self::Merchant => "merchant",
             Self::Laborer => "laborer",
+            Self::Digger => "digger",
         }
     }
 
@@ -239,6 +329,7 @@ impl Job {
             Self::Guard => [0, 0, -8],
             Self::Merchant => [0, 0, 3],
             Self::Laborer => [2, 0, 4],
+            Self::Digger => [-6, 0, -2],
         }
     }
 }
@@ -568,6 +659,8 @@ impl GatherJob {
         match self.good {
             Good::Wood => "minecraft:oak_log",
             Good::Stone => "minecraft:stone",
+            Good::Sand => "minecraft:sand",
+            Good::Dirt => "minecraft:dirt",
             _ => "",
         }
     }
@@ -1029,6 +1122,135 @@ pub fn render_build_progress(title: &str, done: usize, total: usize, blocked: bo
     }
 }
 
+/// Rows of the villager conversation menu (a vanilla chest layout).
+pub const DIALOGUE_ROWS: u8 = 3;
+/// Most a single hand-over may sell, as the existing market enforces.
+pub const MAX_HAND_SALE: u32 = 64;
+
+/// One icon in a villager's conversation menu. The text is the item name.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct MenuEntry {
+    pub slot: usize,
+    pub icon: &'static str,
+    pub text: String,
+}
+
+/// Goods this resident will buy from a player right now, each with the most
+/// they will take. Only the mayor and the baker trade at all, and only for
+/// what their own role needs: the mayor buys the village's real construction
+/// shortfall (so a player can feed development); the baker buys wheat once the
+/// bakery stands. Everyone else holds no trade.
+pub fn resident_wants(
+    village: &Settlement, job: Job, wood_missing: u32, stone_missing: u32,
+) -> Vec<(Good, u32)> {
+    let mut wants = Vec::new();
+    match job {
+        Job::Merchant => {
+            if wood_missing > 0 { wants.push((Good::Wood, wood_missing.min(MAX_HAND_SALE))); }
+            if stone_missing > 0 { wants.push((Good::Stone, stone_missing.min(MAX_HAND_SALE))); }
+        }
+        Job::Baker => {
+            if village.bakery.as_ref().is_some_and(|b| b.complete) {
+                wants.push((Good::Wheat, 12));
+            }
+        }
+        _ => {}
+    }
+    wants
+}
+
+/// True for the professions that keep a stall at all.
+pub fn job_trades(job: Job) -> bool {
+    matches!(job, Job::Merchant | Job::Baker)
+}
+
+/// Pick the want matching a held plain item, with the amount to sell.
+pub fn sale_for_held(wants: &[(Good, u32)], item: &str, held: u32) -> Option<(Good, u32)> {
+    wants.iter()
+        .find(|(good, _)| good.item() == item)
+        .map(|(good, max)| (*good, held.min(*max).min(MAX_HAND_SALE)))
+        .filter(|(_, count)| *count > 0)
+}
+
+fn job_icon(job: Job) -> &'static str {
+    match job {
+        Job::Merchant => "minecraft:emerald",
+        Job::Baker => "minecraft:bread",
+        Job::Farmer => "minecraft:wheat",
+        Job::Lumberjack => "minecraft:iron_axe",
+        Job::Miner => "minecraft:iron_pickaxe",
+        Job::Builder => "minecraft:bricks",
+        Job::Guard => "minecraft:shield",
+        _ => "minecraft:wooden_shovel",
+    }
+}
+
+fn menu_text(text: impl AsRef<str>) -> String {
+    text.as_ref().chars().filter(|c| !c.is_control()).take(60).collect()
+}
+
+/// Everything the conversation menu shows, as read-only text. The menu never
+/// trades by itself: it only tells the player what this resident will do.
+pub struct DialogueInput<'a> {
+    pub village: &'a Settlement,
+    pub resident: &'a Resident,
+    pub is_member: bool,
+    pub routine: String,
+    pub on_duty: bool,
+    pub wants: &'a [(Good, u32)],
+    /// False when the hall barrels could not be read (chunk not loaded).
+    pub stock_known: bool,
+}
+
+pub fn dialogue_menu(input: &DialogueInput<'_>) -> Vec<MenuEntry> {
+    let village = input.village;
+    let resident = input.resident;
+    let role = if resident.job == Job::Merchant {
+        "mayor / warehouse steward".to_owned()
+    } else {
+        resident.job.name().to_owned()
+    };
+    let council = village.council_priorities().first()
+        .map(|p| format!("Council: {} {}/100", p.need.label(), p.urgency))
+        .unwrap_or_else(|| "Council: all calm".to_owned());
+    let home = match village.home_slot(resident.id) {
+        Some(slot) => format!("Home: hut, place {}", slot.lane + 1),
+        None => "Home: the commons".to_owned(),
+    };
+    let membership = if input.is_member {
+        format!("You are a member of {}", village.name)
+    } else {
+        format!("Join this village: /civ join {}", village.name)
+    };
+    let trade = if !job_trades(resident.job) {
+        "I do not trade. The mayor buys what the village needs.".to_owned()
+    } else if !input.stock_known {
+        "My stores are out of sight. Come back near the hall.".to_owned()
+    } else if input.wants.is_empty() {
+        "We need nothing from you right now.".to_owned()
+    } else {
+        let list: Vec<String> = input.wants.iter()
+            .map(|(g, n)| format!("{} x{} at {}c", g.as_str(), n, g.price()))
+            .collect();
+        format!("I buy: {}. Hold it and right-click me.", list.join(", "))
+    };
+    vec![
+        MenuEntry { slot: 4, icon: job_icon(resident.job),
+            text: menu_text(format!("{} - {}", resident.name, role)) },
+        MenuEntry { slot: 10, icon: "minecraft:clock",
+            text: menu_text(format!("Routine: {} ({})", input.routine,
+                if input.on_duty { "on duty" } else { "off duty" })) },
+        MenuEntry { slot: 12, icon: "minecraft:bell", text: menu_text(council) },
+        MenuEntry { slot: 14, icon: "minecraft:red_bed", text: menu_text(home) },
+        MenuEntry { slot: 16, icon: "minecraft:writable_book", text: menu_text(membership) },
+        MenuEntry {
+            slot: 22,
+            icon: if input.wants.is_empty() { "minecraft:barrier" } else { "minecraft:emerald" },
+            text: menu_text(trade),
+        },
+    ]
+}
+
 /// Standing site board: on natural ground just outside the front-right
 /// corner of a 5x5 building, clear of the wall, door and foundation.
 pub fn site_board_position(origin: [i32; 3]) -> [i32; 3] {
@@ -1089,8 +1311,15 @@ pub enum BuildInspection {
     Place { position: [i32; 3], old_block: String, new_block: &'static str },
 }
 
+/// Natural solid soil a civic floor may be laid on. Exotic grounds such as
+/// snow or gravel are real terrain in snowy and river villages, not player
+/// blocks, so refusing them would strand those settlements forever.
 pub fn is_ground(name: &str) -> bool {
-    matches!(name, "minecraft:grass_block" | "minecraft:dirt" | "minecraft:stone")
+    matches!(name,
+        "minecraft:grass_block" | "minecraft:dirt" | "minecraft:stone"
+        | "minecraft:coarse_dirt" | "minecraft:podzol" | "minecraft:rooted_dirt"
+        | "minecraft:sand" | "minecraft:red_sand" | "minecraft:gravel"
+        | "minecraft:snow_block" | "minecraft:andesite" | "minecraft:deepslate")
 }
 
 /// Check every previously committed step; the save file and chunk data are
@@ -1598,6 +1827,12 @@ impl Settlement {
             || self.gather_job.as_ref().is_some_and(|job| job.good == Good::Stone);
         want(Job::Lumberjack, lumber_camps.max(usize::from(wood_work)));
         want(Job::Miner, quarries.max(usize::from(stone_work)));
+        // Sand and dirt are only demanded by a pit the player or operator
+        // actually placed: nothing consumes them yet, so no seat is invented.
+        let pits = self.posts.iter()
+            .filter(|post| matches!(post.kind, PostKind::Sand | PostKind::Dirt))
+            .count();
+        want(Job::Digger, pits.min(1));
         demand
     }
 
@@ -1616,10 +1851,7 @@ impl Settlement {
         // authorizes the native block edit.
         let harvest_pin = self.gather_job.as_ref().and_then(|job| {
             job.worker_id.map(|worker| {
-                (worker, match job.good {
-                    Good::Wood => Job::Lumberjack,
-                    _ => Job::Miner,
-                })
+                (worker, job.good.job().unwrap_or(Job::Miner))
             })
         });
         if let Some((worker, job)) = harvest_pin {
@@ -1659,7 +1891,7 @@ impl Settlement {
         // 3. Fill the remaining seats with unassigned residents, in a fixed
         // priority order so the same save always produces the same roster.
         for job in [Job::Guard, Job::Builder, Job::Merchant, Job::Baker,
-                    Job::Farmer, Job::Lumberjack, Job::Miner] {
+                    Job::Farmer, Job::Lumberjack, Job::Miner, Job::Digger] {
             while remaining.get(&job).copied().unwrap_or(0) > 0 {
                 let Some(id) = self.residents.iter()
                     .filter(|resident| resident.alive && !chosen.contains_key(&resident.id))
@@ -2058,7 +2290,7 @@ impl World {
                 let walk_dz = i128::from(sz) - i128::from(z);
                 let village_dx = i128::from(x) - i128::from(village.center[0]);
                 let village_dz = i128::from(z) - i128::from(village.center[2]);
-                if !matches!(gather.good, Good::Wood | Good::Stone)
+                if gather.good.job().is_none()
                     || i64::from(x).abs() > 29_999_988
                     || i64::from(z).abs() > 29_999_988
                     || !(-2046..=2046).contains(&y)
@@ -2909,13 +3141,12 @@ impl World {
     pub fn plan_gather(
         &mut self, village_id: u64, good: Good, position: [i32; 3], stand: [i32; 3]
     ) -> Result<(), String> {
-        if !matches!(good, Good::Wood | Good::Stone) {
-            return Err("only physical oak logs or exposed stone may be gathered".into());
-        }
+        let Some(worker_job) = good.job() else {
+            return Err("only natural wood, stone, sand or dirt may be gathered".into());
+        };
         let v = self.settlements.get(&village_id).ok_or("unknown settlement")?;
         if v.gather_job.is_some() { return Err("another physical gather is pending".into()); }
         if !v.autonomy_enabled { return Err("village autonomy paused".into()); }
-        let worker_job = if good == Good::Wood { Job::Lumberjack } else { Job::Miner };
         if v.count(worker_job) == 0 { return Err("no qualified living worker".into()); }
         if i64::from(position[0]).abs() > 29_999_988
             || i64::from(position[2]).abs() > 29_999_988
@@ -3622,6 +3853,25 @@ impl World {
     /// land belongs to its authenticated owner, while shared civic plots,
     /// native farms and physical workshop footprints are protected.
     /// OP bypass is handled separately by the native host's permission.
+    /// True when `pos` is a sign this mod owns: a civic hall board (current or
+    /// pre-wall legacy position), a construction or finished-site board, or a
+    /// work-camp board. Their text comes only from saved village state, so
+    /// players are never allowed to open or edit them.
+    pub fn is_civic_sign(&self, dimension: &str, pos: [i32; 3]) -> bool {
+        self.settlements.values().filter(|v| v.dimension == dimension).any(|v| {
+            let hall = v.hall_complete || v.hall_job.is_some();
+            (hall && (hall_all_board_positions(v.center).contains(&pos)
+                || legacy_hall_board_positions(v.center).contains(&pos)
+                || site_board_position(v.center) == pos))
+                || v.visual_sites.iter().any(|site| site_board_position(*site) == pos)
+                || v.visual_job.as_ref().is_some_and(|j| site_board_position(j.origin) == pos)
+                || v.bakery.as_ref().is_some_and(|b| site_board_position(b.origin) == pos)
+                || v.posts.iter().any(|p| {
+                    p.origin[0].checked_add(1).is_some_and(|x| [x, p.origin[1], p.origin[2]] == pos)
+                })
+        })
+    }
+
     pub fn player_may_break(&self, player: &str, dimension: &str, pos: [i32; 3]) -> bool {
         let in_hut = |origin: [i32;3]| {
             (i64::from(pos[0]) - i64::from(origin[0])).abs() <= 2
@@ -4906,6 +5156,32 @@ mod workplace_staffing_tests {
     }
 
     #[test]
+    fn a_dirt_or_sand_pit_hires_one_digger_and_plans_its_gather() {
+        let (mut world, id) = village();
+        world.add_post(id, PostKind::Sand, [-24, 70, 0]).unwrap();
+        world.add_post(id, PostKind::Dirt, [0, 70, 24]).unwrap();
+        let v = world.settlements.get_mut(&id).unwrap();
+        // Both pits share one digger seat; they never take a miner seat.
+        assert_eq!(v.workplace_demand().get(&Job::Digger), Some(&1));
+        v.staff_workplaces();
+        assert_eq!(v.count(Job::Digger), 1);
+        assert_eq!(v.count(Job::Miner), 1);
+        let digger = v.residents.iter()
+            .find(|r| r.job == Job::Digger).unwrap().id;
+        assert!(world.set_post_worker(id, PostKind::Sand, digger).unwrap());
+        world.plan_gather(id, Good::Sand, [20, 70, 0], [20, 72, 0]).unwrap();
+        let job = world.settlements[&id].gather_job.clone().unwrap();
+        assert_eq!(job.good, Good::Sand);
+        assert_eq!(job.source_block(), "minecraft:sand");
+        assert_eq!(Good::Sand.job(), Some(Job::Digger));
+        assert_eq!(Good::Dirt.job(), Some(Job::Digger));
+        assert_eq!(Good::Sand.item(), "minecraft:sand");
+        assert_eq!(Good::Dirt.item(), "minecraft:dirt");
+        assert_eq!(PostKind::for_good(Good::Sand), PostKind::Sand);
+        world.validate().unwrap();
+    }
+
+    #[test]
     fn staffing_is_stable_and_a_camp_keeps_its_worker() {        let (mut world, id) = village();
         world.settlements.get_mut(&id).unwrap().staff_workplaces();
         let lumberjack = world.settlements[&id].residents.iter()
@@ -4934,6 +5210,57 @@ mod workplace_staffing_tests {
         assert_eq!(world.settlements[&id].posts[0].worker_id, None);
         assert_eq!(world.settlements[&id].count(Job::Lumberjack), 1);
         world.validate().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod village_chunk_tests {
+    use super::*;
+
+    #[test]
+    fn only_the_civic_block_is_held_for_a_village_with_no_workplaces() {
+        let footprint = village_chunk_footprint([0, 70, 0], &[]);
+        assert_eq!(footprint.len(), 9);
+        assert!(footprint.contains(&[0, 0]));
+        assert!(footprint.contains(&[-1, -1]) && footprint.contains(&[1, 1]));
+        assert!(!footprint.contains(&[2, 0]));
+    }
+
+    #[test]
+    fn workplaces_and_their_walking_corridor_are_held_not_a_square() {
+        let center = [0, 70, 0];
+        let camp = [64, 70, 0];
+        let footprint = village_chunk_footprint(center, &[camp]);
+        assert!(footprint.contains(&[4, 0]));
+        // Every chunk the straight path crosses is present.
+        for chunk in 0..=4 {
+            assert!(footprint.contains(&[chunk, 0]), "missing corridor chunk {chunk}");
+        }
+        // The square that the old fixed radius would have held is not used.
+        assert!(!footprint.contains(&[0, 3]));
+        assert!(!footprint.contains(&[3, 3]));
+        assert!(footprint.len() < 25);
+    }
+
+    #[test]
+    fn a_far_workplace_never_blows_the_budget() {
+        let center = [0, 70, 0];
+        let far: Vec<[i32; 3]> = (0..4).map(|i| [4_000 + i * 100, 70, 4_000]).collect();
+        let footprint = village_chunk_footprint(center, &far);
+        assert!(footprint.len() <= MAX_HELD_VILLAGE_CHUNKS);
+        assert!(footprint.contains(&[0, 0]));
+        assert_eq!(
+            village_chunk_footprint(center, &[[64, 70, 0]]),
+            village_chunk_footprint(center, &[[64, 70, 0]])
+        );
+    }
+
+    #[test]
+    fn negative_coordinates_stay_in_the_right_chunk() {
+        let footprint = village_chunk_footprint([-99, 69, -327], &[[-116, 68, -363]]);
+        assert!(footprint.contains(&[-7, -21]));
+        assert!(footprint.contains(&[-8, -23]));
+        assert!(footprint.iter().all(|chunk| chunk[1] <= -19));
     }
 }
 
@@ -6732,5 +7059,110 @@ mod site_sign_tests {
         assert_eq!(board.plain()[1], "Batches 12");
         assert_eq!(board.plain()[2], "Wheat in 3");
         assert_eq!(board.plain()[3], "Bread out 1");
+    }
+}
+
+#[cfg(test)]
+mod civic_sign_protection_tests {
+    use super::*;
+
+    #[test]
+    fn only_registered_boards_are_protected() {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0, 70, 0], "op").unwrap();
+        world.settlements.get_mut(&id).unwrap().hall_complete = true;
+        let dim = "minecraft:overworld";
+        for pos in hall_all_board_positions([0, 70, 0]) {
+            assert!(world.is_civic_sign(dim, pos), "{pos:?}");
+        }
+        assert!(world.is_civic_sign(dim, site_board_position([0, 70, 0])));
+        // An unrelated sign, another dimension and an unfinished hall stay editable.
+        assert!(!world.is_civic_sign(dim, [40, 70, 40]));
+        assert!(!world.is_civic_sign("minecraft:the_nether", hall_all_board_positions([0, 70, 0])[0]));
+        world.settlements.get_mut(&id).unwrap().hall_complete = false;
+        assert!(!world.is_civic_sign(dim, hall_all_board_positions([0, 70, 0])[0]));
+    }
+
+    #[test]
+    fn hut_and_bakery_site_boards_are_protected() {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0, 70, 0], "op").unwrap();
+        world.settlements.get_mut(&id).unwrap().visual_sites.push([20, 70, 20]);
+        assert!(world.is_civic_sign("minecraft:overworld", site_board_position([20, 70, 20])));
+        assert!(!world.is_civic_sign("minecraft:overworld", [20, 70, 20]));
+    }
+}
+
+#[cfg(test)]
+mod villager_dialogue_tests {
+    use super::*;
+
+    fn village() -> (World, u64) {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0, 70, 0], "op").unwrap();
+        (world, id)
+    }
+
+    #[test]
+    fn only_mayor_and_baker_keep_a_stall() {
+        assert!(job_trades(Job::Merchant) && job_trades(Job::Baker));
+        for job in [Job::Farmer, Job::Lumberjack, Job::Miner, Job::Builder, Job::Guard, Job::Laborer] {
+            assert!(!job_trades(job), "{job:?}");
+        }
+    }
+
+    #[test]
+    fn mayor_buys_exactly_the_real_construction_shortfall() {
+        let (world, id) = village();
+        let v = &world.settlements[&id];
+        assert_eq!(resident_wants(v, Job::Merchant, 8, 0), vec![(Good::Wood, 8)]);
+        assert_eq!(resident_wants(v, Job::Merchant, 100, 25),
+            vec![(Good::Wood, 64), (Good::Stone, 25)]);
+        assert!(resident_wants(v, Job::Merchant, 0, 0).is_empty());
+        assert!(resident_wants(v, Job::Farmer, 8, 8).is_empty());
+        // No bakery yet: the baker has nothing to buy wheat for.
+        assert!(resident_wants(v, Job::Baker, 8, 8).is_empty());
+    }
+
+    #[test]
+    fn held_item_sells_only_what_is_wanted_and_capped() {
+        let wants = [(Good::Wood, 8), (Good::Stone, 25)];
+        assert_eq!(sale_for_held(&wants, "minecraft:oak_log", 64), Some((Good::Wood, 8)));
+        assert_eq!(sale_for_held(&wants, "minecraft:oak_log", 3), Some((Good::Wood, 3)));
+        assert_eq!(sale_for_held(&wants, "minecraft:cobblestone", 40), Some((Good::Stone, 25)));
+        assert_eq!(sale_for_held(&wants, "minecraft:diamond", 5), None);
+        assert_eq!(sale_for_held(&wants, "minecraft:oak_log", 0), None);
+        assert_eq!(sale_for_held(&[], "minecraft:oak_log", 5), None);
+    }
+
+    fn menu_for(job: Job, wants: &[(Good, u32)], stock_known: bool) -> Vec<MenuEntry> {
+        let (world, id) = village();
+        let v = &world.settlements[&id];
+        let mut resident = v.residents.first().cloned().expect("founded village has residents");
+        resident.job = job;
+        dialogue_menu(&DialogueInput {
+            village: v, resident: &resident, is_member: false,
+            routine: "work".into(), on_duty: true, wants, stock_known,
+        })
+    }
+
+    #[test]
+    fn menu_entries_fit_the_chest_and_never_collide() {
+        let entries = menu_for(Job::Merchant, &[(Good::Wood, 8), (Good::Stone, 25)], true);
+        let slots: std::collections::BTreeSet<_> = entries.iter().map(|e| e.slot).collect();
+        assert_eq!(slots.len(), entries.len());
+        assert!(entries.iter().all(|e| e.slot < usize::from(DIALOGUE_ROWS) * 9));
+        assert!(entries.iter().all(|e| e.text.chars().count() <= 60 && !e.text.is_empty()));
+    }
+
+    #[test]
+    fn trade_slot_is_thematic_per_role() {
+        let find = |entries: &[MenuEntry]| entries.iter().find(|e| e.slot == 22).unwrap().text.clone();
+        let mayor = find(&menu_for(Job::Merchant, &[(Good::Wood, 8)], true));
+        assert!(mayor.starts_with("I buy: wood x8 at"), "{mayor}");
+        assert!(mayor.contains("right-click"));
+        assert!(find(&menu_for(Job::Merchant, &[], true)).contains("nothing from you"));
+        assert!(find(&menu_for(Job::Merchant, &[], false)).contains("out of sight"));
+        assert!(find(&menu_for(Job::Farmer, &[], true)).contains("do not trade"));
     }
 }

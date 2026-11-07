@@ -160,6 +160,8 @@ pub fn register(commands: &mut Vec<NativeCommand>) {
         "civ hall <name:word>", "civ warehouse <name:word>", "civ bakery <name:word>",
         "civ posts <name:word>",
         "civ roles <name:word>",
+        "civ status <name:word>",
+        "civ chunks <name:word>",
         "civ diagnose <name:word>",
         "civ construction <name:word>", "civ farming <name:word>",
         "civ harvests <name:word>",
@@ -412,6 +414,74 @@ fn check_empty_hut_site(game: &Game<'_>, dimension: &str, origin: [i32; 3]) -> R
         }
     }
     Ok(())
+}
+
+/// Natural growth a builder may clear to open a civic plot. Only plants and
+/// trees: containers, player blocks and existing construction are never
+/// touched, so a refused plot stays exactly as the player left it.
+fn is_clearable_growth(name: &str) -> bool {
+    matches!(name,
+        "minecraft:short_grass" | "minecraft:tall_grass" | "minecraft:fern"
+        | "minecraft:large_fern" | "minecraft:leaf_litter" | "minecraft:dead_bush"
+        | "minecraft:snow" | "minecraft:vine" | "minecraft:bush"
+        | "minecraft:dandelion" | "minecraft:poppy" | "minecraft:blue_orchid"
+        | "minecraft:allium" | "minecraft:azure_bluet" | "minecraft:oxeye_daisy"
+        | "minecraft:cornflower" | "minecraft:lily_of_the_valley"
+        | "minecraft:brown_mushroom" | "minecraft:red_mushroom"
+        | "minecraft:sweet_berry_bush" | "minecraft:mangrove_roots")
+        || name.ends_with("_sapling")
+        || name.ends_with("_leaves")
+        || name.ends_with("_log")
+        || name.ends_with("_wood")
+}
+
+/// Remove natural growth from a bounded plot. Every cell is validated before
+/// the first block changes, so a refused plot is never half cleared, and the
+/// cell count is bounded so one turn cannot strip a forest.
+fn clear_growth_only(
+    game: &mut Game<'_>, dimension: &str, origin: [i32; 3], half: i32, top: i32,
+) -> Result<u32, String> {
+    let mut doomed = Vec::new();
+    for z in -half..=half {
+        for x in -half..=half {
+            for y in 0..=top {
+                let pos = [origin[0] + x, origin[1] + y, origin[2] + z];
+                let name = world_block(game, dimension, pos).ok_or("plot is not loaded")?;
+                if name == "minecraft:air" { continue; }
+                if !is_clearable_growth(&name) {
+                    return Err(format!("{name} at {pos:?} is not natural growth"));
+                }
+                doomed.push(pos);
+            }
+        }
+    }
+    if doomed.len() > 120 {
+        return Err("plot needs more clearing than one civic plot allows".into());
+    }
+    let mut cleared = 0_u32;
+    for [x, y, z] in doomed {
+        if game.native_run_command(&format!(
+            "execute in {dimension} run setblock {x} {y} {z} minecraft:air replace"
+        )) {
+            cleared += 1;
+        }
+    }
+    Ok(cleared)
+}
+
+/// Make one civic plot physically buildable. A plot that is merely overgrown
+/// is opened by clearing that growth; anything else stays untouched.
+fn open_build_plot(
+    game: &mut Game<'_>, dimension: &str, origin: [i32; 3], half: i32, top: i32,
+    attempts: &mut u32,
+    check: impl Fn(&Game<'_>) -> Result<(), String>,
+) -> Result<u32, String> {
+    if check(game).is_ok() { return Ok(0); }
+    if *attempts == 0 { return Err("plot clearing budget spent this turn".into()); }
+    *attempts -= 1;
+    let cleared = clear_growth_only(game, dimension, origin, half, top)?;
+    check(game).map_err(|error| format!("cleared {cleared} growth and still {error}"))?;
+    Ok(cleared)
 }
 
 /// One real, resource-funded civic-hall construction step. The hall is
@@ -770,6 +840,40 @@ pub fn protect_civilization_block(
     }
 }
 
+/// True when a sign this mod owns is at `position` in the current dimension.
+fn civic_sign_at(game: &Game<'_>, position: [i32; 3]) -> bool {
+    if !game.native_on(MOD_ID) { return false; }
+    let dimension = game.dim.id().to_owned();
+    let is_sign = world_block(game, &dimension, position)
+        .is_some_and(|block| block.ends_with("_sign"));
+    if !is_sign { return false; }
+    let Some(dir) = game.native_world_dir() else { return false; };
+    let guard = active(dir.join(DIR));
+    guard.as_ref().and_then(|state| state.world.as_ref())
+        .is_some_and(|world| world.is_civic_sign(&dimension, position))
+}
+
+/// Right-clicking a village board does nothing: the editor never opens and
+/// dye or ink cannot change it. Applies to everyone, operators included,
+/// because the board text is rewritten only when the village state changes.
+pub fn protect_civic_sign_click(game: &mut Game<'_>, position: [i32; 3], canceled: &mut bool) {
+    if *canceled || !civic_sign_at(game, position) { return; }
+    *canceled = true;
+    if let Some(player) = game.native_acting_player() {
+        let _ = game.native_action_bar(player.uuid, Text::literal(
+            "Village boards show the settlement's records and cannot be edited."
+        ).with_color(text::GOLD));
+    }
+}
+
+/// Backstop for any path that still submits sign text: refuse the edit.
+pub fn protect_civic_sign_edit(
+    game: &mut Game<'_>, position: [i32; 3], cancel: &mut bool,
+) {
+    if *cancel || !civic_sign_at(game, position) { return; }
+    *cancel = true;
+}
+
 /// Public civic barrels are accounted stock, not free player loot. Only
 /// real server operators may open them to inspect native contents; ordinary
 /// villagers trade using the native inventory command path. This hook does
@@ -798,9 +902,14 @@ pub fn protect_hall_inventory(
     ).with_color(text::GOLD));
 }
 
-/// Right-click dialogue for a UUID-bound civilization villager. Unbound or
-/// vanilla villagers keep their normal Minecraft interaction.
+/// Right-click on a UUID-bound civilization villager. Holding a good this
+/// resident buys sells it on the spot; otherwise a conversation menu opens.
+/// Unbound or vanilla villagers keep their normal Minecraft interaction.
 pub fn interact_entity(game: &mut Game<'_>, entity: i32, kind: &str, claimed: &mut bool) {
+    use crate::game::civilizations_core::{
+        dialogue_menu, physical_construction_shortfall, resident_wants, sale_for_held,
+        DialogueInput, DIALOGUE_ROWS,
+    };
     if *claimed || kind != "minecraft:villager" || !game.native_on(MOD_ID) {
         return;
     }
@@ -816,55 +925,148 @@ pub fn interact_entity(game: &mut Game<'_>, entity: i32, kind: &str, claimed: &m
     let Some(dir) = game.native_world_dir() else {
         return;
     };
-    let guard = active(dir.join(DIR));
-    let Some(world) = guard.as_ref()
-        .filter(|state| state.problem.is_none())
-        .and_then(|state| state.world.as_ref())
-    else {
-        return;
+    // Copy what the conversation needs, then release the world lock before
+    // any native call that may itself take it.
+    let (village, resident, is_member) = {
+        let guard = active(dir.join(DIR));
+        let Some(world) = guard.as_ref()
+            .filter(|state| state.problem.is_none())
+            .and_then(|state| state.world.as_ref())
+        else {
+            return;
+        };
+        let Some((village, resident)) = world.settlements.values()
+            .filter(|village| village.dimension == player.dimension)
+            .find_map(|village| {
+                village.residents.iter()
+                    .find(|resident| resident.alive && resident.entity_uuid == Some(uuid))
+                    .map(|resident| (village.clone(), resident.clone()))
+            })
+        else {
+            return;
+        };
+        let membership = world.players
+            .get(&format!("{:032x}", player.uuid))
+            .and_then(|p| p.settlement);
+        (village.clone(), resident, membership == Some(village.id))
     };
-    let Some((village, resident)) = world.settlements.values()
-        .filter(|village| village.dimension == player.dimension)
-        .find_map(|village| {
-            village.residents.iter()
-                .find(|resident| resident.alive && resident.entity_uuid == Some(uuid))
-                .map(|resident| (village, resident))
-        })
-    else {
-        return;
-    };
-    let membership = world.players
-        .get(&format!("{:032x}", player.uuid))
-        .and_then(|p| p.settlement);
-    let invitation = if membership == Some(village.id) {
-        format!("You are a member of {}.", village.name)
-    } else {
-        format!("To join this settlement: /civ join {}", village.name)
-    };
+    let dimension = game.dim.id().to_owned();
+    let stored = physical_barrel_stock(game, &dimension, village.center);
+    let (wood_missing, stone_missing) = stored.as_ref()
+        .map_or((0, 0), |stock| physical_construction_shortfall(&village, stock));
+    let wants = resident_wants(&village, resident.job, wood_missing, stone_missing);
+
+    // A held plain stack the resident wants is sold at once. This reuses the
+    // market's own checked, saved and rolled-back sale path.
+    if let Some((item, held, true)) = game.native_held() {
+        if let Some((good, count)) = sale_for_held(&wants, &item, held) {
+            let line = match sell_held_to_resident(game, &player, village.id, good, count) {
+                Ok(done) => format!("{}: {done}", resident.name),
+                Err(reason) => format!("{} cannot buy that: {reason}", resident.name),
+            };
+            if game.native_tell(player.uuid, Text::literal(line).with_color(text::GOLD)) {
+                *claimed = true;
+            }
+            return;
+        }
+    }
+
     let phase = DailyPhase::at(game.world.day_time);
-    let duty = if phase.on_shift(resident.job) { "on duty" } else { "off duty" };
-    let role = if resident.job == Job::Merchant {
-        "mayor / warehouse steward"
-    } else { resident.job.name() };
-    let council = village.council_priorities().first()
-        .map(|priority| format!(
-            "Council: {} {}/100", priority.need.label(), priority.urgency
-        ))
-        .unwrap_or_else(|| "Council: stable".to_owned());
-    let home = match village.home_slot(resident.id) {
-        Some(slot) => format!("Hut {:?}, place {} (physical blocks checked at night)", slot.site, slot.lane + 1),
-        None => "Commons (no completed physical home)".to_owned(),
-    };
-    let message = format!(
-        "{} — {} of {} (morale {}). Routine: {} / {}. Home: {}. {}. {} View: /civ info {}. Trade: /civ buy/sell <good> <amount>.",
-        resident.name, role, village.name, village.morale,
-        phase.name(), duty, home, council, invitation, village.name
-    );
-    drop(guard);
-    // Do not consume a vanilla interaction unless the information was sent.
-    if game.native_tell(player.uuid, Text::literal(message).with_color(text::GOLD)) {
+    let entries = dialogue_menu(&DialogueInput {
+        village: &village,
+        resident: &resident,
+        is_member,
+        routine: phase.name().to_owned(),
+        on_duty: phase.on_shift(resident.job),
+        wants: &wants,
+        stock_known: stored.is_some(),
+    });
+    let mut items: Vec<Option<ItemStack>> = vec![None; usize::from(DIALOGUE_ROWS) * 9];
+    for entry in &entries {
+        if let Some(cell) = items.get_mut(entry.slot) {
+            *cell = Some(ItemStack {
+                item: entry.icon.into(),
+                count: 1,
+                damage: 0,
+                extra: Some(Box::new(horizon_client::item_data::StackData {
+                    custom_name: Some(Tag::String(entry.text.as_str().into())),
+                    ..Default::default()
+                })),
+            });
+        }
+    }
+    let title = Text::literal(format!("{} - {}", village.name, resident.name))
+        .with_color(text::GOLD);
+    // The menu is display-only: its slots move nothing, so no click hook is
+    // needed and nobody can take an item out of it.
+    if game.native_open_menu(player.uuid, DIALOGUE_ROWS, title, items).is_some() {
+        *claimed = true;
+        return;
+    }
+    // No menu is available (the single-player host is not a menu guest): show
+    // the same entries as a colored chat panel, one line each. Do not consume a
+    // vanilla interaction unless the information was actually sent.
+    if send_dialogue_chat(game, player.uuid, &village.name, &entries) {
         *claimed = true;
     }
+}
+
+/// The conversation as a chat panel: a gold header, grey facts, and the trade
+/// line in green when this resident buys something (grey when they do not).
+fn send_dialogue_chat(
+    game: &mut Game<'_>, uuid: u128, village: &str,
+    entries: &[crate::game::civilizations_core::MenuEntry],
+) -> bool {
+    let mut ordered: Vec<&crate::game::civilizations_core::MenuEntry> = entries.iter().collect();
+    ordered.sort_by_key(|entry| entry.slot);
+    let Some(head) = ordered.first() else { return false; };
+    let header = Text::literal(format!("-- {} ({village}) --", head.text))
+        .with_color(text::GOLD).bold();
+    if !game.native_tell(uuid, header) {
+        return false;
+    }
+    for entry in ordered.iter().skip(1) {
+        let color = if entry.icon == "minecraft:emerald" { text::GREEN } else { text::GRAY };
+        let _ = game.native_tell(
+            uuid,
+            Text::literal("  - ").with_color(text::DARK_GRAY)
+                .append(Text::literal(entry.text.clone()).with_color(color)),
+        );
+    }
+    true
+}
+
+/// Sell `count` of the held good to a resident who wants it. The coin payout
+/// and warehouse credit are saved together with the inventory removal, and
+/// either is rolled back if the other fails; a rejected sale changes nothing.
+fn sell_held_to_resident(
+    game: &mut Game<'_>, player: &NativeServerPlayer, village_id: u64, good: Good, count: u32,
+) -> Result<String, String> {
+    let dir = game.native_world_dir().ok_or("world folder unavailable")?;
+    let mut guard = active(dir.join(DIR));
+    let state = guard.as_mut()
+        .filter(|state| state.problem.is_none() && state.world.is_some())
+        .ok_or("civilizations is paused for this world")?;
+    let actor = format!("{:032x}", player.uuid);
+    let item = good.item();
+    if game.native_count_items(item) < count {
+        return Err(format!("you need {count} {item}"));
+    }
+    let previous = state.world.as_ref().unwrap().clone();
+    let payout = state.world.as_mut().unwrap().sell(&actor, village_id, good, count)?;
+    let taken = game.native_take_items(item, count);
+    if taken != count {
+        if taken > 0 { game.native_give_items(item, taken); }
+        state.world = Some(previous);
+        return Err("your inventory changed during the sale".into());
+    }
+    if let Err(error) = save(state) {
+        let refund = game.native_give_items(item, count);
+        log::error!("[civilizations] hand sale not saved, restored {refund}/{count}: {error}");
+        state.world = Some(previous);
+        return Err(format!("sale not committed: {error}"));
+    }
+    Ok(format!("Sold {count} {} for {payout} coins.", good.as_str()))
 }
 
 fn quarantined_native_purchase(state: &mut ActiveWorld, village_id: u64, reason: &str) -> String {
@@ -991,7 +1193,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
     let actor = format!("{:032x}", player.uuid);
     let action = args.next().unwrap_or("help");
     if action == "help" {
-        reply(game, "Civilizations: /civ list | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | hall <name> | warehouse <name> | posts <name> | roles <name> | diagnose <name> | buyplot <name> | buyhouse <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, barrelcheck <name>, resolvebarrel <name> confirm|cancel <observed_count>, gathercheck <name>, discardgather <name> intact|empty, day [days], construct <name>, post <name> lumber|quarry, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
+        reply(game, "Civilizations: /civ list | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | hall <name> | warehouse <name> | posts <name> | roles <name> | status <name> | chunks <name> | diagnose <name> | buyplot <name> | buyhouse <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, barrelcheck <name>, resolvebarrel <name> confirm|cancel <observed_count>, gathercheck <name>, discardgather <name> intact|empty, day [days], construct <name>, post <name> lumber|quarry|sand|dirt, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
         return;
     }
     if action == "list" {
@@ -1011,7 +1213,8 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
         let mayor = village.residents.iter()
             .find(|r| r.alive && r.job == Job::Merchant)
             .map(|r| r.name.as_str()).unwrap_or("unassigned");
-        let goods = [Good::Wheat, Good::Bread, Good::Wood, Good::Stone, Good::Iron];
+        let goods = [Good::Wheat, Good::Bread, Good::Wood, Good::Stone, Good::Iron,
+                     Good::Sand, Good::Dirt];
         let incoming = goods.iter().map(|good| format!(
             "{}:{}", good.as_str(), village.warehouse_quantity(*good)
         )).collect::<Vec<_>>().join(" / ");
@@ -1535,6 +1738,48 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
         reply(game, message);
         return;
     }
+    if action == "chunks" {
+        let name = args.next().unwrap_or("");
+        let Some(s) = world.by_name(name) else { error(game, "unknown settlement"); return; };
+        let sites: Vec<[i32; 3]> = settlement_work_sites(s);
+        let wanted = crate::game::civilizations_core::village_chunk_footprint(
+            s.center, &sites,
+        );
+        reply(game, format!(
+            "{} holds {} chunks ({:?} + {} workplaces/corridors) around {:?} while autonomy is on ({})",
+            s.name, wanted.len(), wanted.first().copied().unwrap_or([0, 0]),
+            sites.len(), s.center,
+            if s.autonomy_enabled { "held now" } else { "paused: released" }
+        ));
+        return;
+    }
+    if action == "status" {
+        let name = args.next().unwrap_or("");
+        let Some(s) = world.by_name(name) else { error(game, "unknown settlement"); return; };
+        let (missing_wood, missing_stone) = s.hall_materials_missing();
+        let camps = if s.posts.is_empty() {
+            "none".to_owned()
+        } else {
+            s.posts.iter().map(|post| {
+                let worker = post.worker_id
+                    .and_then(|id| s.residents.iter().find(|r| r.id == id && r.alive))
+                    .map(|r| r.name.as_str()).unwrap_or("-");
+                format!("{} {:?} ({worker})", post.kind.name(), post.origin)
+            }).collect::<Vec<_>>().join(", ")
+        };
+        let harvest = s.gather_job.as_ref().map(|job| format!(
+            "{} {:?}", job.good.as_str(),
+            if job.issued { "issued" } else { "planned" }
+        )).unwrap_or_else(|| "none".to_owned());
+        reply(game, format!(
+            "{}: pop {} (laborers {}), hall {}, homeless {}, next builds {}, missing {} logs/{} cobble, camps [{}], harvest {}",
+            s.name, s.population(), s.count(Job::Laborer),
+            if s.hall_complete { "complete" } else if s.hall_job.is_some() { "building" } else { "pending" },
+            s.physical_housing().2, s.pending_visual_buildings,
+            missing_wood, missing_stone, camps, harvest
+        ));
+        return;
+    }
     if action == "roles" {
         let name = args.next().unwrap_or("");
         let Some(s) = world.by_name(name) else { error(game, "unknown settlement"); return; };
@@ -1551,7 +1796,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
         let name = args.next().unwrap_or("");
         let Some(s) = world.by_name(name) else { error(game, "unknown settlement"); return; };
         let text = if s.posts.is_empty() {
-            format!("{} has no work camps yet. OP: stand at a clear spot 8..80 blocks from center and /civ post {} lumber|quarry", s.name, s.name)
+            format!("{} has no work camps yet. OP: stand at a clear spot 8..80 blocks from center and /civ post {} lumber|quarry|sand|dirt", s.name, s.name)
         } else {
             let list: Vec<String> = s.posts.iter().map(|post| {
                 let worker = post.worker_id
@@ -1859,9 +2104,9 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             ))
         })(),
         "post" if player.permission >= 2 => (|| {
-            let name = args.next().ok_or("usage: /civ post <name> lumber|quarry")?;
-            let kind = PostKind::parse(args.next().ok_or("kind: lumber or quarry")?)
-                .ok_or("kind must be lumber or quarry")?;
+            let name = args.next().ok_or("usage: /civ post <name> lumber|quarry|sand|dirt")?;
+            let kind = PostKind::parse(args.next().ok_or("kind: lumber, quarry, sand or dirt")?)
+                .ok_or("kind must be lumber, quarry, sand or dirt")?;
             let s = previous.by_name(name).ok_or("unknown settlement")?;
             if s.dimension != player.dimension {
                 return Err("enter the settlement dimension".into());
@@ -1923,6 +2168,9 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             Ok(format!("{}: {from} / {to} (abstract strategic simulation)", action))
         })(),
         "sell" | "buy" => (|| {
+            if player.permission < 2 {
+                return Err("Villagers trade in person: right-click the mayor while holding wood or stone the village needs.".into());
+            }
             let good = Good::parse(args.next().ok_or("good required")?).ok_or("unknown good")?;
             let count = parse_amount(args.next())?;
             let village_id = own_settlement(&previous, &actor)?;
@@ -2187,7 +2435,8 @@ fn physical_barrel_stock(
     game: &Game<'_>, dimension: &str, center: [i32; 3]
 ) -> Option<Vec<(Good, u32)>> {
     let mut values = Vec::new();
-    for good in [Good::Wheat, Good::Bread, Good::Wood, Good::Stone, Good::Iron] {
+    for good in [Good::Wheat, Good::Bread, Good::Wood, Good::Stone, Good::Iron,
+                 Good::Sand, Good::Dirt] {
         let mut count = 0_u32;
         for pos in hall_storage_positions(center) {
             count = count.checked_add(plain_barrel_count(game, dimension, pos, good)?)?;
@@ -2463,7 +2712,8 @@ fn barrel_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
         if !storage_worker_near(game, state.world.as_ref().unwrap(), id, Job::Merchant) {
             continue;
         }
-        for good in [Good::Wood, Good::Stone, Good::Wheat, Good::Bread, Good::Iron] {
+        for good in [Good::Wood, Good::Stone, Good::Wheat, Good::Bread, Good::Iron,
+                     Good::Sand, Good::Dirt] {
             let waiting = village.warehouse_quantity(good);
             if waiting == 0 { continue; }
             let spots = hall_storage_positions(village.center);
@@ -2647,10 +2897,28 @@ fn autonomous_village_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Resu
     };
 
     if village.gather_job.is_none() {
-        for (good, need, profession) in [
+        let mut work: Vec<(Good, u32, Job)> = vec![
             (Good::Wood, wood_needed, Job::Lumberjack),
             (Good::Stone, stone_needed, Job::Miner),
-        ] {
+        ];
+        // A sand or dirt pit the player placed is a real workplace, so it is
+        // serviced on its own. Nothing builds with sand or dirt yet, so it
+        // only keeps a small, explicit buffer in the hall.
+        const PIT_TARGET: u32 = 32;
+        for pit in [PostKind::Sand, PostKind::Dirt] {
+            if !village.posts.iter().any(|post| post.kind == pit) { continue; }
+            let stored = if village.hall_complete {
+                physical_barrel_stock(game, &dimension, village.center)
+                    .and_then(|stock| stock.iter()
+                        .find(|(good, _)| *good == pit.good())
+                        .map(|(_, count)| *count)).unwrap_or(0)
+            } else { 0 };
+            let have = village.warehouse_quantity(pit.good()).saturating_add(stored);
+            if have < PIT_TARGET {
+                work.push((pit.good(), PIT_TARGET - have, pit.job()));
+            }
+        }
+        for (good, need, profession) in work {
             if need == 0 || !village.residents.iter().any(|r| {
                 r.alive && r.job == profession
                     && actors.iter().any(|(rid, _)| *rid == r.id)
@@ -2663,7 +2931,7 @@ fn autonomous_village_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Resu
             // A work camp turns ad-hoc gathering into a fixed, visible post.
             // Without one, the first found natural source reserves a camp at
             // the worker stand; later scans stay inside its radius.
-            let camp_kind = if good == Good::Wood { PostKind::Lumber } else { PostKind::Quarry };
+            let camp_kind = PostKind::for_good(good);
             let camp = village.posts.iter().find(|post| post.kind == camp_kind).map(|post| post.origin);
             let (base_x, base_y, base_z) = {
                 let base = camp.unwrap_or(village.center);
@@ -2734,8 +3002,11 @@ fn autonomous_village_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Resu
     // Town hall is physically assembled first from the verified warehouse
     // bill of materials; it may remain pending while players deliver goods.
     // The planner does NOT consume abstract simulation wood/stone.
+    let mut clearing = 4_u32;
     if !village.hall_complete && village.hall_job.is_none() && has_builder {
-        if check_empty_hut_site(game, &dimension, village.center).is_ok() {
+        let hall_site = village.center;
+        if open_build_plot(game, &dimension, hall_site, 2, 3, &mut clearing,
+            |game: &Game<'_>| check_empty_hut_site(game, &dimension, hall_site)).is_ok() {
             let before = state.world.as_ref().unwrap().clone();
             if state.world.as_mut().unwrap().reserve_town_hall(id)? {
                 save_autonomous(state, before)?;
@@ -2754,6 +3025,9 @@ fn autonomous_village_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Resu
         && village.pending_visual_buildings > 0 && village.physical_housing().2 > 0;
     if !need_field && !need_hut && !need_bakery { return Ok(()); }
 
+    // The first plot the planner had to refuse, so a stalled village can say
+    // why in the log instead of silently standing still.
+    let mut refusal: Option<String> = None;
     for [dx, dz] in crate::game::civilizations_core::HOUSING_PLOT_OFFSETS {
         let Some(x) = village.center[0].checked_add(dx) else { continue; };
         let Some(z) = village.center[2].checked_add(dz) else { continue; };
@@ -2762,43 +3036,80 @@ fn autonomous_village_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Resu
             let site = [x, y, z];
             // First establish a functional field. Farms must be harvested
             // by a loaded nearby farmer; their cycles do NOT mint stock.
-            if need_field && check_empty_farm_site(game, &dimension, site).is_ok() {
+            if need_field {
                 let mut trial = state.world.as_ref().unwrap().clone();
                 if trial.start_farm(id, site).is_ok() {
-                    let prior = state.world.as_ref().unwrap().clone();
-                    state.world.as_mut().unwrap().start_farm(id, site)?;
-                    save_autonomous(state, prior)?;
-                    log::info!("[civilizations] {} autonomously reserved crop field at {:?}", village.name, site);
-                    return Ok(());
+                    match open_build_plot(game, &dimension, site, 1, 1, &mut clearing,
+                        |game: &Game<'_>| check_empty_farm_site(game, &dimension, site)) {
+                        Ok(cleared) => {
+                            let prior = state.world.as_ref().unwrap().clone();
+                            state.world.as_mut().unwrap().start_farm(id, site)?;
+                            save_autonomous(state, prior)?;
+                            log::info!("[civilizations] {} autonomously reserved crop field at {:?} ({cleared} growth cleared)",
+                                village.name, site);
+                            return Ok(());
+                        }
+                        Err(reason) => {
+                            if refusal.is_none() { refusal = Some(format!("field at {site:?}: {reason}")); }
+                        }
+                    }
                 }
             }
             // After the field and civic hall exist, build the first
-            // functional workshop on the same loaded, physically empty,
+            // functional workshop on the same loaded, physically open,
             // non-player-owned plot policy as ordinary housing.
-            if need_bakery && check_empty_hut_site(game, &dimension, site).is_ok() {
+            if need_bakery {
+                let allowed = state.world.as_ref().unwrap()
+                    .check_visual_house_site(id, site).is_ok();
                 let mut trial = state.world.as_ref().unwrap().clone();
-                if trial.start_bakery(id, site).is_ok() {
-                    let old = state.world.as_ref().unwrap().clone();
-                    state.world.as_mut().unwrap().start_bakery(id, site)?;
-                    save_autonomous(state, old)?;
-                    log::info!("[civilizations] {} autonomously reserved real bakery at {:?}", village.name, site);
-                    return Ok(());
+                if allowed && trial.start_bakery(id, site).is_ok() {
+                    match open_build_plot(game, &dimension, site, 2, 3, &mut clearing,
+                        |game: &Game<'_>| check_empty_hut_site(game, &dimension, site)) {
+                        Ok(cleared) => {
+                            let old = state.world.as_ref().unwrap().clone();
+                            state.world.as_mut().unwrap().start_bakery(id, site)?;
+                            save_autonomous(state, old)?;
+                            log::info!("[civilizations] {} autonomously reserved real bakery at {:?} ({cleared} growth cleared)",
+                                village.name, site);
+                            return Ok(());
+                        }
+                        Err(reason) => {
+                            if refusal.is_none() { refusal = Some(format!("bakery at {site:?}: {reason}")); }
+                        }
+                    }
                 }
             }
-            if need_hut && check_empty_hut_site(game, &dimension, site).is_ok() {
+            if need_hut {
                 let can_build = state.world.as_ref().unwrap()
                     .check_visual_house_site(id, site).is_ok();
                 if can_build {
-                    let prior = state.world.as_ref().unwrap().clone();
-                    state.world.as_mut().unwrap().start_visual_house(id, site)?;
-                    save_autonomous(state, prior)?;
-                    log::info!("[civilizations] {} autonomously reserved real hut at {:?}", village.name, site);
-                    return Ok(());
+                    match open_build_plot(game, &dimension, site, 2, 3, &mut clearing,
+                        |game: &Game<'_>| check_empty_hut_site(game, &dimension, site)) {
+                        Ok(cleared) => {
+                            let prior = state.world.as_ref().unwrap().clone();
+                            state.world.as_mut().unwrap().start_visual_house(id, site)?;
+                            save_autonomous(state, prior)?;
+                            log::info!("[civilizations] {} autonomously reserved real hut at {:?} ({cleared} growth cleared)",
+                                village.name, site);
+                            return Ok(());
+                        }
+                        Err(reason) => {
+                            if refusal.is_none() { refusal = Some(format!("hut at {site:?}: {reason}")); }
+                        }
+                    }
                 }
             }
         }
     }
     // No clear loaded plot; never clear players' trees, fences or walls.
+    if state.physical_ticks % 1200 == 0 {
+        if let Some(reason) = refusal {
+            log::info!(
+                "[civilizations] {} started no build and no field: {reason}",
+                village.name
+            );
+        }
+    }
     Ok(())
 }
 
@@ -2993,6 +3304,54 @@ fn refresh_hall_boards(game: &mut Game<'_>, world: &World) {
     }
 }
 
+/// Places a villager must reach while keeping the village going. The civic
+/// centre itself is implicit; these are the real workplaces and homes.
+fn settlement_work_sites(
+    village: &crate::game::civilizations_core::Settlement,
+) -> Vec<[i32; 3]> {
+    let mut sites: Vec<[i32; 3]> = village.posts.iter().map(|post| post.origin).collect();
+    if let Some(farm) = &village.farm { sites.push(farm.origin); }
+    if let Some(bakery) = &village.bakery { sites.push(bakery.origin); }
+    if let Some(job) = &village.hall_job { sites.push(job.origin); }
+    if let Some(job) = &village.visual_job { sites.push(job.origin); }
+    sites.extend(village.visual_sites.iter().copied().take(8));
+    sites
+}
+
+/// Keep each autonomous village's own work area ticking with nobody standing
+/// in it: a bounded ring of chunks around the civic centre and its camps.
+/// The engine does not save these tickets, so they are re-held every few
+/// seconds; a paused village releases everything it holds.
+fn hold_village_chunks(game: &mut Game<'_>, world: &World) {
+    let dimension = game.dim.id().to_owned();
+    for village in world.settlements.values().filter(|v| v.dimension == dimension) {
+        let owner = format!("{MOD_ID}:village/{}", village.id);
+        let held = game.native_forced_chunks(&owner);
+        if !village.autonomy_enabled {
+            for chunk in held {
+                game.native_force_chunk_in(&owner, &dimension, chunk, false);
+            }
+            continue;
+        }
+        let sites = settlement_work_sites(village);
+        let wanted = crate::game::civilizations_core::village_chunk_footprint(
+            village.center, &sites,
+        );
+        for chunk in held.iter().filter(|chunk| !wanted.contains(chunk)) {
+            game.native_force_chunk_in(&owner, &dimension, *chunk, false);
+        }
+        if wanted.len() != held.len() {
+            log::info!(
+                "[civilizations] {} holds {} chunks of its own work area",
+                village.name, wanted.len()
+            );
+        }
+        for chunk in wanted.iter().filter(|chunk| !held.contains(chunk)) {
+            game.native_force_chunk_in(&owner, &dimension, *chunk, true);
+        }
+    }
+}
+
 /// Rename one spawned villager so its tag carries the role it really holds.
 /// Horizon stores CustomName as a plain string, so no component JSON is used.
 fn rename_actor(game: &mut Game<'_>, uuid: u128, name: &str) -> bool {
@@ -3037,6 +3396,11 @@ fn staff_village(game: &mut Game<'_>, state: &mut ActiveWorld, id: u64) -> Resul
             "[civilizations] {} now works as {} in {}",
             resident.name, job.name(), village.name
         );
+        // One short system line so the player sees the village reorganise
+        // itself instead of only finding different name tags later.
+        game.native_broadcast(Text::literal(format!(
+            "{}: {} is now the village {}", village.name, resident.name, job.name()
+        )).with_color(text::GOLD));
         if let Some(uuid) = resident.entity_uuid {
             if !rename_actor(game, uuid, &village.actor_name(resident)) {
                 log::info!(
@@ -3138,6 +3502,10 @@ fn seems_natural_resource(game: &Game<'_>, dimension: &str, point: [i32; 3], goo
         Good::Wood => is_rooted_oak_harvest_origin(point, |pos|
             world_block(game, dimension, pos)),
         Good::Stone => world_block(game, dimension, point).as_deref() == Some("minecraft:stone"),
+        // Only plain natural sand and dirt: a placed block inside a build is
+        // still excluded by gather_site_unclaimed in the domain.
+        Good::Sand => world_block(game, dimension, point).as_deref() == Some("minecraft:sand"),
+        Good::Dirt => world_block(game, dimension, point).as_deref() == Some("minecraft:dirt"),
         _ => false,
     }
 }
@@ -3226,8 +3594,8 @@ fn gather_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
     }
     let world = state.world.as_ref().unwrap();
     let v = &world.settlements[&id];
-    let profession = if job.good == Good::Wood { Job::Lumberjack } else { Job::Miner };
-    let camp_kind = if job.good == Good::Wood { PostKind::Lumber } else { PostKind::Quarry };
+    let profession = job.good.job().unwrap_or(Job::Miner);
+    let camp_kind = PostKind::for_good(job.good);
     // A camp already bound to one resident is serviced by that resident only:
     // the name on the camp sign and the worker who delivers stay the same.
     let camp_worker = v.posts.iter().find(|post| post.kind == camp_kind)
@@ -3301,6 +3669,13 @@ pub fn level_tick(game: &mut Game<'_>, dimension: &str) {
         if let Some(world) = state.world.as_ref() {
             refresh_post_boards(game, world);
             refresh_site_boards(game, world);
+        }
+    }
+    if state.physical_ticks % 100 == 0 || state.physical_ticks == 1 {
+        // A village must keep working with nobody standing in it, so its own
+        // bounded work area is held loaded before any planner reads blocks.
+        if let Some(world) = state.world.as_ref() {
+            hold_village_chunks(game, world);
         }
     }
     if state.physical_ticks % 100 == 0 {

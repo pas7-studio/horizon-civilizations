@@ -8,3 +8,6 @@
 /.vscode/
 .DS_Store
 .stratium-out
+__pycache__/
+/.opencode/
+Cargo.lock
