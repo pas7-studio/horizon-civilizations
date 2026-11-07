@@ -38,6 +38,8 @@ fn autonomous_by_default() -> bool { true }
 pub struct PlayerParcel {
     pub origin: [i32; 3],
     pub owner: String, // authenticated acting player's UUID in hex
+    /// True for a private house ordered on a bought plot OR an existing
+    /// village hut purchased with its completed title.
     #[serde(default)]
     pub commissioned: bool,
 }
