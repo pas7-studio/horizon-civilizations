@@ -11,7 +11,7 @@
   startup rather than a parallel special NPC society path.
 - [x] Public read-only `/civ nearby` locates nearest towns and shows
   coords/direction/construction state, enabling exploration.
-- [x] Authored five Rust unit regressions and eleven Python source contracts.
+- [x] Authored six Rust unit regressions and eleven Python source contracts.
 - [ ] **Not verified in Minecraft:** worldgen site selection on real biomes,
   singleplayer and dedicated-server player observation, ten native NPCs,
   construction from physical supplies, restart and the eight-town cap.
