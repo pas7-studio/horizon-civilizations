@@ -458,6 +458,78 @@ fn build_town_hall_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Res
     }
 }
 
+/// A separate physically observed public bakery is constructed by an
+/// actual UUID-bound builder. It neither advances a private hut cursor nor
+/// consumes virtual stock; its full material bill was already extracted
+/// from real hall barrels into bakery-specific escrow and durably saved.
+fn build_bakery_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), String> {
+    if !DailyPhase::at(game.world.day_time).on_shift(Job::Builder) { return Ok(()); }
+    let dimension = game.dim.id().to_owned();
+    let selected = state.world.as_ref().unwrap().settlements.values()
+        .filter(|v| v.dimension == dimension)
+        .filter_map(|v| v.bakery.as_ref().and_then(|b|
+            b.building.as_ref().map(|job| (v.id, job.clone(), b.supplies_reserved))))
+        .find(|(_, job, _)| !job.blocked && game.world.loaded(job.origin[0], job.origin[2]));
+    let Some((id, job, funded)) = selected else { return Ok(()); };
+    if job.cursor > 0 && !funded {
+        return Err("unfunded bakery partial construction; inspect before resuming".into());
+    }
+    let inspection = inspect_bakery(&job, |point| world_block(game, &dimension, point));
+    match inspection {
+        BuildInspection::Unloaded | BuildInspection::Paused => Ok(()),
+        BuildInspection::InvalidCursor => Err("invalid bakery construction cursor".into()),
+        BuildInspection::Blocked {position, found} => {
+            let old = state.world.as_ref().unwrap().clone();
+            state.world.as_mut().unwrap().settlements.get_mut(&id).unwrap()
+                .bakery.as_mut().unwrap().building.as_mut().unwrap().blocked = true;
+            save_autonomous(state, old)?;
+            Err(format!("public bakery site blocked at {position:?} by {found}"))
+        }
+        BuildInspection::Rewind(cursor) => {
+            let old = state.world.as_ref().unwrap().clone();
+            state.world.as_mut().unwrap().settlements.get_mut(&id).unwrap()
+                .bakery.as_mut().unwrap().building.as_mut().unwrap().cursor = cursor;
+            save_autonomous(state, old)
+        }
+        BuildInspection::Advance => {
+            if !funded { return Err("bakery block exists without physical funding".into()); }
+            let old = state.world.as_ref().unwrap().clone();
+            state.world.as_mut().unwrap().settlements.get_mut(&id).unwrap()
+                .bakery.as_mut().unwrap().building.as_mut().unwrap().cursor += 1;
+            save_autonomous(state, old)
+        }
+        BuildInspection::Complete => {
+            if !funded { return Err("cannot complete unfunded bakery".into()); }
+            let old = state.world.as_ref().unwrap().clone();
+            state.world.as_mut().unwrap().finish_bakery(id)?;
+            save_autonomous(state, old)
+        }
+        BuildInspection::Place {position, old_block, new_block} => {
+            if !funded { return Ok(()); }
+            let world = state.world.as_ref().unwrap();
+            let linked = loaded_actors(game, world, id);
+            let v = &world.settlements[&id];
+            let nearby_builder = v.residents.iter()
+                .filter(|r| r.alive && r.job == Job::Builder)
+                .any(|r| linked.iter().any(|(known, mob)| *known == r.id
+                    && game.native_mob(&dimension, *mob).is_some_and(|actor| {
+                        let dx = actor.pos[0] - f64::from(job.origin[0]);
+                        let dz = actor.pos[2] - f64::from(job.origin[2]);
+                        dx * dx + dz * dz <= 9.0 * 9.0
+                    })));
+            if !nearby_builder { return Ok(()); }
+            let [x,y,z] = position;
+            let command = format!(
+                "execute in {dimension} if block {x} {y} {z} {old_block} run setblock {x} {y} {z} {new_block} replace"
+            );
+            if !game.native_run_command(&command) {
+                log::warn!("[civilizations] bakery conditional construction refused: {command}");
+            }
+            Ok(())
+        }
+    }
+}
+
 /// A physical builder must be nearby. The command path never edits blocks;
 /// mutations occur on a later authoritative server tick.
 fn build_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), String> {
