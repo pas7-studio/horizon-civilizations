@@ -713,6 +713,50 @@ fn farm_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), Str
     }
 }
 
+/// Native API 334: stop hopper transfer *to or from* the two public
+/// hall barrel inventories. This is not a global hopper ban and does not
+/// intercept NPC's direct native container API (which is not a hopper move).
+pub fn protect_public_hopper(
+    game: &Game<'_>, source: [i32;3], destination: [i32;3],
+    _item: &str, cancel: &mut bool,
+) {
+    if *cancel || !game.native_on(MOD_ID) { return; }
+    let Some(dir) = game.native_world_dir() else { return; };
+    let dim = game.dim.id();
+    let locked = active(dir.join(DIR));
+    let public = locked.as_ref().and_then(|a| a.world.as_ref())
+        .is_some_and(|world| world.settlements.values()
+            .filter(|v| v.dimension == dim && v.hall_complete)
+            .any(|v| {
+                let positions = hall_storage_positions(v.center);
+                positions.contains(&source) || positions.contains(&destination)
+            }));
+    if public { *cancel = true; }
+}
+
+/// Native API 14: prevent ordinary players damaging registered public
+/// buildings and private parcels they do not own. The owner may break
+/// blocks inside their own bought 5x5 plot; OP may recover city structures.
+/// Does not claim the wilderness or override third-party region plugins.
+pub fn protect_civilization_block(
+    game: &mut Game<'_>, position: [i32;3], cancel: &mut bool,
+) {
+    if *cancel || !game.native_on(MOD_ID) { return; }
+    let Some(player) = game.native_acting_player() else { return; };
+    if player.permission >= 2 { return; }
+    let Some(dir) = game.native_world_dir() else { return; };
+    let lock = active(dir.join(DIR));
+    let actor = format!("{:032x}", player.uuid);
+    let protected = lock.as_ref().and_then(|active| active.world.as_ref())
+        .is_some_and(|world| !world.player_may_break(
+            &actor, game.dim.id(), position
+        ));
+    drop(lock);
+    if protected {
+        *cancel = true;
+    }
+}
+
 /// Public civic barrels are accounted stock, not free player loot. Only
 /// real server operators may open them to inspect native contents; ordinary
 /// villagers trade using the native inventory command path. This hook does
