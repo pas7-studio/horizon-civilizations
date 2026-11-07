@@ -1,3 +1,43 @@
+# Latest Draft — partial village NPC spawn recovery (source only)
+
+Branch `feat/guarded-partial-villager-recovery-v0115`, stacked on
+PR #33. Main unchanged, GitHub Actions OFF; no native Horizon compile
+or Minecraft playtest has run for this feature.
+
+- [x] Fixed a nonrecoverable lifecycle situation: automatic first
+  batch permanently reserves `actors_spawned=true` BEFORE native spawn.
+  A crash/refused spawn after 1–9 villagers leaves other residents
+  unbound and can remove the builder/merchant/miner needed for a village.
+- [x] Added explicit OP `/civ recoveractor NAME RESIDENT_ID attempt`:
+  requires reserved first batch, a living unbound resident, correct
+  dimension/nearby OP, fully loaded 96-block neighborhood sample,
+  no currently loaded matching tagged/legacy villager, and an
+  unoccupied surveyed natural spawn point.
+- [x] Persists `actor_recovery_issued` **before** native spawning.
+  Cannot re-issue the same resident's recovery after crash/native
+  refusal. UUID binding removes pending marker only in same saved
+  world state; if UUID/save fails, mutations stop. Old saves load
+  because the new field has serde default empty.
+- [x] `/civ roster NAME` now shows exact resident IDs, UUID-linked,
+  unbound and recovery-pending statuses. OP `/civ reconcile NAME`
+  is the FIRST step; no automatic duplicate villager spawning.
+- [x] Targeted single-resident recovery accepts fewer than ten
+  safe spots, while the original autonomous ten-worker batch still
+  requires all ten spots before any native spawn reservation.
+- [x] Seven Rust domain regressions and twelve Python static
+  source contracts authored; 22/22 source checks PASS.
+- [ ] Not executed: cargo test/rustfmt/Clippy, Python unittest
+  discovery, native Horizon compilation or actual Minecraft
+  recovery in a disposable world. This does not claim playability.
+- [ ] The recovery checks currently loaded native chunks; an
+  external actor could have wandered outside the tracked 96-block
+  area. Hence **OP confirmation** is required: no automatic
+  respawn after uncertain crash. No unbounded reset command exists.
+
+Acceptance: TEST_PLAN **272–282**.
+
+---
+
 # 2026-11-08 — compiler-first local diagnostics (updated PR #33)
 
 - [x] Release gate now runs real `cargo test` first, then Clippy,
