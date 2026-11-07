@@ -13,7 +13,7 @@ import unittest
 from pathlib import Path
 
 GATE = Path(__file__).resolve().parents[1] / "tools" / "first_play_gate.py"
-BRANCH = "feat/guarded-partial-villager-recovery-v0115"
+BRANCH = "feat/independent-npc-towns-v0115"
 
 
 class LocalReleaseGateHarnessTests(unittest.TestCase):
