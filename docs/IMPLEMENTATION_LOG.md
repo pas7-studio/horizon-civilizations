@@ -579,6 +579,7 @@
   Existing `reconcile` may rebind a unique visible original
   villager without additional spawn; automatic native spawn still
   performs its original strict ten-safe-point preflight.
-- Added 7 Rust regression tests + 12 Python static tests; manual
-  E2E 272–282. Connector-side 22/22 source checks PASS.
+- A pending spawn attempt remains a valid saved tombstone even if the resident later dies; this never permits spawning a dead NPC.
+- Added 8 Rust regression tests + 12 Python static tests; manual
+  E2E 272–283. Connector-side 22/22 source checks PASS.
   Cargo, native Horizon build and game E2E still not executed.
