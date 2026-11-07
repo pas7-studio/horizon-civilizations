@@ -1,0 +1,22 @@
+name: Build Horizon native client (manual, no assets)
+on:
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  linux-native-client:
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install pinned Rust 1.95
+        run: rustup toolchain install 1.95.0 --profile minimal --component rustfmt --component clippy
+      - name: Build native game executable and run embedded core tests
+        run: python3 tools/native_build.py --test --build-client
+      - name: Verify executable was emitted
+        run: test -x target/native-check/modded/target/fast/horizon-client
+      - uses: actions/upload-artifact@v4
+        with:
+          name: civilizations-linux-client-no-assets
+          path: target/native-check/modded/target/fast/horizon-client
+          if-no-files-found: error

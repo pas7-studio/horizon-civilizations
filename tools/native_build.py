@@ -73,6 +73,7 @@ def prepare_pristine_source(checkout: Path, staged: Path, revision: str) -> None
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--test', action='store_true', help='run Horizon library tests after cargo check')
+    parser.add_argument('--build-client', action='store_true', help='compile an actual Horizon client executable after checks (requires substantial RAM/disk/time)')
     args = parser.parse_args()
     for name in ('git', 'cargo'):
         if not shutil.which(name):
@@ -99,9 +100,20 @@ def main():
         run('cargo', 'test', '--manifest-path', str(out / 'Cargo.toml'),
             '--locked', '-p', 'horizon-client', '--lib', '--no-default-features',
             'civilizations_core::tests')
+    executable = None
+    if args.build_client:
+        # The 'fast' profile is documented by Horizon for iterating on native
+        # client builds. No Mojang assets or login credentials are bundled.
+        run('cargo', 'build', '--manifest-path', str(out / 'Cargo.toml'),
+            '--locked', '-p', 'horizon-client', '--bin', 'horizon-client',
+            '--profile', 'fast', '--no-default-features')
+        executable = out / 'target' / 'fast' / ('horizon-client.exe' if os.name == 'nt' else 'horizon-client')
+        if not executable.is_file():
+            raise RuntimeError(f'cargo reported success, but executable is missing: {executable}')
     print(json.dumps({'mixin_plan': str(plan), 'modded_horizon': str(out),
                       'horizon_revision': COMPAT['horizon_revision'],
-                      'cargo_check': 'PASS', 'gameplay_e2e': 'NOT TESTED'}, indent=2))
+                      'cargo_check': 'PASS', 'native_client_binary': str(executable) if executable else 'NOT BUILT',
+                      'gameplay_e2e': 'NOT TESTED'}, indent=2))
 
 
 if __name__ == '__main__':
