@@ -739,3 +739,47 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
      IDs fail domain validation. Record blocks, native actor UUIDs,
      receiving area and JSON before/after. This is an identity-backed
      delivery gate, NOT proof of a rendered item in the NPC's hands.
+
+## Source-witnessed native resource pickup / courier return (unreleased)
+
+234. On the exact newest stacked branch, run Rust formatter, cargo check,
+     Clippy, cargo test, full Python unittest and pinned Horizon native
+     client compile. Record SHA and logs. Do not use a previous main build.
+235. Start fresh disposable Ashford, select physically accessible native
+     stone and short rooted oak. Verify planned gather has no pickup
+     witness and no credit. Bind a specific UUID-linked worker at source;
+     persist worker_id, then persist Issued before native edit.
+236. Confirm a native conditional block edit removed the exact source
+     (air observed). BEFORE any hall movement/credit, the same assigned
+     worker must still be physically near the saved clear work stand and
+     within 4.5-block eye-to-native-source reach.
+237. At Issued + native air but no bound worker at source, the job
+     remains unwitnessed, no hall routing and zero material credit.
+     A second same-role villager nearby cannot substitute as a witness.
+238. After witnessing, inspect durable world JSON (pickup_witnessed=true)
+     and prove that the same worker is NOW routed toward the real
+     town-hall receiving area. A different worker already at the hall
+     must not credit the pending resource.
+239. After the correct worker actually reaches the hall in X/Y/Z,
+     exactly ONE wood/stone appears in the confirmed physical queue.
+     Repeat update ticks and reload to prove no duplicate credit.
+240. Kill/unload/change the worker identity after native edit but before
+     source witness. The job waits or remains quarantined with zero
+     credit; never move or grant material based only on an air block.
+241. Stop/restart between Issued and source witness and again after
+     witness save before hall delivery. Confirm no blind native
+     block-edit retries and same durable worker, source/cursor and
+     pickup state after both crashes.
+242. For a 3-4-log native oak, confirm EVERY next saved log has same
+     resident ID but resets issued=false and pickup_witnessed=false.
+     Repeat complete source-and-hall evidence for each log separately.
+243. Load a legacy saved Issued job missing pickup_witnessed: the
+     field defaults false. The worker must first revisit loaded native
+     source and witness air, not automatically grant stock at hall.
+     Legacy unassigned issued receipts remain OP-quarantined.
+244. Modify source/stand after issue, obstruct NPC route, test
+     multiple villages/dimensions and OP abandon. No foreign
+     block replacement, unstaged virtual inventory or silent
+     recovery. Collect logs, source block/actor UUID checks and
+     actual barrel item counts. This proves a receipt witness only,
+     NOT a visually held Minecraft ItemStack.
