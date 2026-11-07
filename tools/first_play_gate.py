@@ -143,15 +143,17 @@ def main(argv: list[str] | None = None) -> int:
     try:
         if sys.version_info < (3, 11):
             raise RuntimeError("Python 3.11 or later required")
-        for tool in ("git", "rustc", "cargo", "rustfmt"):
-            if not shutil.which(tool):
-                raise RuntimeError(f"missing prerequisite: {tool}. Install Rust 1.95 and Git")
+        if not shutil.which("git"):
+            raise RuntimeError("missing prerequisite: git")
         data["branch"] = git_value(root, "symbolic-ref", "--quiet", "--short", "HEAD")
         data["sha"] = git_value(root, "rev-parse", "HEAD")
         repo_root = Path(git_value(root, "rev-parse", "--show-toplevel")).resolve()
         if repo_root != root:
             raise RuntimeError(f"--repo must be repository root: {repo_root}")
         data["clean_start"] = not bool(git_value(root, "status", "--porcelain"))
+        for tool in ("rustc", "cargo", "rustfmt"):
+            if not shutil.which(tool):
+                raise RuntimeError(f"missing prerequisite: {tool}. Install Rust 1.95 and Git")
         data["rustc"] = subprocess.check_output(["rustc", "--version"], text=True,
                                                   timeout=20).strip()
         data["cargo"] = subprocess.check_output(["cargo", "--version"], text=True,
