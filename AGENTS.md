@@ -1,3 +1,79 @@
+# Latest source: guarded recovery of partial villager spawning
+
+- Branch `feat/guarded-partial-villager-recovery-v0115` stacks after
+  PR #33. Actions OFF and main untouched; no playable claims.
+- Problem: one-time initial native spawn reservation may be only
+  partially complete after a crash. DO NOT reset `actors_spawned`
+  or automatically respawn the entire batch.
+- Implemented `Settlement.actor_recovery_issued` per living
+  unbound resident. Operator can inspect via `/civ roster NAME`,
+  first `/civ reconcile NAME`, then deliberately
+  `/civ recoveractor NAME ID attempt` ONLY after 96-block
+  loaded scan, no exact/legacy tagged actor, safe open site.
+- Record one-shot reservation BEFORE native spawn; a failed or
+  interrupted UUID persistence must not reissue the spawn. Exact
+  UUID binding clears only that ID's marker.
+- Dead resident after an issued attempt: keep the recovery tombstone valid across restart. Do not resummon; no world save corruption.
+- 8 Rust cases, 12 Python static source tests, TEST_PLAN 272–283.
+  No Rust/native Horizon compile or Minecraft E2E in this container.
+
+---
+
+# Current source branch — native binary evidence gate (2026-11-08)
+
+- Latest stacked Draft `fix/first-play-binary-evidence-v0115`,
+  based on PR #32. Keep GitHub Actions OFF and `main` untouched.
+- `tools/first_play_gate.py --build-client` must reject
+  native command exit=0 without a valid exact-path Horizon client.
+  Validate pinned native JSON, horizon_revision, cargo_check
+  and modded checkout path; store binary SHA-256 and size.
+- The Python gate harness now has 10 mock tests, actually
+  executed 10/10 PASS on Linux. They are **NOT** proof
+  of a true Cargo build/native game E2E.
+- Continue from the first actual compile failure. No release
+  until real native Horizon client and disposable-world E2E.
+
+---
+
+# First-play evidence gate — current newest stacked source
+
+- Branch `chore/first-play-native-validation-v0115`, stacked after
+  PR #31. Keep all Drafts, Actions OFF, main unchanged.
+- Run `py -3 tools/first_play_gate.py --build-client` on networked
+  Windows with exact source, Rust 1.95, Python 3.11+, Git.
+- Read `target/first-play-gate/<UTC>/report.md` and failing stage
+  log. Until real pinned native compile passes, NOT playable.
+  Even native client compilation is NOT a Minecraft-world E2E pass.
+- The release-gate runner itself was tested 7/7 with MOCK binaries
+  on Linux Python 3.13; do not confuse that with Horizon build.
+- Existing physical gather source logic/journals and all previous
+  safety limitations remain; continue fixing the first real
+  compiler/runtime failure before adding speculative features.
+
+---
+
+# Current stacked source — fair gather queue + native proof 2026-11-08
+
+- Latest branch `fix/gather-crash-proof-fair-queue-v0115`, stacked
+  after PR #30. No GitHub Actions, no merge to main, no claim of a
+  playable/modded Horizon binary before exact native compile + E2E.
+- `gather_turn_index` alternates loaded eligible settlements
+  on eight-tick gather opportunities; do NOT regress to first
+  `.find()` work-item selection.
+- `GatherJob.native_edit_confirmed` is serde-default false. Required
+  safe order: save Assigned → save Issued → execute native conditional
+  edit → freshly confirm air and command accepted → save native_edit_
+  confirmed → source pickup witness by same UUID worker → separate
+  hall return → one material credit.
+- Issued but unconfirmed means a potential crash AFTER native edit;
+  quarantine even if source air. Never automatically retry command,
+  infer approval from an air block, or credit the source. Old pickup
+  witnesses without native confirmation must LOAD but be quarantined.
+- Tests in `tests/test_gather_crash_fair_queue.py` plus 8 Rust cases;
+  TEST_PLAN 245–254. Actual Rust/Python/native/game verification NOT RUN.
+
+---
+
 # Latest worktree — source pickup witness gate (2026-11-08)
 
 - `feat/source-pickup-witness-v0115` stacks after PR #29. Keep all

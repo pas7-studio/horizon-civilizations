@@ -23,6 +23,31 @@ def run(*args: str, cwd: Path | None = None):
     subprocess.run(list(args), cwd=cwd, check=True)
 
 
+def run_filtered_native_tests(manifest: Path, selector: str) -> dict:
+    """Require a non-empty matched test suite before claiming native PASS.
+
+    Cargo returns exit=0 for a valid filter matching ZERO tests, which would
+    silently skip the newly injected civilizations_glue filesystem regressions.
+    Query the test binary's real inventory, then run that exact selector.
+    """
+    cmd = ['cargo', 'test', '--manifest-path', str(manifest),
+           '--locked', '-p', 'horizon-client', '--lib',
+           '--no-default-features', selector]
+    print('>', ' '.join([*cmd, '--', '--list']), flush=True)
+    listed = subprocess.run([*cmd, '--', '--list'], check=False,
+                            stdout=subprocess.PIPE, stderr=subprocess.STDOUT,
+                            text=True, errors='replace')
+    print(listed.stdout, end='', flush=True)
+    if listed.returncode != 0:
+        raise RuntimeError(f'native Rust test enumeration failed for {selector}, exit={listed.returncode}')
+    names = [line.strip()[:-len(': test')]
+             for line in listed.stdout.splitlines() if line.strip().endswith(': test')]
+    if not names:
+        raise RuntimeError(f'native Rust test filter matched ZERO tests: {selector}')
+    run(*cmd)
+    return {'filter': selector, 'discovered': len(names), 'status': 'PASS'}
+
+
 def checkout_repo(url: str, directory: Path, revision: str) -> None:
     if not (directory / '.git').exists():
         directory.parent.mkdir(parents=True, exist_ok=True)
@@ -96,12 +121,13 @@ def main():
     run(str(binary), 'apply', *common, '--out', str(out))
     run('cargo', 'check', '--manifest-path', str(out / 'Cargo.toml'),
         '--locked', '-p', 'horizon-client', '--no-default-features')
+    native_mod_tests = []
     if args.test:
-        # Match all nested civilizations_core test modules (not only ::tests):
-        # identity, host clock, farms, NPC schedules, homes, proposals, council.
-        run('cargo', 'test', '--manifest-path', str(out / 'Cargo.toml'),
-            '--locked', '-p', 'horizon-client', '--lib', '--no-default-features',
-            'civilizations_core::')
+        # Both injected modules have real Rust tests. A zero-match filter
+        # MUST block readiness even if cargo exits successfully.
+        for selector in ('civilizations_core::', 'civilizations_glue::'):
+            native_mod_tests.append(run_filtered_native_tests(
+                out / 'Cargo.toml', selector))
     executable = None
     if args.build_client:
         # The 'fast' profile is documented by Horizon for iterating on native
@@ -114,7 +140,8 @@ def main():
             raise RuntimeError(f'cargo reported success, but executable is missing: {executable}')
     print(json.dumps({'mixin_plan': str(plan), 'modded_horizon': str(out),
                       'horizon_revision': COMPAT['horizon_revision'],
-                      'cargo_check': 'PASS', 'native_client_binary': str(executable) if executable else 'NOT BUILT',
+                      'cargo_check': 'PASS', 'native_mod_tests': native_mod_tests,
+                      'native_client_binary': str(executable) if executable else 'NOT BUILT',
                       'gameplay_e2e': 'NOT TESTED'}, indent=2))
 
 

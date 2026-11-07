@@ -22,8 +22,11 @@ def inspect_save(world_dir: Path, *, settlement: str | None = None,
     source = mod_dir / "world.json"
     failures: list[str] = []
     warnings: list[str] = []
-    if (mod_dir / "world.json.swap").exists():
-        failures.append("stale world.json.swap exists: stop and manually inspect recovery files")
+    for remnant in ("world.json.swap", "world.json.tmp"):
+        if (mod_dir / remnant).exists():
+            failures.append(
+                f"stale {remnant} exists: stop and manually inspect recovery files"
+            )
     if not source.is_file():
         failures.append("world.json missing: the game may not have saved the mod world")
         return {"evidence_kind": "saved-state-only", "status": "FAIL",
@@ -87,6 +90,37 @@ def inspect_save(world_dir: Path, *, settlement: str | None = None,
             linked += 1
         if linked and village.get("actors_spawned") is not True:
             failures.append(f"settlement {name!r} contains linked residents but actors_spawned is false")
+        # Mirrors core::World::validate recovery rules without editing a save.
+        # Older worlds omit the field. A dead unbound resident's one-shot
+        # marker is valid as a tombstone; a UUID-bound/missing marker is not.
+        pending_raw = village.get("actor_recovery_issued", [])
+        pending_recoveries = 0
+        if not isinstance(pending_raw, list):
+            failures.append(f"settlement {name!r} has invalid actor recovery journal")
+        else:
+            actor_by_id = {
+                resident["id"]: resident for resident in residents
+                if isinstance(resident, dict) and type(resident.get("id")) is int
+            }
+            seen_pending: set[int] = set()
+            for resident_id in pending_raw:
+                if type(resident_id) is not int or not (0 <= resident_id <= 2**64 - 1):
+                    failures.append(f"settlement {name!r} has invalid recovery resident ID")
+                    continue
+                if resident_id in seen_pending:
+                    failures.append(f"settlement {name!r} has duplicate recovery resident ID")
+                    continue
+                seen_pending.add(resident_id)
+                actor_record = actor_by_id.get(resident_id)
+                if actor_record is None or actor_record.get("entity_uuid") is not None:
+                    failures.append(f"settlement {name!r} has recovery marker for missing or UUID-linked resident")
+            pending_recoveries = len(seen_pending)
+            if seen_pending and village.get("actors_spawned") is not True:
+                failures.append(f"settlement {name!r} has recovery attempts before initial actor reservation")
+            if seen_pending:
+                warnings.append(
+                    f"settlement {name!r} has {len(seen_pending)} one-shot NPC recovery marker(s): reconcile before another spawn"
+                )
         farm = village.get("farm")
         farm_report = None
         if farm is not None:
@@ -115,7 +149,8 @@ def inspect_save(world_dir: Path, *, settlement: str | None = None,
                 construction_report = {"cursor": construction.get("cursor"),
                                        "blocked": construction.get("blocked", False)}
         report = {"name": name, "resident_count": len(residents),
-                  "uuid_linked": linked, "actors_spawned": village.get("actors_spawned") is True,
+                  "uuid_linked": linked, "pending_actor_recoveries": pending_recoveries,
+                  "actors_spawned": village.get("actors_spawned") is True,
                   "completed_physical_huts": len(village.get("visual_sites", []))
                   if isinstance(village.get("visual_sites"), list) else None,
                   "pending_huts": village.get("pending_visual_buildings"),

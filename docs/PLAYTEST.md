@@ -2,8 +2,8 @@
 
 **Current assurance:** an older pinned Horizon native branch previously passed
 `cargo check` and embedded Rust tests. The latest v0.1.14 stacked source in
-`feat/first-play-diagnostics-v0115` has **not** passed native compile or
-Minecraft E2E. Do not reuse an old binary as evidence for this stack.
+`feat/guarded-partial-villager-recovery-v0115` (Draft PR #34) has **not**
+passed native compile or Minecraft E2E. Do not reuse an old binary as evidence for this stack.
 
 ## Build on your own development PC
 
@@ -58,7 +58,7 @@ When the Windows native compile workflow has uploaded `horizon-client.exe` (not 
 .\scripts\start-windows-playtest.ps1 -ClientExe 'C:\Games\HorizonTest\horizon-client.exe' -TrustUnsigned
 ```
 
-The script imports that exact executable, prepares resources using the official launcher and launches the disposable `Civilizations-Test` creative world. It does not distribute resources, bypass sign-in or alter another save. The `-TrustUnsigned` switch is required to make trust in your own CI artifact an explicit decision. If official resources are already prepared for this installed build, `-SkipPrepare` skips preparing them again.
+The script imports that exact executable, prepares resources using the official launcher and launches the disposable `Civilizations-Test` creative world. Each Horizon Launcher operation is awaited using a PowerShell pipeline, because the Windows GUI-subsystem executable otherwise may return before its exit status is available. A failed import/prepare must stop the sequence before play. It does not distribute resources, bypass sign-in or alter another save. The `-TrustUnsigned` switch is required to make trust in your own CI artifact an explicit decision. If official resources are already prepared for this installed build, `-SkipPrepare` skips preparing them again.
 
 This launcher flow is **not yet run in this workspace**. If Horizon Launcher reports that a compiled binary is incompatible with its selected version, use the pinned compatible upstream build and a new disposable world instead of patching an existing Minecraft save.
 
@@ -512,3 +512,115 @@ a separate 3D return can release one source-backed resource receipt.
 `/civ gathercheck Ashford` and `/civ diagnose Ashford` now report
 whether pickup was witnessed. See TEST_PLAN 234-244 and retain full
 world/actor/log evidence. No claimed visible carried ItemStack.
+
+## Latest native gather verification — crash-safe acknowledgement / fair queue
+
+Git branch: `fix/gather-crash-proof-fair-queue-v0115` (Draft stacked
+on PR #30; NOT merged, NOT playable-verified).
+
+```powershell
+git fetch origin
+git switch fix/gather-crash-proof-fair-queue-v0115
+.\scripts\validate-local.ps1 -Format
+.\scripts\validate-local.ps1 -BuildClient
+```
+
+`-Format` changes files locally: inspect that diff. Build with
+Rust 1.95 and Python 3.11+, using network access and official
+Horizon/Minecraft Java assets owned by the tester. GitHub Actions
+remain intentionally disabled. Only run on a disposable world.
+
+Use `/civ diagnose NAME`, OP `/civ gathercheck NAME`, actual
+`world.json`, and Minecraft block/barrel inspections to check:
+write-ahead Issued, successful native block edit and immediate air,
+durably confirmed native edit, source witness, then same NPC's
+physical return to hall. Crash immediately after issued/block edit
+but before native confirmation: ZERO auto-credit, OP quarantine.
+Run TEST_PLAN 245–254 with multiple settlements. Real item cargo
+models/animations and full playability still not claimed.
+## One-command local native build evidence (latest branch)
+
+```powershell
+git fetch origin
+git switch feat/guarded-partial-villager-recovery-v0115
+py -3 tools/first_play_gate.py --dry-run --build-client
+py -3 tools/first_play_gate.py --build-client
+```
+
+Run from repository root on Windows 11 with Rust 1.95, Python 3.11+,
+Git and network to fetch pinned Horizon if not cached. No GitHub
+Actions are involved; the script never edits source or attempts
+Minecraft login. No built executable is provided by this source
+PR. Artifacts/logs stay in ignored `target/first-play-gate/<UTC>/`.
+Review `report.md` and the first-failing step log. If the result is
+`BLOCKED`, correct that exact failure and rerun after recording the
+new source SHA. Only a successful real `--build-client` can reach
+`READY_FOR_GAMEPLAY_E2E`, which STILL requires launching the new
+binary with owned Minecraft Java assets and manual disposable-world
+E2E. Follow TEST_PLAN 255–261 plus previous physical gameplay cases.
+
+
+## Latest first-play gate — verify an actual native game binary
+
+Checkout `fix/first-play-binary-evidence-v0115`:
+
+```powershell
+git fetch origin
+git switch fix/first-play-binary-evidence-v0115
+py -3 tools/first_play_gate.py --dry-run --build-client
+py -3 tools/first_play_gate.py --build-client
+```
+
+This release gate now checks the pinned `native_build.py` JSON
+and **the actual compiled Horizon executable** before it can
+report READY_FOR_GAMEPLAY_E2E. It records the binary's SHA-256,
+size, path and source SHA. A missing executable with exit=0,
+bad pinned revision or incorrect output path becomes BLOCKED.
+
+Read `target/first-play-gate/<UTC>/report.md`, JSON and first
+failing step log. No GitHub Actions or deployment are run.
+The 10/10 local Python mock harness tests are NOT real
+Rust compilation, nor Minecraft gameplay tests; use a
+disposable game instance with owned Java assets for E2E.
+
+## Updated local order: diagnose actual compiler errors first
+
+On `fix/first-play-binary-evidence-v0115`, run
+`py -3 tools/first_play_gate.py --build-client` without source
+formatting. Gate now executes `cargo test` before Clippy/formatting,
+so the first build failure is actionable. Formatting must still PASS;
+the script never silently changes Rust source. Open
+`target/first-play-gate/<UTC>/report.md` for the first blocker.
+The runner's 12/12 mock harness tests passed on Linux; native
+compilation/Minecraft gameplay remain unverified.
+
+## Recover only an actually missing resident after partial NPC creation
+
+Latest source: `feat/guarded-partial-villager-recovery-v0115`.
+This branch is **not compiled or gameplay-verified**.
+
+On a networked Windows build machine:
+
+```powershell
+git fetch origin
+git switch feat/guarded-partial-villager-recovery-v0115
+py -3 tools/first_play_gate.py --expected-branch feat/guarded-partial-villager-recovery-v0115 --build-client
+```
+
+On a disposable Minecraft world: `/civ roster Ashford` now includes
+each citizen's resident ID and their saved UUID state. If a crash
+interrupted native creation, first **load the original village chunks**
+and run OP `/civ reconcile Ashford` to bind existing villagers. Only
+after verifying a particular villager is truly missing, standing
+within 32 blocks and with all surrounding native chunks loaded,
+an OP can issue (example ID; use the real roster value):
+
+```
+/civ recoveractor Ashford 1007 attempt
+```
+
+This is **one irreversible native spawn attempt per resident**,
+journalled before native effects, never retried automatically.
+If interrupted, inspect live entities and `/civ reconcile`;
+do not blindly create a duplicate. See TEST_PLAN 272–283.
+Never use a valuable game world to test this Draft feature.

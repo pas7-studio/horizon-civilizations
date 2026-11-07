@@ -1,3 +1,143 @@
+## Windows first-play launcher and recovery audit (Draft PR #34)
+
+A Windows GUI-subsystem executable such as Horizon Launcher can return to
+PowerShell before it exits. `start-windows-playtest.ps1` now explicitly
+waits for each `import-build`, `prepare` and `play` command through a
+pipeline and checks its exit status; no following step starts after a
+failed predecessor. The official Horizon CLI contract at pinned revision
+`18840db9146b2521dd46ad52a4559a49be180f8f` was checked.
+
+`tools/playtest_evidence.py` now reports both `world.json.swap` and
+`world.json.tmp` as interrupted transactions, and surfaces one-shot
+`actor_recovery_issued` markers so unfinished villager recovery cannot
+look like a completely clean save. This is a **read-only saved-state
+audit**, not confirmation of NPCs visible in the world. Windows execution
+and full Python/Rust/Minecraft E2E have **not** run here.
+
+## Native test gate: both Rust modules are mandatory
+
+The pinned Horizon native build now enumerates and runs **both**
+`civilizations_core::` and `civilizations_glue::` tests. Cargo can exit zero
+on a test selector matching zero cases, so the gate checks that each filter
+finds at least one real native test **before** claiming a passing build. The
+final JSON evidence includes `native_mod_tests` with matched counts; the
+first-play gate refuses empty or missing suites even when a binary exists.
+A mock Cargo-only Python regression suite covers zero-match, enumeration
+failure and valid coverage. This does **not** replace actual native compilation.
+
+## Crash-safe first save: orphaned temporary files (Draft PR #34)
+
+An interrupted initial write can leave `world.json.tmp` **without** a
+`world.json`. Horizon Civilizations now refuses to initialize a default empty
+world when either `world.json.tmp` or `world.json.swap` exists. Saving also
+refuses to truncate these artifacts. Back up the entire
+`horizon-civilizations` world folder and manually reconcile primary,
+backup and temporary files before loading a valuable save. Never just delete
+an unknown pending save; it may contain the only copy of a new settlement.
+
+Three Rust filesystem regression tests and three Python source contracts were
+added. **Source only:** native compilation and Minecraft gameplay remain
+unverified.
+
+## Latest stacked Draft: partial NPC spawn recovery (source-only)
+
+The first-play gate now defaults to this branch, so on the current checkout
+`py -3 tools/first_play_gate.py --build-client` selects the correct branch.
+Use `--expected-sha` to pin an exact commit when collecting native evidence.
+
+**Latest crash-safety update:** the shared initial spawn survey now also
+requires all selected NPC positions to remain at least 3 blocks apart.
+The command dispatcher no longer rolls back RAM to an old snapshot after
+a durable world save followed by an error, and a failed reconcile save
+now freezes the world rather than implicitly retrying it. The local
+first-play gate extracts the first actionable failing line from the
+compiler/test log into `report.md` and `report.json`. These changes are
+not yet Rust-compiled or game-tested.
+
+**Startup safety update:** both autonomous first-village spawning and OP `/civ actors NAME`
+now share a live survey: ten living unbound residents, no already-loaded tagged
+villagers, and ten natural, loaded, two-air, unoccupied spawn spots. The older
+manual fixed-coordinate spawn path was removed. An incomplete survey creates
+**no** reservation and spawns **no** entity; it can be rerun once the area is safe.
+This hardening remains source-only until real Rust/Horizon/Minecraft tests.
+
+Branch: `feat/guarded-partial-villager-recovery-v0115`, based on
+PR #33. **Not yet compiled or gameplay-verified.** `main`
+unchanged and GitHub Actions disabled.
+
+The first village NPC batch is persisted before spawning; if native
+creation crashes halfway, never rerun all ten. A new OP-only
+`/civ recoveractor NAME ID attempt` can attempt **one** missing
+resident after `/civ reconcile NAME`, inspection of loaded
+original villagers, a fully loaded 96-block scan and a safe
+natural spot. A durable per-resident one-shot reservation is saved
+before native spawning, with exact UUID binding and no blind retry.
+`/civ roster NAME` shows IDs and pending recovery status.
+
+On Windows with Rust 1.95, Python 3.11+ and Horizon prerequisites:
+
+```powershell
+git fetch origin
+git switch feat/guarded-partial-villager-recovery-v0115
+py -3 tools/first_play_gate.py --expected-branch feat/guarded-partial-villager-recovery-v0115 --build-client
+```
+
+This is NOT gameplay E2E. See [PLAYTEST](docs/PLAYTEST.md)
+and [TEST_PLAN](docs/TEST_PLAN.md) for the native recovery scenario.
+
+## Current Draft — release gate verifies the actual native client artifact
+
+Newest stacked branch: `fix/first-play-binary-evidence-v0115`.
+Compared to #32, `tools/first_play_gate.py` now **rejects a native
+command returning exit code 0 if no valid Horizon client executable
+was produced**. It validates the final JSON record emitted by pinned
+`native_build.py`, the expected Horizon commit, `cargo_check=PASS`,
+the exact modded output path, then checks that the reported executable
+really exists at the expected native build location. It captures file
+size and SHA-256 into report.json/report.md for evidence. Missing,
+wrong-path or tiny binaries fail the gate instead of reporting
+`READY_FOR_GAMEPLAY_E2E`.
+
+The release-gate Python mock suite was actually executed on Linux:
+**10/10 PASS**. These are harness tests with fake cargo and native
+binary; **real Rust/native build and Minecraft gameplay remain
+NOT EXECUTED**. Main untouched, Actions OFF.
+
+```powershell
+git fetch origin
+git switch fix/first-play-binary-evidence-v0115
+py -3 tools/first_play_gate.py --build-client
+```
+
+See [first-play evidence](docs/PLAYTEST.md) and
+[acceptance plan](docs/TEST_PLAN.md).
+
+## Current next gate: reproducible local build evidence (Draft)
+
+The latest stacked source branch is `chore/first-play-native-validation-v0115`.
+It includes all prior village, physical resource and crash-safe receipt code.
+**No native Horizon compilation or real Minecraft gameplay pass has been
+demonstrated for this stack.** Main remains unchanged and GitHub Actions OFF.
+
+On a networked Windows PC with Rust 1.95, Python 3.11+, Git and compatible
+Horizon/Minecraft Java resources:
+
+```powershell
+git fetch origin
+git switch chore/first-play-native-validation-v0115
+py -3 tools/first_play_gate.py --dry-run --build-client
+py -3 tools/first_play_gate.py --build-client
+```
+
+The non-mutating gate records exact Git SHA, clean/dirty checkout, tool
+versions, every first failing source/native build step and its log into
+`target/first-play-gate/<UTC timestamp>/report.md` and `report.json`.
+It refuses the wrong branch, Rust version, or modified source; the optional
+`--allow-dirty` mode is diagnostic only, never a passing release gate.
+It does not enable GitHub Actions or launch the game. Even
+`READY_FOR_GAMEPLAY_E2E` means **client compiled; Minecraft still untested**.
+See [PLAYTEST](docs/PLAYTEST.md) and [TEST_PLAN](docs/TEST_PLAN.md).
+
 # Horizon Civilizations (prototype source)
 
 **Goal:** a Millenaire-like civilization system for [Horizon](https://github.com/horizon-rust/horizon):
@@ -9,7 +149,13 @@ Millenaire code or Minecraft assets. Original project code is MIT-licensed.
 > Status: **source prototype, not gameplay-verified**. See [verification status](docs/STATUS.md).
 
 > **Newest stacked Draft, not a release (2026-11-08):**
-> `feat/source-pickup-witness-v0115` adds identity-bound wood/stone
+> This source additionally rotates between loaded village resource
+> jobs and requires a saved **native command success + observed air**
+> receipt BEFORE any same-worker pickup witness or hall payment.
+> An uncertain Issued operation after restart is quarantined, never
+> replayed or paid, while legacy witnessed saves still load.
+>
+> `fix/gather-crash-proof-fair-queue-v0115` adds identity-bound wood/stone
 > harvesting with a persisted worker observation at the removed block,
 > followed by a separate worker return to the native hall. It includes
 > all prior experimental physical hall, bakery, native-barrel and
@@ -21,7 +167,7 @@ Millenaire code or Minecraft assets. Original project code is MIT-licensed.
 >
 > To validate this exact branch on a networked Windows machine with
 > Rust 1.95 and Python 3.11+:
-> `git switch feat/source-pickup-witness-v0115`, then
+> `git switch fix/gather-crash-proof-fair-queue-v0115`, then
 > `.\scripts\validate-local.ps1 -Format` and
 > `.\scripts\validate-local.ps1 -BuildClient`.
 > These are local build checks, **not a gameplay pass**.

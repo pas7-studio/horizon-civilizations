@@ -26,6 +26,30 @@ class WorldSwitchSafetyContracts(unittest.TestCase):
         self.assertIn("return;", code)
         self.assertLess(code.index("return;"), code.index("*guard = None;"))
 
+    def test_orphaned_first_save_tmp_blocks_empty_world_creation(self):
+        start = GLUE.index("fn load(path: PathBuf)")
+        end = GLUE.index("\nfn active(path:", start)
+        code = GLUE[start:end]
+        self.assertIn('["world.json.swap", "world.json.tmp"]', code)
+        self.assertIn("world: None, problem: Some(message)", code)
+        self.assertLess(code.index("for remnant in"), code.index("Ok(World::default())"))
+
+    def test_stale_temp_is_rejected_before_writing(self):
+        start = GLUE.index("fn save(active:")
+        end = GLUE.index("\npub fn closed()", start)
+        code = GLUE[start:end]
+        self.assertIn("if swap.exists() || temp.exists()", code)
+        self.assertLess(code.index("if swap.exists() || temp.exists()"),
+                        code.index("fs::File::create(&temp)"))
+        self.assertIn("pending world.json.swap or world.json.tmp", code)
+
+    def test_native_rust_regressions_cover_first_and_later_save_tmp(self):
+        native = GLUE.split("mod interrupted_first_save_tests", 1)[1]
+        self.assertEqual(native.count("#[test]"), 3)
+        self.assertIn("interrupted_first_write_cannot_look_like_a_new_empty_world", native)
+        self.assertIn("a_valid_primary_does_not_silently_discard_an_abandoned_tmp", native)
+        self.assertIn("stale_tmp_is_never_truncated_by_a_later_save", native)
+
     def test_stale_swap_guard_precedes_file_mutations(self):
         start = GLUE.index("fn save(active:")
         end = GLUE.index("\npub fn closed()", start)

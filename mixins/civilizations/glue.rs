@@ -4,7 +4,7 @@ use crate::game::{
     civilizations_core::{farm_plan, hut_plan, town_hall_plan, bakery_plan, hall_storage_positions,
         BarrelDirection, BarrelPhase, inspect_farm, inspect_hut, inspect_town_hall, inspect_bakery, is_ground,
         is_rooted_oak_harvest_origin, short_oak_stem_height, inspect_oak_stem,
-        native_worker_near, native_worker_reaches_block, PostKind, POST_RADIUS,
+        native_worker_near, native_worker_reaches_block, PostKind, POST_RADIUS, gather_turn_index,
         BuildInspection, DailyPhase, FarmBlock, FarmDecision, FarmStage, Good, HomeSlot, Job, VisualBuildJob,
         World, inspect_home, hall_board_positions, HOUSING_PLOT_OFFSETS, MAX_HOUSING_SURVEY_RESULTS,
         MAX_SIM_DAYS},
@@ -37,9 +37,17 @@ static ACTIVE: Mutex<Option<ActiveWorld>> = Mutex::new(None);
 
 fn load(path: PathBuf) -> ActiveWorld {
     let file = path.join(SAVE);
-    if path.join("world.json.swap").exists() {
-        let message = "interrupted save detected (world.json.swap). Back up the folder, then restore the correct primary world.json manually".to_owned();
-        return ActiveWorld { path, world: None, problem: Some(message), physical_ticks: 0 };
+    // Either artifact signals an interrupted transaction. In particular,
+    // world.json.tmp may be the ONLY persisted bytes of a new settlement
+    // when the very first world save was interrupted before rename. Never
+    // mistake that for an empty world and overwrite the recovery evidence.
+    for remnant in ["world.json.swap", "world.json.tmp"] {
+        if path.join(remnant).exists() {
+            let message = format!(
+                "interrupted save detected ({remnant}). Back up the world folder and inspect primary/backup/temporary save files before restarting"
+            );
+            return ActiveWorld { path, world: None, problem: Some(message), physical_ticks: 0 };
+        }
     }
     let result = match fs::read_to_string(&file) {
         Ok(text) => serde_json::from_str::<World>(&text)
@@ -100,10 +108,10 @@ fn save(active: &ActiveWorld) -> Result<(), String> {
     // A stale swap marks an interrupted save. Refuse it before touching
     // either the previous backup or the next temporary file.
     let swap = active.path.join("world.json.swap");
-    if swap.exists() {
-        return Err("pending world.json.swap from interrupted save; inspect and recover before continuing".into());
-    }
     let temp = active.path.join("world.json.tmp");
+    if swap.exists() || temp.exists() {
+        return Err("pending world.json.swap or world.json.tmp from interrupted save; inspect and recover before continuing".into());
+    }
     let mut file = fs::File::create(&temp).map_err(|e| e.to_string())?;
     file.write_all(&output).map_err(|e| e.to_string())?;
     file.sync_all().map_err(|e| e.to_string())?;
@@ -173,6 +181,7 @@ pub fn register(commands: &mut Vec<NativeCommand>) {
     for usage in [
         "civ found <name:word>", "civ actors <name:word>",
         "civ reconcile <name:word>",
+        "civ recoveractor <name:word> <resident:integer> <confirm:word>",
         "civ day [days:integer]", "civ construct <name:word>",
         "civ post <name:word> <kind:word>",
         "civ approvehouse <name:word> <slot:integer> <y:integer>",
@@ -902,14 +911,310 @@ pub fn protect_hall_inventory(
     ).with_color(text::GOLD));
 }
 
-/// Right-click on a UUID-bound civilization villager. Holding a good this
-/// resident buys sells it on the spot; otherwise a conversation menu opens.
-/// Unbound or vanilla villagers keep their normal Minecraft interaction.
-pub fn interact_entity(game: &mut Game<'_>, entity: i32, kind: &str, claimed: &mut bool) {
-    use crate::game::civilizations_core::{
-        dialogue_menu, physical_construction_shortfall, resident_wants, sale_for_held,
-        DialogueInput, DIALOGUE_ROWS,
+use crate::game::civilizations_core::{
+    page_entries, page_title, resident_wants, settle_offer, DialogueInput, MenuAction, MenuEntry,
+    MenuPage, OfferedStack, DIALOGUE_ROWS, TRADE_INPUT,
+};
+
+/// One open conversation menu. The server hub is not reachable from inside
+/// the right-click hook, so the click only queues an opening and the next
+/// server tick shows the menu; later clicks are looked up by window id.
+#[derive(Clone)]
+struct MenuSession {
+    window: i32,
+    village_id: u64,
+    resident_id: u64,
+    page: MenuPage,
+    entries: Vec<MenuEntry>,
+    wants: Vec<(Good, u32)>,
+    /// The player pressed SELL: the next close of the trade page settles the
+    /// goods left in its input slots. A plain close sells nothing.
+    confirm_sale: bool,
+}
+
+struct PendingOpen {
+    uuid: u128,
+    village_id: u64,
+    resident_id: u64,
+    page: MenuPage,
+}
+
+static MENU_SESSIONS: Mutex<BTreeMap<u128, MenuSession>> = Mutex::new(BTreeMap::new());
+static MENU_QUEUE: Mutex<Vec<PendingOpen>> = Mutex::new(Vec::new());
+static MENU_TELLS: Mutex<Vec<(u128, String)>> = Mutex::new(Vec::new());
+
+fn menu_sessions() -> MutexGuard<'static, BTreeMap<u128, MenuSession>> {
+    MENU_SESSIONS.lock().unwrap_or_else(|poison| poison.into_inner())
+}
+fn menu_queue() -> MutexGuard<'static, Vec<PendingOpen>> {
+    MENU_QUEUE.lock().unwrap_or_else(|poison| poison.into_inner())
+}
+fn menu_tells() -> MutexGuard<'static, Vec<(u128, String)>> {
+    MENU_TELLS.lock().unwrap_or_else(|poison| poison.into_inner())
+}
+
+struct RenderedPage {
+    title: String,
+    village_name: String,
+    entries: Vec<MenuEntry>,
+    wants: Vec<(Good, u32)>,
+}
+
+/// Read the live village and build one page. Nothing is written.
+fn render_page(
+    game: &Game<'_>, uuid: u128, village_id: u64, resident_id: u64, page: MenuPage,
+) -> Option<RenderedPage> {
+    let dir = game.native_world_dir()?;
+    let (village, resident, is_member) = {
+        let guard = active(dir.join(DIR));
+        let world = guard.as_ref()
+            .filter(|state| state.problem.is_none())
+            .and_then(|state| state.world.as_ref())?;
+        let village = world.settlements.get(&village_id)?.clone();
+        let resident = village.residents.iter()
+            .find(|r| r.id == resident_id && r.alive)?.clone();
+        let member = world.players.get(&format!("{uuid:032x}"))
+            .and_then(|p| p.settlement) == Some(village_id);
+        (village, resident, member)
     };
+    let stored = physical_barrel_stock(game, &village.dimension, village.center);
+    let (wood_missing, stone_missing) = stored.as_ref().map_or((0, 0), |stock| {
+        crate::game::civilizations_core::physical_construction_shortfall(&village, stock)
+    });
+    let wants = resident_wants(&village, resident.job, wood_missing, stone_missing);
+    let phase = DailyPhase::at(game.world.day_time);
+    let input = DialogueInput {
+        village: &village,
+        resident: &resident,
+        is_member,
+        routine: phase.name().to_owned(),
+        on_duty: phase.on_shift(resident.job),
+        wants: &wants,
+        stock_known: stored.is_some(),
+        wood_missing,
+        stone_missing,
+    };
+    let entries = page_entries(page, &input);
+    let title = page_title(page, &input);
+    Some(RenderedPage { title, village_name: village.name.clone(), entries, wants })
+}
+
+/// A named, colored menu item. Item names are the button labels.
+fn menu_stack(entry: &MenuEntry) -> ItemStack {
+    let mut name = Compound::new();
+    name.insert("text".into(), Tag::String(entry.text.as_str().into()));
+    name.insert("color".into(), Tag::String(entry.color.into()));
+    name.insert("italic".into(), Tag::Byte(0));
+    if entry.bold {
+        name.insert("bold".into(), Tag::Byte(1));
+    }
+    ItemStack {
+        item: entry.icon.into(),
+        count: 1,
+        damage: 0,
+        extra: Some(Box::new(horizon_client::item_data::StackData {
+            custom_name: Some(Tag::Compound(name)),
+            ..Default::default()
+        })),
+    }
+}
+
+fn page_items(entries: &[MenuEntry]) -> Vec<Option<ItemStack>> {
+    let mut items: Vec<Option<ItemStack>> = vec![None; usize::from(DIALOGUE_ROWS) * 9];
+    for entry in entries {
+        if let Some(cell) = items.get_mut(entry.slot) {
+            *cell = Some(menu_stack(entry));
+        }
+    }
+    items
+}
+
+/// Show one page to a player, replacing whatever menu they had open. The
+/// trade page also opens its input row so goods can be dropped in. Returns
+/// false when no menu can be shown (the caller falls back to chat).
+fn open_page(
+    game: &mut Game<'_>, uuid: u128, village_id: u64, resident_id: u64, page: MenuPage,
+) -> bool {
+    let Some(rendered) = render_page(game, uuid, village_id, resident_id, page) else {
+        return false;
+    };
+    let items = page_items(&rendered.entries);
+    let title = Text::literal(rendered.title.clone()).with_color(text::GOLD);
+    let window = if page == MenuPage::Trade {
+        game.native_open_menu_with_input(uuid, DIALOGUE_ROWS, title, items, TRADE_INPUT)
+    } else {
+        game.native_open_menu(uuid, DIALOGUE_ROWS, title, items)
+    };
+    let Some(window) = window else {
+        return false;
+    };
+    menu_sessions().insert(uuid, MenuSession {
+        window, village_id, resident_id, page,
+        entries: rendered.entries, wants: rendered.wants, confirm_sale: false,
+    });
+    true
+}
+
+/// Called every server tick (the hub is reachable here): open queued menus
+/// and deliver queued messages.
+pub fn process_menu_queue(game: &mut Game<'_>) {
+    let opens: Vec<PendingOpen> = std::mem::take(&mut *menu_queue());
+    for open in opens {
+        if open_page(game, open.uuid, open.village_id, open.resident_id, open.page) {
+            continue;
+        }
+        // No menu possible for this player: show the same page as chat.
+        if let Some(page) = render_page(game, open.uuid, open.village_id, open.resident_id, open.page) {
+            let _ = send_dialogue_chat(game, open.uuid, &page.village_name, &page.entries);
+        }
+    }
+    let tells: Vec<(u128, String)> = std::mem::take(&mut *menu_tells());
+    for (uuid, message) in tells {
+        let _ = game.native_tell(uuid, Text::literal(message).with_color(text::GOLD));
+    }
+}
+
+/// A click inside an open conversation menu (its own slots only: a click
+/// there moves nothing, so no item can be taken out of the menu).
+pub fn menu_clicked(game: &mut Game<'_>, uuid: u128, window: i32, slot: i32) {
+    if !game.native_on(MOD_ID) { return; }
+    let session = menu_sessions().get(&uuid).filter(|s| s.window == window).cloned();
+    let Some(session) = session else { return; };
+    let Ok(slot) = usize::try_from(slot) else { return; };
+    let Some(action) = session.entries.iter().find(|e| e.slot == slot).map(|e| e.action) else {
+        return;
+    };
+    match action {
+        MenuAction::None => {}
+        MenuAction::Close => game.native_close_menu(uuid),
+        MenuAction::Go(page) => {
+            let _ = open_page(game, uuid, session.village_id, session.resident_id, page);
+        }
+        MenuAction::Join => {
+            let message = match join_village(game, uuid, session.village_id) {
+                Ok(done) => done,
+                Err(reason) => format!("Could not join: {reason}"),
+            };
+            menu_tells().push((uuid, message));
+            // Redraw so the button turns into the membership line.
+            let _ = open_page(game, uuid, session.village_id, session.resident_id, MenuPage::Main);
+        }
+        MenuAction::Sell => {
+            if let Some(open) = menu_sessions().get_mut(&uuid).filter(|s| s.window == window) {
+                open.confirm_sale = true;
+            }
+            // Closing hands the input slots to `menu_input_closed`.
+            game.native_close_menu(uuid);
+        }
+    }
+}
+
+/// The trade menu closed. If SELL was pressed, take what the resident wants
+/// out of the goods left in the input slots; everything else returns to the
+/// player. The sale is saved first and a failure leaves every slot untouched.
+pub fn menu_input_closed(
+    game: &mut Game<'_>, uuid: u128, window: i32, slots: &mut Vec<Option<ItemStack>>,
+) {
+    if !game.native_on(MOD_ID) { return; }
+    let session = menu_sessions().get(&uuid)
+        .filter(|s| s.window == window && s.page == MenuPage::Trade && s.confirm_sale)
+        .cloned();
+    let Some(session) = session else { return; };
+    let message = match sell_offered(game, uuid, &session, slots) {
+        Ok(done) => done,
+        Err(reason) => format!("Nothing sold: {reason}. Your goods were returned."),
+    };
+    menu_tells().push((uuid, message));
+    // Keep trading: show the trade page again with fresh needs.
+    menu_queue().push(PendingOpen {
+        uuid, village_id: session.village_id, resident_id: session.resident_id,
+        page: MenuPage::Trade,
+    });
+}
+
+/// Forget a session when its window closes (a newer window keeps its own).
+pub fn menu_closed(game: &mut Game<'_>, uuid: u128, window: i32) {
+    if !game.native_on(MOD_ID) { return; }
+    let mut sessions = menu_sessions();
+    if sessions.get(&uuid).is_some_and(|s| s.window == window) {
+        sessions.remove(&uuid);
+    }
+}
+
+fn join_village(game: &Game<'_>, uuid: u128, village_id: u64) -> Result<String, String> {
+    let dir = game.native_world_dir().ok_or("world folder unavailable")?;
+    let mut guard = active(dir.join(DIR));
+    let state = guard.as_mut()
+        .filter(|state| state.problem.is_none() && state.world.is_some())
+        .ok_or("civilizations is paused for this world")?;
+    let previous = state.world.as_ref().unwrap().clone();
+    let actor = format!("{uuid:032x}");
+    state.world.as_mut().unwrap().join(&actor, village_id)?;
+    if let Err(error) = save(state) {
+        state.world = Some(previous);
+        return Err(format!("not saved: {error}"));
+    }
+    let name = state.world.as_ref().unwrap().settlements[&village_id].name.clone();
+    Ok(format!("You joined {name}. /civ title shows your balance and rank."))
+}
+
+/// Settle the goods in the input slots against this resident's wants. The
+/// coins, the warehouse credit and the save all happen before any slot is
+/// emptied, so an error leaves the player's goods exactly as they were.
+fn sell_offered(
+    game: &Game<'_>, uuid: u128, session: &MenuSession, slots: &mut [Option<ItemStack>],
+) -> Result<String, String> {
+    let mut offered: Vec<Option<OfferedStack>> = slots.iter().map(|slot| {
+        slot.as_ref().map(|stack| OfferedStack {
+            item: stack.item.to_string(),
+            count: stack.count,
+            plain: stack.damage == 0 && stack.extra.is_none(),
+        })
+    }).collect();
+    let accepted = settle_offer(&session.wants, &mut offered);
+    if accepted.is_empty() {
+        return Err("nothing in the slots is something I need".into());
+    }
+    let dir = game.native_world_dir().ok_or("world folder unavailable")?;
+    let mut guard = active(dir.join(DIR));
+    let state = guard.as_mut()
+        .filter(|state| state.problem.is_none() && state.world.is_some())
+        .ok_or("civilizations is paused for this world")?;
+    let previous = state.world.as_ref().unwrap().clone();
+    let actor = format!("{uuid:032x}");
+    let mut total = 0_u64;
+    let mut parts = Vec::new();
+    for (good, count) in &accepted {
+        match state.world.as_mut().unwrap().sell(&actor, session.village_id, *good, *count) {
+            Ok(payout) => {
+                total += payout;
+                parts.push(format!("{count} {}", good.as_str()));
+            }
+            Err(error) => {
+                state.world = Some(previous);
+                return Err(error);
+            }
+        }
+    }
+    if let Err(error) = save(state) {
+        state.world = Some(previous);
+        return Err(format!("not saved: {error}"));
+    }
+    for (slot, left) in slots.iter_mut().zip(offered) {
+        match left {
+            None => *slot = None,
+            Some(rest) => {
+                if let Some(stack) = slot.as_mut() { stack.count = rest.count; }
+            }
+        }
+    }
+    Ok(format!("Sold {} for {total} coins.", parts.join(", ")))
+}
+
+/// Right-click on a villager. A village resident opens the conversation menu
+/// (queued for the next tick); any other villager inside village territory is
+/// blocked from vanilla trading too, so no default trade UI ever appears.
+pub fn interact_entity(game: &mut Game<'_>, entity: i32, kind: &str, claimed: &mut bool) {
     if *claimed || kind != "minecraft:villager" || !game.native_on(MOD_ID) {
         return;
     }
@@ -925,9 +1230,11 @@ pub fn interact_entity(game: &mut Game<'_>, entity: i32, kind: &str, claimed: &m
     let Some(dir) = game.native_world_dir() else {
         return;
     };
-    // Copy what the conversation needs, then release the world lock before
-    // any native call that may itself take it.
-    let (village, resident, is_member) = {
+    enum Found {
+        Resident { village_id: u64, resident_id: u64 },
+        Unbound { village: String },
+    }
+    let found = {
         let guard = active(dir.join(DIR));
         let Some(world) = guard.as_ref()
             .filter(|state| state.problem.is_none())
@@ -935,89 +1242,54 @@ pub fn interact_entity(game: &mut Game<'_>, entity: i32, kind: &str, claimed: &m
         else {
             return;
         };
-        let Some((village, resident)) = world.settlements.values()
-            .filter(|village| village.dimension == player.dimension)
-            .find_map(|village| {
-                village.residents.iter()
-                    .find(|resident| resident.alive && resident.entity_uuid == Some(uuid))
-                    .map(|resident| (village.clone(), resident.clone()))
-            })
-        else {
-            return;
-        };
-        let membership = world.players
-            .get(&format!("{:032x}", player.uuid))
-            .and_then(|p| p.settlement);
-        (village.clone(), resident, membership == Some(village.id))
-    };
-    let dimension = game.dim.id().to_owned();
-    let stored = physical_barrel_stock(game, &dimension, village.center);
-    let (wood_missing, stone_missing) = stored.as_ref()
-        .map_or((0, 0), |stock| physical_construction_shortfall(&village, stock));
-    let wants = resident_wants(&village, resident.job, wood_missing, stone_missing);
-
-    // A held plain stack the resident wants is sold at once. This reuses the
-    // market's own checked, saved and rolled-back sale path.
-    if let Some((item, held, true)) = game.native_held() {
-        if let Some((good, count)) = sale_for_held(&wants, &item, held) {
-            let line = match sell_held_to_resident(game, &player, village.id, good, count) {
-                Ok(done) => format!("{}: {done}", resident.name),
-                Err(reason) => format!("{} cannot buy that: {reason}", resident.name),
-            };
-            if game.native_tell(player.uuid, Text::literal(line).with_color(text::GOLD)) {
-                *claimed = true;
+        let in_dimension = || world.settlements.values()
+            .filter(|village| village.dimension == player.dimension);
+        let linked = in_dimension().find_map(|village| {
+            village.residents.iter()
+                .find(|resident| resident.alive && resident.entity_uuid == Some(uuid))
+                .map(|resident| Found::Resident { village_id: village.id, resident_id: resident.id })
+        });
+        match linked {
+            Some(found) => found,
+            // Not on any roster. If the player is standing in a village's
+            // territory this is still a village villager (not yet linked):
+            // never let it open the default trading screen.
+            None => {
+                let near = in_dimension().find(|village| {
+                    let dx = player.position[0] - f64::from(village.center[0]);
+                    let dz = player.position[2] - f64::from(village.center[2]);
+                    dx * dx + dz * dz <= 160.0 * 160.0
+                });
+                match near {
+                    Some(village) => Found::Unbound { village: village.name.clone() },
+                    None => return,
+                }
             }
-            return;
         }
-    }
-
-    let phase = DailyPhase::at(game.world.day_time);
-    let entries = dialogue_menu(&DialogueInput {
-        village: &village,
-        resident: &resident,
-        is_member,
-        routine: phase.name().to_owned(),
-        on_duty: phase.on_shift(resident.job),
-        wants: &wants,
-        stock_known: stored.is_some(),
-    });
-    let mut items: Vec<Option<ItemStack>> = vec![None; usize::from(DIALOGUE_ROWS) * 9];
-    for entry in &entries {
-        if let Some(cell) = items.get_mut(entry.slot) {
-            *cell = Some(ItemStack {
-                item: entry.icon.into(),
-                count: 1,
-                damage: 0,
-                extra: Some(Box::new(horizon_client::item_data::StackData {
-                    custom_name: Some(Tag::String(entry.text.as_str().into())),
-                    ..Default::default()
-                })),
+    };
+    *claimed = true;
+    match found {
+        Found::Resident { village_id, resident_id } => {
+            menu_queue().push(PendingOpen {
+                uuid: player.uuid, village_id, resident_id, page: MenuPage::Main,
             });
         }
-    }
-    let title = Text::literal(format!("{} - {}", village.name, resident.name))
-        .with_color(text::GOLD);
-    // The menu is display-only: its slots move nothing, so no click hook is
-    // needed and nobody can take an item out of it.
-    if game.native_open_menu(player.uuid, DIALOGUE_ROWS, title, items).is_some() {
-        *claimed = true;
-        return;
-    }
-    // No menu is available (the single-player host is not a menu guest): show
-    // the same entries as a colored chat panel, one line each. Do not consume a
-    // vanilla interaction unless the information was actually sent.
-    if send_dialogue_chat(game, player.uuid, &village.name, &entries) {
-        *claimed = true;
+        Found::Unbound { village } => {
+            let _ = game.native_tell(player.uuid, Text::literal(format!(
+                "This villager is not on {village}'s roster yet, so it has nothing to say. \
+                 Default villager trading is turned off in village territory."
+            )).with_color(text::GRAY));
+        }
     }
 }
 
-/// The conversation as a chat panel: a gold header, grey facts, and the trade
-/// line in green when this resident buys something (grey when they do not).
+/// The conversation as a colored chat panel (only when no menu can open).
 fn send_dialogue_chat(
-    game: &mut Game<'_>, uuid: u128, village: &str,
-    entries: &[crate::game::civilizations_core::MenuEntry],
+    game: &mut Game<'_>, uuid: u128, village: &str, entries: &[MenuEntry],
 ) -> bool {
-    let mut ordered: Vec<&crate::game::civilizations_core::MenuEntry> = entries.iter().collect();
+    let mut ordered: Vec<&MenuEntry> = entries.iter()
+        .filter(|entry| entry.icon != "minecraft:gray_stained_glass_pane")
+        .collect();
     ordered.sort_by_key(|entry| entry.slot);
     let Some(head) = ordered.first() else { return false; };
     let header = Text::literal(format!("-- {} ({village}) --", head.text))
@@ -1026,47 +1298,13 @@ fn send_dialogue_chat(
         return false;
     }
     for entry in ordered.iter().skip(1) {
-        let color = if entry.icon == "minecraft:emerald" { text::GREEN } else { text::GRAY };
         let _ = game.native_tell(
             uuid,
             Text::literal("  - ").with_color(text::DARK_GRAY)
-                .append(Text::literal(entry.text.clone()).with_color(color)),
+                .append(Text::literal(entry.text.clone()).with_color(text::GRAY)),
         );
     }
     true
-}
-
-/// Sell `count` of the held good to a resident who wants it. The coin payout
-/// and warehouse credit are saved together with the inventory removal, and
-/// either is rolled back if the other fails; a rejected sale changes nothing.
-fn sell_held_to_resident(
-    game: &mut Game<'_>, player: &NativeServerPlayer, village_id: u64, good: Good, count: u32,
-) -> Result<String, String> {
-    let dir = game.native_world_dir().ok_or("world folder unavailable")?;
-    let mut guard = active(dir.join(DIR));
-    let state = guard.as_mut()
-        .filter(|state| state.problem.is_none() && state.world.is_some())
-        .ok_or("civilizations is paused for this world")?;
-    let actor = format!("{:032x}", player.uuid);
-    let item = good.item();
-    if game.native_count_items(item) < count {
-        return Err(format!("you need {count} {item}"));
-    }
-    let previous = state.world.as_ref().unwrap().clone();
-    let payout = state.world.as_mut().unwrap().sell(&actor, village_id, good, count)?;
-    let taken = game.native_take_items(item, count);
-    if taken != count {
-        if taken > 0 { game.native_give_items(item, taken); }
-        state.world = Some(previous);
-        return Err("your inventory changed during the sale".into());
-    }
-    if let Err(error) = save(state) {
-        let refund = game.native_give_items(item, count);
-        log::error!("[civilizations] hand sale not saved, restored {refund}/{count}: {error}");
-        state.world = Some(previous);
-        return Err(format!("sale not committed: {error}"));
-    }
-    Ok(format!("Sold {count} {} for {payout} coins.", good.as_str()))
 }
 
 fn quarantined_native_purchase(state: &mut ActiveWorld, village_id: u64, reason: &str) -> String {
@@ -1193,7 +1431,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
     let actor = format!("{:032x}", player.uuid);
     let action = args.next().unwrap_or("help");
     if action == "help" {
-        reply(game, "Civilizations: /civ list | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | hall <name> | warehouse <name> | posts <name> | roles <name> | status <name> | chunks <name> | diagnose <name> | buyplot <name> | buyhouse <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, barrelcheck <name>, resolvebarrel <name> confirm|cancel <observed_count>, gathercheck <name>, discardgather <name> intact|empty, day [days], construct <name>, post <name> lumber|quarry|sand|dirt, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
+        reply(game, "Civilizations: /civ list | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | hall <name> | warehouse <name> | posts <name> | roles <name> | status <name> | chunks <name> | diagnose <name> | buyplot <name> | buyhouse <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, recoveractor <name> <resident-id> attempt, barrelcheck <name>, resolvebarrel <name> confirm|cancel <observed_count>, gathercheck <name>, discardgather <name> intact|empty, day [days], construct <name>, post <name> lumber|quarry|sand|dirt, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
         return;
     }
     if action == "list" {
@@ -1363,17 +1601,18 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             "no explicit saved-state blocker; check natural plots, NPC routes and native game logs".to_owned()
         };
         let gather_state = if let Some(stem) = &v.oak_stem {
-            format!("oak log {}/{} at {:?}, issued={}, pickup={}, blocked={}",
+            format!("oak log {}/{} at {:?}, issued={}, native={}, pickup={}, blocked={}",
                 stem.cursor + 1, stem.height,
                 v.gather_job.as_ref().map(|job| (job.position, job.worker_id)),
                 v.gather_job.as_ref().is_some_and(|job| job.issued),
+                v.gather_job.as_ref().is_some_and(|job| job.native_edit_confirmed),
                 v.gather_job.as_ref().is_some_and(|job| job.pickup_witnessed),
                 v.gather_job.as_ref().is_some_and(|job| job.blocked))
         } else {
             v.gather_job.as_ref().map(|job| format!(
-                "{:?} at {:?}, worker={:?}, issued={}, pickup={}, blocked={}",
+                "{:?} at {:?}, worker={:?}, issued={}, native={}, pickup={}, blocked={}",
                 job.good, job.position, job.worker_id, job.issued,
-                job.pickup_witnessed, job.blocked
+                job.native_edit_confirmed, job.pickup_witnessed, job.blocked
             )).unwrap_or_else(|| "idle".to_owned())
         };
         reply(game, format!(
@@ -1411,9 +1650,10 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             stem.cursor + 1, stem.height, stem.root
         )).unwrap_or_default();
         reply(game, format!(
-            "{} gather audit: {:?} at {:?}, worker stand {:?}, assigned resident {:?}, planned native block {}, issued={}, source pickup witnessed={}, blocked={}, live native block {:?}.{} Blocked ISSUED receipts are quarantined. Inspect world save and original block before OP /civ discardgather {} intact|empty; abandonment provides ZERO materials.",
+            "{} gather audit: {:?} at {:?}, worker stand {:?}, assigned resident {:?}, planned native block {}, issued={}, native edit confirmed={}, source pickup witnessed={}, blocked={}, live native block {:?}.{} Blocked ISSUED receipts are quarantined. Inspect world save and original block before OP /civ discardgather {} intact|empty; abandonment provides ZERO materials.",
             v.name, job.good, job.position, job.stand, job.worker_id, job.source_block(),
-            job.issued, job.pickup_witnessed, job.blocked, observed, stem_progress, v.name
+            job.issued, job.native_edit_confirmed, job.pickup_witnessed,
+            job.blocked, observed, stem_progress, v.name
         ));
         return;
     }
@@ -1695,8 +1935,15 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
         let name = args.next().unwrap_or("");
         let Some(s) = world.by_name(name) else { error(game, "unknown settlement: /civ roster <name>"); return; };
         let linked = loaded_actors(game, world, s.id);
-        let listing: Vec<_> = s.residents.iter().map(|r| format!("{}:{}", r.name, r.job.name())).collect();
-        reply(game, format!("{} actors: {}/{} nearby and loaded | {}", s.name, linked.len(), s.population(), listing.join(", ")));
+        let listing: Vec<_> = s.residents.iter().map(|r| format!(
+            "{}#{}:{} [{}]", r.name, r.id, r.job.name(),
+            if s.actor_recovery_issued.contains(&r.id) { "RECOVERY PENDING" }
+            else if r.entity_uuid.is_some() { "UUID saved" } else { "UNBOUND" }
+        )).collect();
+        reply(game, format!(
+            "{} actors: {}/{} nearby and loaded | {}. OP partial spawn: /civ reconcile {}, then /civ recoveractor {} <resident-id> attempt ONLY after native inspection.",
+            s.name, linked.len(), s.population(), listing.join(", "), s.name, s.name
+        ));
         return;
     }
     if action == "harvests" {
@@ -2169,7 +2416,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
         })(),
         "sell" | "buy" => (|| {
             if player.permission < 2 {
-                return Err("Villagers trade in person: right-click the mayor while holding wood or stone the village needs.".into());
+                return Err("Villagers trade in person: talk to the mayor or the baker (right-click) and use their Trade menu.".into());
             }
             let good = Good::parse(args.next().ok_or("good required")?).ok_or("unknown good")?;
             let count = parse_amount(args.next())?;
@@ -2268,6 +2515,11 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
                     continue;
                 }
                 if let Err(e) = save(state) {
+                    // A native UUID has already been bound in memory. Do not
+                    // let the outer command handler retry this failed save,
+                    // or restore an older clone over a partially committed
+                    // world.json. Stop writes until disk recovery.
+                    already_saved = true;
                     state.problem = Some(format!("actor identity save halted: {e}"));
                     return Ok(format!("Reconciled {linked} actors before save failure; world halted. Restore backup and restart. {e}"));
                 }
@@ -2275,6 +2527,96 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
                 linked += 1;
             }
             Ok(format!("Reconciled {linked} legacy actors; {ambiguous} ambiguous/conflicting skipped. /civ roster {name}. Missing actors are not spawned automatically."))
+        })(),
+        "recoveractor" if player.permission >= 2 => (|| {
+            let name = args.next().ok_or("usage: /civ recoveractor <name> <resident-id> attempt")?;
+            let resident_id = args.next().ok_or("resident ID required; /civ roster <name>")?
+                .parse::<u64>().map_err(|_| "invalid resident ID")?;
+            if args.next() != Some("attempt") || args.next().is_some() {
+                return Err("explicit OP confirmation required: /civ recoveractor <name> <resident-id> attempt".into());
+            }
+            let village = previous.by_name(name).ok_or("unknown settlement")?;
+            if !village.actors_spawned {
+                return Err("initial actor batch has not yet been reserved".into());
+            }
+            if village.dimension != player.dimension {
+                return Err("go to this settlement dimension first".into());
+            }
+            let dx = i64::from(village.center[0]) - player.position[0].floor() as i64;
+            let dz = i64::from(village.center[2]) - player.position[2].floor() as i64;
+            if dx * dx + dz * dz > 32 * 32 {
+                return Err("stand within 32 blocks of the settlement center".into());
+            }
+            let resident = village.residents.iter()
+                .find(|r| r.id == resident_id && r.alive && r.entity_uuid.is_none())
+                .ok_or("resident missing, dead or already UUID-linked; inspect /civ roster")?;
+            if village.actor_recovery_issued.contains(&resident_id) {
+                return Err("a recovery spawn was already issued for this resident; inspect and reconcile before any further action".into());
+            }
+            // All native chunks inside the normal 96-block identity
+            // neighborhood must be loaded. An unseen older actor in an
+            // unloaded chunk would make even an OP recovery duplicate it.
+            // This is intentionally strict; return when chunks are loaded.
+            for ox in (-96_i32..=96).step_by(16) {
+                for oz in (-96_i32..=96).step_by(16) {
+                    let x = village.center[0].checked_add(ox)
+                        .ok_or("spawn recovery scan outside world bounds")?;
+                    let z = village.center[2].checked_add(oz)
+                        .ok_or("spawn recovery scan outside world bounds")?;
+                    if !game.world.loaded(x, z) {
+                        return Err("native villager recovery needs all chunks in 96-block scan loaded; no spawn was reserved".into());
+                    }
+                }
+            }
+            let exact_name = village.actor_name(resident);
+            let legacy_name = format!("{} [{}]", resident.name, village.name);
+            // Never spawn while a tagged old entity is visible in the
+            // current loaded native dimension, even if its UUID was lost.
+            if game.mobs.iter().any(|mob|
+                mob.alive() && mob.kind.id == "minecraft:villager"
+                    && (mob.custom_name.as_deref() == Some(exact_name.as_str())
+                        || mob.custom_name.as_deref() == Some(legacy_name.as_str()))) {
+                return Err("matching native actor is already loaded: use /civ reconcile, do not spawn a duplicate".into());
+            }
+            // Recover only at surveyed natural ground with two blocks
+            // of air, never on occupied NPC coordinates.
+            let position = safe_actor_spawn_points(game, village).into_iter()
+                .find(|point| !game.mobs.iter().any(|mob| {
+                    let dx = mob.position.x - point[0];
+                    let dy = mob.position.y - point[1];
+                    let dz = mob.position.z - point[2];
+                    mob.alive() && dx * dx + dy * dy + dz * dz < 9.0
+                })).ok_or("no safe unoccupied loaded actor spawn point")?;
+            // Durable at-most-once reservation BEFORE native side effects.
+            state.world.as_mut().unwrap().reserve_actor_recovery(village.id, resident_id)?;
+            save(state)?;
+            already_saved = true;
+            let options = NativeSpawn {
+                name: Some(exact_name), ..NativeSpawn::default()
+            };
+            let Some(entity_id) = game.native_spawn_mob(
+                &village.dimension, "minecraft:villager", position, &options
+            ) else {
+                return Ok(format!(
+                    "One recovery attempt was reserved for #{resident_id} but native spawn was refused. Do NOT retry blindly. OP: /civ roster {name} then /civ reconcile {name}."
+                ));
+            };
+            let link = game.native_entity(entity_id)
+                .and_then(|handle| game.native_entity_uuid(handle))
+                .ok_or_else(|| "spawned entity UUID is unavailable".to_owned())
+                .and_then(|uuid| state.world.as_mut().unwrap()
+                    .bind_actor(village.id, resident_id, uuid).map(|_| ()))
+                .and_then(|_| save(state));
+            if let Err(e) = link {
+                state.problem = Some(format!("native actor recovery identity halted: {e}"));
+                log::error!("[civilizations] recovered actor without durable UUID identity: {e}");
+                return Ok(format!(
+                    "Recovery may have spawned resident #{resident_id}, but UUID persistence FAILED: {e}. World actions halted; inspect saved journal and native actor. Do NOT respawn."
+                ));
+            }
+            Ok(format!(
+                "Recovered one UUID-linked villager #{resident_id} in {name}. Other residents unchanged. /civ roster {name}."
+            ))
         })(),
         "actors" if player.permission >= 2 => (|| {
             let name = args.next().ok_or("usage: /civ actors <name>")?;
@@ -2286,6 +2628,10 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             let dx = i64::from(s.center[0]) - player.position[0].floor() as i64;
             let dz = i64::from(s.center[2]) - player.position[2].floor() as i64;
             if dx * dx + dz * dz > 32 * 32 { return Err("stand within 32 blocks of the settlement center".into()); }
+            // Manual spawning must use the SAME live preflight as automatic
+            // spawning. Never reserve ten actors on obstructed/unloaded
+            // ground, beside occupied mobs, or over tagged survivors.
+            let positions = surveyed_initial_actor_positions(game, s)?;
             // Persist one-shot reservation before the first spawn. A crash
             // cannot accidentally retrigger a full batch on next login.
             state.world.as_mut().unwrap().settlements.get_mut(&s.id).unwrap().actors_spawned = true;
@@ -2293,16 +2639,13 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             already_saved = true;
             let mut spawned = 0usize;
             let mut halted = false;
-            for (i, resident) in s.residents.iter().take(10).enumerate() {
-                let x = f64::from(s.center[0]) + (i as f64 % 5.0) * 2.0 - 4.0 + 0.5;
-                let z = f64::from(s.center[2]) + (i / 5) as f64 * 2.0 - 1.0 + 0.5;
+            for (resident, position) in s.residents.iter().take(10).zip(positions) {
                 let opts = NativeSpawn {
                     name: Some(s.actor_name(resident)),
                     ..NativeSpawn::default()
                 };
                 let Some(entity_id) = game.native_spawn_mob(
-                    &s.dimension, "minecraft:villager",
-                    [x, f64::from(s.center[1]), z], &opts
+                    &s.dimension, "minecraft:villager", position, &opts
                 ) else {
                     break;
                 };
@@ -2327,7 +2670,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
                 Ok(format!("Spawned and UUID-linked {spawned} villagers. Reopen world and verify /civ roster {name}."))
             }
         })(),
-        "found" | "day" | "war" | "peace" | "actors" | "construct" | "post" | "approvehouse" | "autonomy" | "farm" | "recoverfarm" | "reconcile" | "barrelcheck" | "resolvebarrel" | "gathercheck" | "discardgather" => Err("requires server operator level 2".into()),
+        "found" | "day" | "war" | "peace" | "actors" | "recoveractor" | "construct" | "post" | "approvehouse" | "autonomy" | "farm" | "recoverfarm" | "reconcile" | "barrelcheck" | "resolvebarrel" | "gathercheck" | "discardgather" => Err("requires server operator level 2".into()),
         _ => Err("unknown subcommand. Use /civ help".into()),
     };
     match result {
@@ -2340,8 +2683,21 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             } else { reply(game, message); }
         }
         Err(message) => {
-            state.world = Some(previous);
-            error(game, message);
+            if already_saved {
+                // A previous step committed world.json. Rolling back only
+                // RAM would make subsequent saves silently erase the
+                // committed identity/transaction record. Fail closed.
+                log::error!("[civilizations] command failed after durable save: {message}");
+                state.problem = Some(format!(
+                    "command failed after durable save; inspect before restarting: {message}"
+                ));
+                error(game, format!(
+                    "Command stopped after a durable save; world halted for inspection: {message}"
+                ));
+            } else {
+                state.world = Some(previous);
+                error(game, message);
+            }
         }
     }
 }
@@ -2373,14 +2729,70 @@ fn safe_actor_spawn_points(
                         .is_some_and(|block| is_ground(&block))
                     && world_block(game, &village.dimension, [x, y, z]).as_deref() == Some("minecraft:air")
                     && world_block(game, &village.dimension, [x, head_y, z]).as_deref() == Some("minecraft:air") {
-                    spots.push([f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5]);
+                    let point = [f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5];
+                    // Terrain may be clear while a living native entity
+                    // occupies the position. Skip it for BOTH autonomous
+                    // and OP spawning, before reserving the batch.
+                    if game.mobs.iter().any(|mob| {
+                        let dx = mob.position.x - point[0];
+                        let dy = mob.position.y - point[1];
+                        let dz = mob.position.z - point[2];
+                        mob.alive() && dx * dx + dy * dy + dz * dz < 9.0
+                    }) {
+                        continue;
+                    }
+                    // The preflight is a batch survey: selected citizens
+                    // must also be separated from EACH OTHER, not only from
+                    // mobs currently present before the first spawn.
+                    // Keep the same 3-block clearance used for live mobs.
+                    if spots.iter().any(|other: &[f64; 3]| {
+                        let dx = other[0] - point[0];
+                        let dy = other[1] - point[1];
+                        let dz = other[2] - point[2];
+                        dx * dx + dy * dy + dz * dz < 9.0
+                    }) {
+                        continue;
+                    }
+                    spots.push(point);
                     break;
                 }
             }
             if spots.len() == 10 { return spots; }
         }
     }
-    Vec::new()
+    // Return every available safe spot even if there are fewer than ten.
+    // The INITIAL batch still requires exactly ten before it reserves
+    // anything. The explicit single-resident recovery needs just one.
+    spots
+}
+
+/// Refuse to reserve the first batch if a citizen is already dead/linked,
+/// a matching older native actor is visible, or fewer than ten genuinely
+/// clear natural-ground spawn positions can be surveyed in loaded chunks.
+/// This is shared by autonomous startup and the explicit OP /civ actors path.
+fn surveyed_initial_actor_positions(
+    game: &Game<'_>, village: &crate::game::civilizations_core::Settlement,
+) -> Result<Vec<[f64; 3]>, String> {
+    if village.residents.len() < 10 || village.residents.iter().take(10)
+            .any(|r| !r.alive || r.entity_uuid.is_some()) {
+        return Err("initial batch requires ten living, UUID-unbound residents".into());
+    }
+    if village.residents.iter().take(10).any(|resident| {
+        let tagged = village.actor_name(resident);
+        let legacy = format!("{} [{}]", resident.name, village.name);
+        game.mobs.iter().any(|mob| {
+            mob.alive() && mob.kind.id == "minecraft:villager"
+                && (mob.custom_name.as_deref() == Some(tagged.as_str())
+                    || mob.custom_name.as_deref() == Some(legacy.as_str()))
+        })
+    }) {
+        return Err("matching native villager already loaded: reconcile identity before initial spawn".into());
+    }
+    let positions = safe_actor_spawn_points(game, village);
+    if positions.len() != 10 {
+        return Err("need ten loaded, natural, clear and unoccupied positions before initial spawn".into());
+    }
+    Ok(positions)
 }
 
 /// Vanilla villagers are UUID-bound, once, after a persistent one-shot
@@ -2391,8 +2803,10 @@ fn auto_spawn_villagers(
     let village = state.world.as_ref().unwrap().settlements
         .get(&village_id).ok_or("unknown settlement")?.clone();
     if village.actors_spawned || !village.autonomy_enabled { return Ok(()); }
-    let positions = safe_actor_spawn_points(game, &village);
-    if positions.len() != 10 { return Ok(()); } // unloaded / obstructed: retry later
+    // An incomplete preflight never reserves the one-shot batch. Missing
+    // chunks or occupied plots are normal: retry only the PRE-spawn survey.
+    let Ok(positions) = surveyed_initial_actor_positions(game, &village)
+    else { return Ok(()); };
     let prior = state.world.as_ref().unwrap().clone();
     state.world.as_mut().unwrap().settlements
         .get_mut(&village_id).unwrap().actors_spawned = true;
@@ -3516,17 +3930,37 @@ fn seems_natural_resource(game: &Game<'_>, dimension: &str, point: [i32; 3], goo
 /// If the process crashes after Issued but before the actual edit, the
 /// resulting uncertainty is quarantined; no automatic native retry or credit.
 fn gather_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), String> {
-    if !DailyPhase::at(game.world.day_time).on_shift(Job::Miner) { return Ok(()); }
     let dimension = game.dim.id().to_owned();
-    let target = state.world.as_ref().unwrap().settlements.values()
+    // Rotate among all loaded nonblocked village jobs. Previously .find()
+    // always chose the lowest village ID: an assigned worker unable to
+    // reach the hall could starve EVERY later settlement indefinitely.
+    // The tick advances by eight between gather runs, making this a
+    // deterministic fair round-robin, with no new world/save fields.
+    let eligible: Vec<_> = state.world.as_ref().unwrap().settlements.values()
         .filter(|v| v.dimension == dimension)
         .filter_map(|v| v.gather_job.as_ref().map(|job| (v.id, job.clone())))
-        .find(|(_, job)| !job.blocked && game.world.loaded(job.position[0], job.position[2]));
-    let Some((id, job)) = target else { return Ok(()); };
+        .filter(|(_, job)| !job.blocked && game.world.loaded(job.position[0], job.position[2]))
+        .collect();
+    let Some(slot) = gather_turn_index(state.physical_ticks, eligible.len()) else {
+        return Ok(());
+    };
+    let (id, job) = eligible[slot].clone();
+    let role = if job.good == Good::Wood { Job::Lumberjack } else { Job::Miner };
+    if !DailyPhase::at(game.world.day_time).on_shift(role) {
+        return Ok(());
+    }
     let observed = world_block(game, &dimension, job.position);
     let Some(name) = observed else { return Ok(()); };
     let before = state.world.as_ref().unwrap().clone();
     if job.issued {
+        // If the server stopped after Issued was saved but before the
+        // command's native result AND fresh observed air were durably
+        // acknowledged, the block may have been removed by anyone.
+        // Quarantine even if it is now air; never credit such a crash.
+        if !job.native_edit_confirmed {
+            state.world.as_mut().unwrap().block_gather(id)?;
+            return save_autonomous(state, before);
+        }
         // Legacy journals lack a stable worker ID. Since any same-role NPC
         // might stand near the hall, such a receipt is NOT sufficient proof
         // of a physically returned courier. Quarantine, never mint goods.
@@ -3637,13 +4071,24 @@ fn gather_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
     // would be reissued. If persistence fails, no native command is sent.
     state.world.as_mut().unwrap().mark_gather_issued(id)?;
     save_autonomous(state, before)?;
-    if !game.native_run_command(&cmd) {
-        // Uncertain or refused native commands never auto-retry. Preserve
-        // Blocked in the durable journal for explicit no-credit discard.
-        let issued = state.world.as_ref().unwrap().clone();
+    // Native command success alone is not enough: a conditional command
+    // can be accepted without modifying the expected source. Re-read the
+    // exact block immediately while the current dimension/chunk is loaded.
+    let accepted = game.native_run_command(&cmd);
+    let now_air = world_block(game, &dimension, job.position).as_deref()
+        == Some("minecraft:air");
+    let issued = state.world.as_ref().unwrap().clone();
+    if accepted && now_air {
+        // If this save fails after a native edit, the durable journal stays
+        // Issued-but-unconfirmed. On restart it is quarantined, never
+        // mistakenly treated as a valid paid resource.
+        state.world.as_mut().unwrap().mark_gather_native_edit_confirmed(id)?;
+    } else {
+        // Refused, no-op or unloaded command is unsafe to retry.
+        // Keep the uncertainty for OP inspection with ZERO auto-credit.
         state.world.as_mut().unwrap().block_gather(id)?;
-        save_autonomous(state, issued)?;
     }
+    save_autonomous(state, issued)?;
     Ok(())
 }
 
@@ -3770,6 +4215,9 @@ pub fn tick(game: &mut Game<'_>) {
     if !game.native_on(MOD_ID) {
         return;
     }
+    // Conversation menus are opened from here: the hub is out of reach inside
+    // the right-click hook that asked for them.
+    process_menu_queue(game);
     let Some(dir) = game.native_world_dir() else { return; };
     let mut guard = active(dir.join(DIR));
     let state = guard.as_mut().expect("active initialized");
@@ -3787,5 +4235,67 @@ pub fn tick(game: &mut Game<'_>) {
         state.world = Some(before);
         state.problem = Some(format!("host day synchronization halted: {error}"));
         log::error!("[civilizations] authoritative day synchronization stopped: {error}");
+    }
+}
+
+
+#[cfg(test)]
+mod interrupted_first_save_tests {
+    use super::*;
+    use std::sync::atomic::{AtomicU64, Ordering};
+    use std::time::{SystemTime, UNIX_EPOCH};
+
+    static NEXT_DIR: AtomicU64 = AtomicU64::new(0);
+
+    fn sandbox() -> PathBuf {
+        let nanos = SystemTime::now().duration_since(UNIX_EPOCH).unwrap().as_nanos();
+        let path = std::env::temp_dir().join(format!(
+            "horizon-civ-save-{}-{nanos}-{}",
+            std::process::id(), NEXT_DIR.fetch_add(1, Ordering::Relaxed),
+        ));
+        fs::create_dir(&path).unwrap();
+        path
+    }
+
+    #[test]
+    fn interrupted_first_write_cannot_look_like_a_new_empty_world() {
+        let path = sandbox();
+        let pending = path.join("world.json.tmp");
+        fs::write(&pending, b"{ interrupted first write").unwrap();
+        let loaded = load(path.clone());
+        assert!(loaded.world.is_none());
+        assert!(loaded.problem.as_deref().unwrap().contains("world.json.tmp"));
+        assert_eq!(fs::read(&pending).unwrap(), b"{ interrupted first write");
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn a_valid_primary_does_not_silently_discard_an_abandoned_tmp() {
+        let path = sandbox();
+        let world = World::default();
+        fs::write(path.join(SAVE), serde_json::to_vec(&world).unwrap()).unwrap();
+        fs::write(path.join("world.json.tmp"), b"unfinished newer state").unwrap();
+        let loaded = load(path.clone());
+        assert!(loaded.world.is_none());
+        assert!(loaded.problem.as_deref().unwrap().contains("world.json.tmp"));
+        fs::remove_dir_all(path).unwrap();
+    }
+
+    #[test]
+    fn stale_tmp_is_never_truncated_by_a_later_save() {
+        let path = sandbox();
+        let pending = path.join("world.json.tmp");
+        fs::write(&pending, b"recoverable pending bytes").unwrap();
+        let state = ActiveWorld {
+            path: path.clone(),
+            world: Some(World::default()),
+            problem: None,
+            physical_ticks: 0,
+        };
+        let failure = save(&state).unwrap_err();
+        assert!(failure.contains("world.json.tmp"));
+        assert_eq!(fs::read(&pending).unwrap(), b"recoverable pending bytes");
+        assert!(!path.join(SAVE).exists());
+        fs::remove_dir_all(path).unwrap();
     }
 }

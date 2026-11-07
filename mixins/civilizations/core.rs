@@ -301,6 +301,16 @@ pub fn native_worker_reaches_block(
     dx * dx + dy * dy + dz * dz <= reach * reach
 }
 
+/// Choose one loaded, active village gather per native gather tick. The
+/// bridge calls this once every 8 authoritative level ticks, so the
+/// division advances the round-robin exactly once per opportunity.
+/// Count=0 yields no turn (and never divides by zero). No saved cursor
+/// or scheduler state can become stale across server restarts.
+pub fn gather_turn_index(physical_ticks: u64, eligible_count: usize) -> Option<usize> {
+    if eligible_count == 0 { return None; }
+    Some(((physical_ticks / 8) % eligible_count as u64) as usize)
+}
+
 impl Job {
     pub fn name(self) -> &'static str {
         match self {
@@ -573,6 +583,12 @@ pub struct GatherJob {
     #[serde(default)]
     pub worker_id: Option<u64>,
     pub issued: bool,
+    /// Durable acknowledgement only after a successful native command AND
+    /// an immediate loaded observation of the edited block as air. A crash
+    /// between Issued persistence and this receipt is irreducibly ambiguous:
+    /// block/quarantine it rather than crediting a player-removed block.
+    #[serde(default)]
+    pub native_edit_confirmed: bool,
     /// An actual loaded UUID-linked worker has observed the source block
     /// as air at the original saved work stand AFTER issue. Only then may
     /// their native route turn toward the village receiving area.
@@ -1126,6 +1142,26 @@ pub fn render_build_progress(title: &str, done: usize, total: usize, blocked: bo
 pub const DIALOGUE_ROWS: u8 = 3;
 /// Most a single hand-over may sell, as the existing market enforces.
 pub const MAX_HAND_SALE: u32 = 64;
+/// The trade page's input slots: the player drops goods into these.
+pub const TRADE_INPUT: std::ops::Range<usize> = 10..17;
+
+/// Pages of a villager's conversation menu.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MenuPage {
+    Main,
+    Village,
+    Trade,
+}
+
+/// What clicking a button does. Pure data: the native adapter performs it.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum MenuAction {
+    None,
+    Go(MenuPage),
+    Join,
+    Sell,
+    Close,
+}
 
 /// One icon in a villager's conversation menu. The text is the item name.
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -1133,6 +1169,15 @@ pub struct MenuEntry {
     pub slot: usize,
     pub icon: &'static str,
     pub text: String,
+    /// A text-component color name (`gold`, `green`, `gray`...).
+    pub color: &'static str,
+    pub bold: bool,
+    pub action: MenuAction,
+}
+
+fn entry(slot: usize, icon: &'static str, text: impl AsRef<str>, color: &'static str,
+         bold: bool, action: MenuAction) -> MenuEntry {
+    MenuEntry { slot, icon, text: menu_text(text), color, bold, action }
 }
 
 /// Goods this resident will buy from a player right now, each with the most
@@ -1164,12 +1209,38 @@ pub fn job_trades(job: Job) -> bool {
     matches!(job, Job::Merchant | Job::Baker)
 }
 
-/// Pick the want matching a held plain item, with the amount to sell.
-pub fn sale_for_held(wants: &[(Good, u32)], item: &str, held: u32) -> Option<(Good, u32)> {
-    wants.iter()
-        .find(|(good, _)| good.item() == item)
-        .map(|(good, max)| (*good, held.min(*max).min(MAX_HAND_SALE)))
-        .filter(|(_, count)| *count > 0)
+/// A stack the player put into a trade slot, reduced to what a sale needs.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct OfferedStack {
+    pub item: String,
+    pub count: u32,
+    /// No damage and no extra components: only plain goods are bought.
+    pub plain: bool,
+}
+
+/// Take what the resident wants out of the offered stacks. Stacks are reduced
+/// in place (emptied ones become `None`); anything not wanted, damaged,
+/// customised or over a want's cap stays for the player to get back. Returns
+/// the total accepted per good, in `wants` order.
+pub fn settle_offer(
+    wants: &[(Good, u32)], offered: &mut [Option<OfferedStack>],
+) -> Vec<(Good, u32)> {
+    let mut accepted: Vec<(Good, u32)> = wants.iter().map(|(good, _)| (*good, 0)).collect();
+    for slot in offered.iter_mut() {
+        let Some(stack) = slot.as_mut() else { continue };
+        if !stack.plain { continue; }
+        let Some(index) = wants.iter().position(|(good, _)| good.item() == stack.item) else {
+            continue;
+        };
+        let room = wants[index].1.min(MAX_HAND_SALE).saturating_sub(accepted[index].1);
+        let take = stack.count.min(room);
+        if take == 0 { continue; }
+        accepted[index].1 += take;
+        stack.count -= take;
+        if stack.count == 0 { *slot = None; }
+    }
+    accepted.retain(|(_, count)| *count > 0);
+    accepted
 }
 
 fn job_icon(job: Job) -> &'static str {
@@ -1189,8 +1260,8 @@ fn menu_text(text: impl AsRef<str>) -> String {
     text.as_ref().chars().filter(|c| !c.is_control()).take(60).collect()
 }
 
-/// Everything the conversation menu shows, as read-only text. The menu never
-/// trades by itself: it only tells the player what this resident will do.
+/// Everything the conversation menu shows. The menu itself changes nothing:
+/// clicks are turned into `MenuAction`s that the native adapter performs.
 pub struct DialogueInput<'a> {
     pub village: &'a Settlement,
     pub resident: &'a Resident,
@@ -1200,55 +1271,138 @@ pub struct DialogueInput<'a> {
     pub wants: &'a [(Good, u32)],
     /// False when the hall barrels could not be read (chunk not loaded).
     pub stock_known: bool,
+    pub wood_missing: u32,
+    pub stone_missing: u32,
 }
 
-pub fn dialogue_menu(input: &DialogueInput<'_>) -> Vec<MenuEntry> {
+/// Title shown above a page.
+pub fn page_title(page: MenuPage, input: &DialogueInput<'_>) -> String {
+    match page {
+        MenuPage::Main => format!("{} - {}", input.village.name, input.resident.name),
+        MenuPage::Village => format!("{} - village", input.village.name),
+        MenuPage::Trade => format!("{} - trade", input.resident.name),
+    }
+}
+
+fn filler(slot: usize) -> MenuEntry {
+    entry(slot, "minecraft:gray_stained_glass_pane", " ", "gray", false, MenuAction::None)
+}
+
+/// The entries of one page, ready to place by slot.
+pub fn page_entries(page: MenuPage, input: &DialogueInput<'_>) -> Vec<MenuEntry> {
     let village = input.village;
     let resident = input.resident;
-    let role = if resident.job == Job::Merchant {
-        "mayor / warehouse steward".to_owned()
-    } else {
-        resident.job.name().to_owned()
-    };
-    let council = village.council_priorities().first()
-        .map(|p| format!("Council: {} {}/100", p.need.label(), p.urgency))
-        .unwrap_or_else(|| "Council: all calm".to_owned());
-    let home = match village.home_slot(resident.id) {
-        Some(slot) => format!("Home: hut, place {}", slot.lane + 1),
-        None => "Home: the commons".to_owned(),
-    };
-    let membership = if input.is_member {
-        format!("You are a member of {}", village.name)
-    } else {
-        format!("Join this village: /civ join {}", village.name)
-    };
-    let trade = if !job_trades(resident.job) {
-        "I do not trade. The mayor buys what the village needs.".to_owned()
-    } else if !input.stock_known {
-        "My stores are out of sight. Come back near the hall.".to_owned()
-    } else if input.wants.is_empty() {
-        "We need nothing from you right now.".to_owned()
-    } else {
-        let list: Vec<String> = input.wants.iter()
-            .map(|(g, n)| format!("{} x{} at {}c", g.as_str(), n, g.price()))
-            .collect();
-        format!("I buy: {}. Hold it and right-click me.", list.join(", "))
-    };
-    vec![
-        MenuEntry { slot: 4, icon: job_icon(resident.job),
-            text: menu_text(format!("{} - {}", resident.name, role)) },
-        MenuEntry { slot: 10, icon: "minecraft:clock",
-            text: menu_text(format!("Routine: {} ({})", input.routine,
-                if input.on_duty { "on duty" } else { "off duty" })) },
-        MenuEntry { slot: 12, icon: "minecraft:bell", text: menu_text(council) },
-        MenuEntry { slot: 14, icon: "minecraft:red_bed", text: menu_text(home) },
-        MenuEntry { slot: 16, icon: "minecraft:writable_book", text: menu_text(membership) },
-        MenuEntry {
-            slot: 22,
-            icon: if input.wants.is_empty() { "minecraft:barrier" } else { "minecraft:emerald" },
-            text: menu_text(trade),
-        },
-    ]
+    match page {
+        MenuPage::Main => {
+            let role = if resident.job == Job::Merchant {
+                "mayor / warehouse steward".to_owned()
+            } else {
+                resident.job.name().to_owned()
+            };
+            let home = match village.home_slot(resident.id) {
+                Some(slot) => format!("Home: hut, place {}", slot.lane + 1),
+                None => "Home: the commons".to_owned(),
+            };
+            let mut entries = vec![
+                entry(4, job_icon(resident.job), format!("{} - {}", resident.name, role),
+                    "gold", true, MenuAction::None),
+                entry(11, "minecraft:filled_map", format!("About {}", village.name),
+                    "aqua", false, MenuAction::Go(MenuPage::Village)),
+                entry(20, "minecraft:clock", format!("Routine: {} ({})", input.routine,
+                    if input.on_duty { "on duty" } else { "off duty" }),
+                    "gray", false, MenuAction::None),
+                entry(24, "minecraft:red_bed", home, "gray", false, MenuAction::None),
+                entry(22, "minecraft:barrier", "Close", "red", false, MenuAction::Close),
+            ];
+            entries.push(if job_trades(resident.job) {
+                let (text, color) = if input.wants.is_empty() {
+                    ("Trade (nothing needed now)", "gray")
+                } else {
+                    ("Trade - sell goods the village needs", "green")
+                };
+                entry(13, "minecraft:emerald", text, color, !input.wants.is_empty(),
+                    MenuAction::Go(MenuPage::Trade))
+            } else {
+                entry(13, "minecraft:barrier", "I do not trade - ask the mayor", "gray",
+                    false, MenuAction::None)
+            });
+            entries.push(if input.is_member {
+                entry(15, "minecraft:writable_book", format!("You belong to {}", village.name),
+                    "gray", false, MenuAction::None)
+            } else {
+                entry(15, "minecraft:writable_book", format!("Join {}", village.name),
+                    "green", true, MenuAction::Join)
+            });
+            entries
+        }
+        MenuPage::Village => {
+            let (capacity, _, homeless) = village.physical_housing();
+            let needs = if !input.stock_known {
+                "Needs: hall barrels out of sight".to_owned()
+            } else if input.wood_missing == 0 && input.stone_missing == 0 {
+                "Needs: nothing for building".to_owned()
+            } else {
+                format!("Needs: wood {} stone {}", input.wood_missing, input.stone_missing)
+            };
+            let council = village.council_priorities().first()
+                .map(|p| format!("Council: {} {}/100", p.need.label(), p.urgency))
+                .unwrap_or_else(|| "Council: all calm".to_owned());
+            let war = if village.active_wars.is_empty() {
+                "Peace".to_owned()
+            } else {
+                format!("At war with {}", village.active_wars.len())
+            };
+            vec![
+                entry(4, "minecraft:bell", village.name.clone(), "gold", true, MenuAction::None),
+                entry(10, "minecraft:red_bed",
+                    format!("People {} - homes {} - homeless {}", village.population(), capacity, homeless),
+                    "gray", false, MenuAction::None),
+                entry(11, "minecraft:gold_ingot", format!("Treasury: {} coins", village.treasury_coins),
+                    "gray", false, MenuAction::None),
+                entry(12, "minecraft:golden_apple", format!("Mood {}", village.morale),
+                    "gray", false, MenuAction::None),
+                entry(13, "minecraft:bricks",
+                    if village.hall_complete { "Town hall: built" } else { "Town hall: not built yet" },
+                    "gray", false, MenuAction::None),
+                entry(14, "minecraft:oak_log", needs, "gray", false, MenuAction::None),
+                entry(15, "minecraft:bell", council, "gray", false, MenuAction::None),
+                entry(16, "minecraft:iron_sword", war, "gray", false, MenuAction::None),
+                entry(22, "minecraft:arrow", "Back", "yellow", false, MenuAction::Go(MenuPage::Main)),
+            ]
+        }
+        MenuPage::Trade => {
+            let header = if !input.stock_known {
+                "My stores are out of sight - come back near the hall".to_owned()
+            } else if input.wants.is_empty() {
+                "We need nothing from you right now".to_owned()
+            } else {
+                let list: Vec<String> = input.wants.iter()
+                    .map(|(g, n)| format!("{} x{} at {}c", g.as_str(), n, g.price()))
+                    .collect();
+                format!("I buy: {}", list.join(", "))
+            };
+            let mut entries = vec![
+                entry(4, "minecraft:emerald", header, "gold", true, MenuAction::None),
+                entry(18, "minecraft:arrow", "Back", "yellow", false, MenuAction::Go(MenuPage::Main)),
+                entry(26, "minecraft:barrier", "Close", "red", false, MenuAction::Close),
+            ];
+            entries.push(if input.wants.is_empty() {
+                entry(22, "minecraft:barrier", "Nothing to sell", "gray", false, MenuAction::None)
+            } else if !input.is_member {
+                entry(22, "minecraft:barrier", "Join the village first", "red", false, MenuAction::None)
+            } else {
+                entry(22, "minecraft:lime_dye", "SELL what is in the slots", "green", true, MenuAction::Sell)
+            });
+            // Everything else outside the input row is inert filler.
+            let used: Vec<usize> = entries.iter().map(|e| e.slot).collect();
+            for slot in 0..usize::from(DIALOGUE_ROWS) * 9 {
+                if !used.contains(&slot) && !TRADE_INPUT.contains(&slot) {
+                    entries.push(filler(slot));
+                }
+            }
+            entries
+        }
+    }
 }
 
 /// Standing site board: on natural ground just outside the front-right
@@ -1692,6 +1846,12 @@ pub struct Settlement {
     pub active_wars: BTreeSet<u64>,
     pub pending_visual_buildings: u32,
     pub actors_spawned: bool,
+    /// One-shot, durably reserved OP recovery attempts after partial native
+    /// actor spawning. A crash can occur AFTER the entity is created but
+    /// BEFORE its UUID is persisted: never automatically reissue this spawn.
+    /// The OP must first inspect/reconcile any already-existing villager.
+    #[serde(default)]
+    pub actor_recovery_issued: BTreeSet<u64>,
     /// Villages develop by default. OP can pause selected settlements.
     #[serde(default = "autonomous_by_default")]
     pub autonomy_enabled: bool,
@@ -2279,9 +2439,19 @@ impl World {
                         return Err("physical gather worker ID is invalid".into());
                     }
                 }
-                if gather.pickup_witnessed &&
-                    (!gather.issued || gather.worker_id.is_none()) {
-                    return Err("pickup witness without issued identity".into());
+                if gather.native_edit_confirmed
+                    && (!gather.issued || gather.worker_id.is_none()) {
+                    return Err("native edit receipt without issued worker identity".into());
+                }
+                // Historic PR #30 saves can contain a witnessed pickup
+                // without the new post-command acknowledgement field.
+                // Accept that save structurally so the whole settlement
+                // remains loadable; the native adapter QUARANTINES this
+                // ambiguous Issued job before processing any more receipts.
+                // Never infer native_edit_confirmed from pickup_witnessed.
+                if gather.pickup_witnessed
+                    && (!gather.issued || gather.worker_id.is_none()) {
+                    return Err("pickup witness without issued worker identity".into());
                 }
                 let [x, y, z] = gather.position;
                 let [sx, sy, sz] = gather.stand;
@@ -2398,6 +2568,19 @@ impl World {
                 all_parcels.push((village.dimension.clone(), parcel.origin));
             }
             if village.residents.len() > 128 { return Err("resident cap exceeded".into()); }
+            if !village.actor_recovery_issued.is_empty() && !village.actors_spawned {
+                return Err("recovery attempts exist before actor spawn reservation".into());
+            }
+            for recovery_id in &village.actor_recovery_issued {
+                // A resident may legitimately die AFTER one native spawn
+                // attempt was reserved. Keep that one-shot tombstone on disk
+                // (do not revive them), but never reject the entire village
+                // save merely because their life ended.
+                if !village.residents.iter().any(|r|
+                    r.id == *recovery_id && r.entity_uuid.is_none()) {
+                    return Err("invalid pending actor recovery ID or already bound actor".into());
+                }
+            }
             let mut resident_ids = BTreeSet::new();
             for resident in &village.residents {
                 if !resident_ids.insert(resident.id) {
@@ -2617,6 +2800,7 @@ impl World {
             active_wars: BTreeSet::new(),
             pending_visual_buildings: 0,
             actors_spawned: false,
+            actor_recovery_issued: BTreeSet::new(),
             autonomy_enabled: true,
             player_parcels: Vec::new(),
             visual_sites: Vec::new(),
@@ -3169,7 +3353,7 @@ impl World {
         }
         self.settlements.get_mut(&village_id).unwrap().gather_job = Some(GatherJob {
             position, stand, good, worker_id: None, issued: false,
-            pickup_witnessed: false, blocked: false,
+            native_edit_confirmed: false, pickup_witnessed: false, blocked: false,
         });
         Ok(())
     }
@@ -3237,6 +3421,22 @@ impl World {
         Ok(())
     }
 
+    /// The adapter must call this ONLY after its native conditional
+    /// command returned success and a FRESH read of that loaded source
+    /// block returned air. Save this acknowledgement before pickup.
+    /// Domain code cannot itself attest to native engine observations.
+    pub fn mark_gather_native_edit_confirmed(&mut self, village_id: u64)
+        -> Result<(), String> {
+        let job = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?
+            .gather_job.as_mut().ok_or("no gather job")?;
+        if !job.issued || job.blocked || job.worker_id.is_none()
+            || job.native_edit_confirmed {
+            return Err("native edit receipt requires a new issued assigned gather".into());
+        }
+        job.native_edit_confirmed = true;
+        Ok(())
+    }
+
     /// The bridge has just observed the issued source as air AND the same
     /// UUID-linked worker at the saved loaded source work stand, inside
     /// actual 3D reach. Do not mark pickup before the native block edit.
@@ -3246,7 +3446,8 @@ impl World {
     ) -> Result<(), String> {
         let v = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?;
         let job = v.gather_job.as_mut().ok_or("no gather job")?;
-        if !job.issued || job.blocked || job.pickup_witnessed {
+        if !job.issued || !job.native_edit_confirmed
+            || job.blocked || job.pickup_witnessed {
             return Err("gather not awaiting a first source pickup witness".into());
         }
         if job.worker_id != Some(resident_id) {
@@ -3296,7 +3497,8 @@ impl World {
     pub fn confirm_gather(&mut self, village_id: u64) -> Result<(), String> {
         let v = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?;
         let job = v.gather_job.as_ref().ok_or("no gather job")?;
-        if !job.issued || !job.pickup_witnessed || job.blocked {
+        if !job.issued || !job.native_edit_confirmed
+            || !job.pickup_witnessed || job.blocked {
             return Err("unproven pickup or gather cannot be credited".into());
         }
         let good = job.good;
@@ -3313,7 +3515,7 @@ impl World {
                     position: [stem.root[0], y, stem.root[2]],
                     stand: stem.stand, good: Good::Wood,
                     worker_id: Some(worker_id), issued: false,
-                    pickup_witnessed: false, blocked: false,
+                    native_edit_confirmed: false, pickup_witnessed: false, blocked: false,
                 }))
             } else {
                 None
@@ -3757,6 +3959,29 @@ impl World {
 
     /// Bind a resident to the actual saved Horizon entity UUID, once.
     /// The operation is idempotent for the same identity and rejects reassignment.
+    /// The OP explicitly requested ONE missing villager after inspecting
+    /// loaded native actors. Save this reservation before sending any spawn
+    /// command, so a crash or native refusal does not cause a second entity
+    /// to be spawned by automated logic on a later tick.
+    pub fn reserve_actor_recovery(
+        &mut self, settlement_id: u64, resident_id: u64,
+    ) -> Result<(), String> {
+        let settlement = self.settlements.get_mut(&settlement_id)
+            .ok_or("unknown settlement")?;
+        if !settlement.actors_spawned {
+            return Err("initial villager batch has not been reserved".into());
+        }
+        let missing = settlement.residents.iter().any(|r|
+            r.id == resident_id && r.alive && r.entity_uuid.is_none());
+        if !missing {
+            return Err("resident is dead, missing or already UUID-linked".into());
+        }
+        if !settlement.actor_recovery_issued.insert(resident_id) {
+            return Err("actor recovery already attempted; inspect/reconcile, never spawn twice".into());
+        }
+        Ok(())
+    }
+
     pub fn bind_actor(&mut self, settlement_id: u64, resident_id: u64, uuid: u128) -> Result<bool, String> {
         if uuid == 0 {
             return Err("cannot bind zero entity UUID".into());
@@ -3780,6 +4005,9 @@ impl World {
             Some(_) => Err("resident already bound to a different entity UUID".into()),
             None => {
                 resident.entity_uuid = Some(uuid);
+                // Atomic in-memory state saved by the bridge. If the save
+                // fails, the disk retains the pending one-shot reservation.
+                settlement.actor_recovery_issued.remove(&resident_id);
                 Ok(true)
             }
         }
@@ -5700,6 +5928,7 @@ mod civic_hall_warehouse_tests {
         assert!(world.mark_gather_issued(id).is_err()); // unassigned
         world.assign_gather_worker(id, worker).unwrap();
         world.mark_gather_issued(id).unwrap();
+        world.mark_gather_native_edit_confirmed(id).unwrap();
         assert!(world.mark_gather_issued(id).is_err());
         let world_assigned = world.settlements[&id].gather_job.as_ref().unwrap().worker_id.unwrap();
         world.witness_gather_pickup(id, world_assigned).unwrap();
@@ -6445,7 +6674,7 @@ mod native_gather_quarantine_tests {
         world.settlements.get_mut(&id).unwrap().gather_job = Some(GatherJob {
             position: [16,70,0], stand: [17,70,0],
             good: Good::Stone, worker_id: None, issued: true,
-            pickup_witnessed: false, blocked: true,
+            native_edit_confirmed: false, pickup_witnessed: false, blocked: true,
         });
         world.validate().unwrap();
         let before = world.settlements[&id].warehouse_quantity(Good::Stone);
@@ -6478,7 +6707,7 @@ mod native_gather_quarantine_tests {
         world.settlements.get_mut(&id).unwrap().gather_job = Some(GatherJob {
             position: [16,70,0], stand: [17,70,0],
             good: Good::Wood, worker_id: None, issued: false,
-            pickup_witnessed: false, blocked: true,
+            native_edit_confirmed: false, pickup_witnessed: false, blocked: true,
         });
         assert!(world.abandon_blocked_issued_gather(id).is_err());
         world.settlements.get_mut(&id).unwrap().gather_job.as_mut().unwrap().issued = true;
@@ -6535,6 +6764,7 @@ mod verified_short_oak_stem_tests {
             assert_eq!(world.settlements[&id].oak_stem.as_ref().unwrap().cursor, cursor);
             world.validate().unwrap();
             world.mark_gather_issued(id).unwrap();
+            world.mark_gather_native_edit_confirmed(id).unwrap();
             assert!(world.mark_gather_issued(id).is_err());
             let world_assigned = world.settlements[&id].gather_job.as_ref().unwrap().worker_id.unwrap();
             world.witness_gather_pickup(id, world_assigned).unwrap();
@@ -6552,6 +6782,7 @@ mod verified_short_oak_stem_tests {
     fn crash_reload_preserves_next_segment_and_does_not_reissue_prior_log() {
         let (mut world, id) = world_with_stem();
         world.mark_gather_issued(id).unwrap();
+        world.mark_gather_native_edit_confirmed(id).unwrap();
         let world_assigned = world.settlements[&id].gather_job.as_ref().unwrap().worker_id.unwrap();
         world.witness_gather_pickup(id, world_assigned).unwrap();
         world.confirm_gather(id).unwrap();
@@ -6564,6 +6795,7 @@ mod verified_short_oak_stem_tests {
         assert_eq!(replay.settlements[&id].warehouse_quantity(Good::Wood), 1);
         assert!(replay.confirm_gather(id).is_err());
         replay.mark_gather_issued(id).unwrap();
+        replay.mark_gather_native_edit_confirmed(id).unwrap();
         assert!(replay.mark_gather_issued(id).is_err());
         let replay_assigned = replay.settlements[&id].gather_job.as_ref().unwrap().worker_id.unwrap();
         replay.witness_gather_pickup(id, replay_assigned).unwrap();
@@ -6599,6 +6831,7 @@ mod verified_short_oak_stem_tests {
         world.settlements.get_mut(&id).unwrap()
             .warehouse_credit(Good::Wood, 10_000_000).unwrap();
         world.mark_gather_issued(id).unwrap();
+        world.mark_gather_native_edit_confirmed(id).unwrap();
         let worker = world.settlements[&id].gather_job.as_ref().unwrap().worker_id.unwrap();
         world.witness_gather_pickup(id, worker).unwrap();
         let snapshot = serde_json::to_value(&world).unwrap();
@@ -6611,10 +6844,12 @@ mod verified_short_oak_stem_tests {
     fn abandoning_uncertain_segment_discards_remaining_tree_with_zero_credit() {
         let (mut world, id) = world_with_stem();
         world.mark_gather_issued(id).unwrap();
+        world.mark_gather_native_edit_confirmed(id).unwrap();
         let world_assigned = world.settlements[&id].gather_job.as_ref().unwrap().worker_id.unwrap();
         world.witness_gather_pickup(id, world_assigned).unwrap();
         world.confirm_gather(id).unwrap();
         world.mark_gather_issued(id).unwrap();
+        world.mark_gather_native_edit_confirmed(id).unwrap();
         world.block_gather(id).unwrap();
         world.validate().unwrap();
         world.abandon_blocked_issued_gather(id).unwrap();
@@ -6715,6 +6950,7 @@ mod assigned_resource_courier_tests {
             .find(|r| r.alive && r.job == Job::Miner).unwrap().id;
         world.assign_gather_worker(id, miner).unwrap();
         world.mark_gather_issued(id).unwrap();
+        world.mark_gather_native_edit_confirmed(id).unwrap();
         assert!(world.assign_gather_worker(id, miner).is_err());
         let world_assigned = world.settlements[&id].gather_job.as_ref().unwrap().worker_id.unwrap();
         world.witness_gather_pickup(id, world_assigned).unwrap();
@@ -6750,6 +6986,7 @@ mod assigned_resource_courier_tests {
         world.plan_short_oak_stem(id, [16, 70, 0], [17, 70, 0], 3).unwrap();
         world.assign_gather_worker(id, worker).unwrap();
         world.mark_gather_issued(id).unwrap();
+        world.mark_gather_native_edit_confirmed(id).unwrap();
         let world_assigned = world.settlements[&id].gather_job.as_ref().unwrap().worker_id.unwrap();
         world.witness_gather_pickup(id, world_assigned).unwrap();
         world.confirm_gather(id).unwrap();
@@ -6762,6 +6999,7 @@ mod assigned_resource_courier_tests {
         assert!(!next.issued);
         assert!(restored.confirm_gather(id).is_err());
         restored.mark_gather_issued(id).unwrap();
+        restored.mark_gather_native_edit_confirmed(id).unwrap();
         let restored_assigned = restored.settlements[&id].gather_job.as_ref().unwrap().worker_id.unwrap();
         restored.witness_gather_pickup(id, restored_assigned).unwrap();
         restored.confirm_gather(id).unwrap();
@@ -6830,6 +7068,7 @@ mod native_gather_pickup_witness_tests {
         world.mark_gather_issued(id).unwrap();
         assert!(world.confirm_gather(id).is_err());
         assert_eq!(world.settlements[&id].warehouse_quantity(Good::Stone), 0);
+        world.mark_gather_native_edit_confirmed(id).unwrap();
         world.witness_gather_pickup(id, miner).unwrap();
         world.confirm_gather(id).unwrap();
         assert_eq!(world.settlements[&id].warehouse_quantity(Good::Stone), 1);
@@ -6841,6 +7080,7 @@ mod native_gather_pickup_witness_tests {
     fn other_worker_or_unknown_id_cannot_claim_source_pickup() {
         let (mut world, id, miner) = assigned_stone();
         world.mark_gather_issued(id).unwrap();
+        world.mark_gather_native_edit_confirmed(id).unwrap();
         let stranger = world.settlements[&id].residents.iter()
             .find(|r| r.id != miner).unwrap().id;
         assert!(world.witness_gather_pickup(id, stranger).is_err());
@@ -6855,6 +7095,7 @@ mod native_gather_pickup_witness_tests {
     fn witnessed_pickup_survives_reload_without_duplication() {
         let (mut world, id, miner) = assigned_stone();
         world.mark_gather_issued(id).unwrap();
+        world.mark_gather_native_edit_confirmed(id).unwrap();
         world.witness_gather_pickup(id, miner).unwrap();
         let mut restored: World =
             serde_json::from_str(&serde_json::to_string(&world).unwrap()).unwrap();
@@ -6875,6 +7116,7 @@ mod native_gather_pickup_witness_tests {
         world.plan_short_oak_stem(id, [16,70,0], [17,70,0], 3).unwrap();
         world.assign_gather_worker(id, worker).unwrap();
         world.mark_gather_issued(id).unwrap();
+        world.mark_gather_native_edit_confirmed(id).unwrap();
         world.witness_gather_pickup(id, worker).unwrap();
         world.confirm_gather(id).unwrap();
         let next = world.settlements[&id].gather_job.as_ref().unwrap();
@@ -6883,6 +7125,7 @@ mod native_gather_pickup_witness_tests {
         assert!(!next.issued && !next.pickup_witnessed);
         assert!(world.confirm_gather(id).is_err());
         world.mark_gather_issued(id).unwrap();
+        world.mark_gather_native_edit_confirmed(id).unwrap();
         assert!(world.confirm_gather(id).is_err());
         world.witness_gather_pickup(id, worker).unwrap();
         world.confirm_gather(id).unwrap();
@@ -6894,6 +7137,7 @@ mod native_gather_pickup_witness_tests {
     fn legacy_missing_witness_does_not_imply_picked_up_from_air() {
         let (mut world, id, miner) = assigned_stone();
         world.mark_gather_issued(id).unwrap();
+        world.mark_gather_native_edit_confirmed(id).unwrap();
         let mut value = serde_json::to_value(&world).unwrap();
         value.get_mut("settlements").unwrap().as_object_mut().unwrap()
             .get_mut(&id.to_string()).unwrap()
@@ -6920,6 +7164,7 @@ mod native_gather_pickup_witness_tests {
     fn blocking_uncertain_issued_pickup_must_not_mint_any_resource() {
         let (mut world, id, miner) = assigned_stone();
         world.mark_gather_issued(id).unwrap();
+        world.mark_gather_native_edit_confirmed(id).unwrap();
         world.witness_gather_pickup(id, miner).unwrap();
         world.block_gather(id).unwrap();
         assert!(world.confirm_gather(id).is_err());
@@ -7030,6 +7275,124 @@ mod hall_sign_render_tests {
 }
 
 #[cfg(test)]
+mod native_edit_ack_and_fair_gather_tests {
+    use super::*;
+
+    fn assigned_stone() -> (World, u64, u64) {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0,70,0], "owner").unwrap();
+        let worker = world.settlements[&id].residents.iter()
+            .find(|r| r.alive && r.job == Job::Miner).unwrap().id;
+        world.plan_gather(id, Good::Stone, [16,70,0], [17,70,0]).unwrap();
+        world.assign_gather_worker(id, worker).unwrap();
+        (world, id, worker)
+    }
+
+    #[test]
+    fn rotating_active_villages_never_sticks_on_first_and_handles_empty() {
+        assert_eq!(gather_turn_index(0, 0), None);
+        assert_eq!(gather_turn_index(u64::MAX, 0), None);
+        assert_eq!(gather_turn_index(0, 1), Some(0));
+        assert_eq!(gather_turn_index(8, 1), Some(0));
+        for turn in 0..12_u64 {
+            assert_eq!(gather_turn_index(turn * 8, 3), Some((turn % 3) as usize));
+        }
+        assert_eq!(gather_turn_index(8, 3), Some(1));
+        assert_eq!(gather_turn_index(16, 3), Some(2));
+        assert_eq!(gather_turn_index(24, 3), Some(0));
+    }
+
+    #[test]
+    fn unacknowledged_issued_edit_cannot_be_witnessed_or_credited() {
+        let (mut world, id, worker) = assigned_stone();
+        assert!(world.mark_gather_native_edit_confirmed(id).is_err());
+        world.mark_gather_issued(id).unwrap();
+        assert!(world.witness_gather_pickup(id, worker).is_err());
+        assert!(world.confirm_gather(id).is_err());
+        assert_eq!(world.settlements[&id].warehouse_quantity(Good::Stone), 0);
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn native_ack_is_exactly_once_and_required_before_source_witness() {
+        let (mut world, id, worker) = assigned_stone();
+        world.mark_gather_issued(id).unwrap();
+        world.mark_gather_native_edit_confirmed(id).unwrap();
+        assert!(world.mark_gather_native_edit_confirmed(id).is_err());
+        world.witness_gather_pickup(id, worker).unwrap();
+        world.confirm_gather(id).unwrap();
+        assert_eq!(world.settlements[&id].warehouse_quantity(Good::Stone), 1);
+        assert!(world.confirm_gather(id).is_err());
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn old_issued_unconfirmed_receipt_remains_unpayable_after_restart() {
+        let (mut world, id, worker) = assigned_stone();
+        world.mark_gather_issued(id).unwrap();
+        let serialized = serde_json::to_string(&world).unwrap();
+        let mut restarted: World = serde_json::from_str(&serialized).unwrap();
+        restarted.validate().unwrap();
+        assert!(!restarted.settlements[&id].gather_job.as_ref()
+            .unwrap().native_edit_confirmed);
+        assert!(restarted.witness_gather_pickup(id, worker).is_err());
+        assert!(restarted.confirm_gather(id).is_err());
+        restarted.block_gather(id).unwrap();
+        restarted.abandon_blocked_issued_gather(id).unwrap();
+        assert_eq!(restarted.settlements[&id].warehouse_quantity(Good::Stone), 0);
+        restarted.validate().unwrap();
+    }
+
+    #[test]
+    fn corrupted_unissued_native_ack_and_unacked_pickup_are_rejected() {
+        let (mut world, id, worker) = assigned_stone();
+        world.settlements.get_mut(&id).unwrap().gather_job.as_mut()
+            .unwrap().native_edit_confirmed = true;
+        assert!(world.validate().is_err());
+        world.settlements.get_mut(&id).unwrap().gather_job.as_mut()
+            .unwrap().native_edit_confirmed = false;
+        world.settlements.get_mut(&id).unwrap().gather_job.as_mut()
+            .unwrap().pickup_witnessed = true;
+        assert!(world.validate().is_err());
+        assert!(world.witness_gather_pickup(id, worker).is_err());
+    }
+
+    #[test]
+    fn ack_state_persists_and_next_oak_log_resets_ack_and_pickup() {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0,70,0], "owner").unwrap();
+        let worker = world.settlements[&id].residents.iter()
+            .find(|r| r.alive && r.job == Job::Lumberjack).unwrap().id;
+        world.plan_short_oak_stem(id, [16,70,0], [17,70,0], 3).unwrap();
+        world.assign_gather_worker(id, worker).unwrap();
+        world.mark_gather_issued(id).unwrap();
+        world.mark_gather_native_edit_confirmed(id).unwrap();
+        let mut restored: World = serde_json::from_str(
+            &serde_json::to_string(&world).unwrap()).unwrap();
+        assert!(restored.settlements[&id].gather_job.as_ref()
+            .unwrap().native_edit_confirmed);
+        restored.witness_gather_pickup(id, worker).unwrap();
+        restored.confirm_gather(id).unwrap();
+        let next = restored.settlements[&id].gather_job.as_ref().unwrap();
+        assert_eq!(next.worker_id, Some(worker));
+        assert!(!next.issued);
+        assert!(!next.native_edit_confirmed);
+        assert!(!next.pickup_witnessed);
+        restored.validate().unwrap();
+    }
+
+    #[test]
+    fn native_ack_without_assigned_worker_is_invalid_on_old_save() {
+        let (mut world, id, _) = assigned_stone();
+        world.mark_gather_issued(id).unwrap();
+        world.settlements.get_mut(&id).unwrap().gather_job.as_mut()
+            .unwrap().worker_id = None;
+        assert!(world.mark_gather_native_edit_confirmed(id).is_err());
+        world.validate().unwrap();
+    }
+}
+
+#[cfg(test)]
 mod site_sign_tests {
     use super::*;
 
@@ -7059,6 +7422,44 @@ mod site_sign_tests {
         assert_eq!(board.plain()[1], "Batches 12");
         assert_eq!(board.plain()[2], "Wheat in 3");
         assert_eq!(board.plain()[3], "Bread out 1");
+    }
+}
+
+#[cfg(test)]
+mod legacy_witnessed_gather_migration_tests {
+    use super::*;
+
+    #[test]
+    fn previously_witnessed_issued_receipt_loads_but_cannot_be_paid() {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0, 70, 0], "owner").unwrap();
+        let miner = world.settlements[&id].residents.iter()
+            .find(|r| r.alive && r.job == Job::Miner).unwrap().id;
+        world.plan_gather(id, Good::Stone, [16, 70, 0], [17, 70, 0]).unwrap();
+        world.assign_gather_worker(id, miner).unwrap();
+        world.mark_gather_issued(id).unwrap();
+        // PR #30 legitimately stored this flag but had no post-command
+        // native acknowledgement. It must not brick the entire save.
+        world.settlements.get_mut(&id).unwrap().gather_job.as_mut().unwrap()
+            .pickup_witnessed = true;
+        let mut value = serde_json::to_value(&world).unwrap();
+        value.get_mut("settlements").unwrap().as_object_mut().unwrap()
+            .get_mut(&id.to_string()).unwrap()
+            .get_mut("gather_job").unwrap().as_object_mut().unwrap()
+            .remove("native_edit_confirmed");
+        let mut migrated: World = serde_json::from_value(value).unwrap();
+        migrated.validate().unwrap();
+        let job = migrated.settlements[&id].gather_job.as_ref().unwrap();
+        assert!(job.issued);
+        assert!(job.pickup_witnessed);
+        assert!(!job.native_edit_confirmed);
+        assert!(migrated.confirm_gather(id).is_err());
+        assert_eq!(migrated.settlements[&id].warehouse_quantity(Good::Stone), 0);
+        // The bridge must block this uncertain issued job after reload.
+        migrated.block_gather(id).unwrap();
+        migrated.abandon_blocked_issued_gather(id).unwrap();
+        assert_eq!(migrated.settlements[&id].warehouse_quantity(Good::Stone), 0);
+        migrated.validate().unwrap();
     }
 }
 
@@ -7103,6 +7504,10 @@ mod villager_dialogue_tests {
         (world, id)
     }
 
+    fn stack(item: &str, count: u32) -> Option<OfferedStack> {
+        Some(OfferedStack { item: item.into(), count, plain: true })
+    }
+
     #[test]
     fn only_mayor_and_baker_keep_a_stall() {
         assert!(job_trades(Job::Merchant) && job_trades(Job::Baker));
@@ -7120,49 +7525,224 @@ mod villager_dialogue_tests {
             vec![(Good::Wood, 64), (Good::Stone, 25)]);
         assert!(resident_wants(v, Job::Merchant, 0, 0).is_empty());
         assert!(resident_wants(v, Job::Farmer, 8, 8).is_empty());
-        // No bakery yet: the baker has nothing to buy wheat for.
         assert!(resident_wants(v, Job::Baker, 8, 8).is_empty());
     }
 
     #[test]
-    fn held_item_sells_only_what_is_wanted_and_capped() {
+    fn settle_takes_only_wanted_plain_goods_up_to_the_cap() {
         let wants = [(Good::Wood, 8), (Good::Stone, 25)];
-        assert_eq!(sale_for_held(&wants, "minecraft:oak_log", 64), Some((Good::Wood, 8)));
-        assert_eq!(sale_for_held(&wants, "minecraft:oak_log", 3), Some((Good::Wood, 3)));
-        assert_eq!(sale_for_held(&wants, "minecraft:cobblestone", 40), Some((Good::Stone, 25)));
-        assert_eq!(sale_for_held(&wants, "minecraft:diamond", 5), None);
-        assert_eq!(sale_for_held(&wants, "minecraft:oak_log", 0), None);
-        assert_eq!(sale_for_held(&[], "minecraft:oak_log", 5), None);
+        let mut offered = vec![
+            stack("minecraft:oak_log", 5),
+            stack("minecraft:oak_log", 10),
+            stack("minecraft:cobblestone", 30),
+            stack("minecraft:diamond", 3),
+            None,
+        ];
+        let accepted = settle_offer(&wants, &mut offered);
+        assert_eq!(accepted, vec![(Good::Wood, 8), (Good::Stone, 25)]);
+        // 5 logs fully taken, 3 of the second stack; 7 logs and 5 stone come back.
+        assert_eq!(offered[0], None);
+        assert_eq!(offered[1].as_ref().unwrap().count, 7);
+        assert_eq!(offered[2].as_ref().unwrap().count, 5);
+        assert_eq!(offered[3].as_ref().unwrap().count, 3);
     }
 
-    fn menu_for(job: Job, wants: &[(Good, u32)], stock_known: bool) -> Vec<MenuEntry> {
+    #[test]
+    fn settle_never_takes_damaged_or_customised_stacks() {
+        let wants = [(Good::Wood, 8)];
+        let mut offered = vec![Some(OfferedStack {
+            item: "minecraft:oak_log".into(), count: 4, plain: false,
+        })];
+        assert!(settle_offer(&wants, &mut offered).is_empty());
+        assert_eq!(offered[0].as_ref().unwrap().count, 4);
+        let mut none: Vec<Option<OfferedStack>> = vec![stack("minecraft:oak_log", 4)];
+        assert!(settle_offer(&[], &mut none).is_empty());
+        assert_eq!(none[0].as_ref().unwrap().count, 4);
+    }
+
+    fn input_for<'a>(
+        v: &'a Settlement, resident: &'a Resident, wants: &'a [(Good, u32)],
+        is_member: bool, stock_known: bool,
+    ) -> DialogueInput<'a> {
+        DialogueInput {
+            village: v, resident, is_member, routine: "work".into(), on_duty: true,
+            wants, stock_known, wood_missing: 8, stone_missing: 0,
+        }
+    }
+
+    fn resident_with(world: &World, id: u64, job: Job) -> Resident {
+        let mut resident = world.settlements[&id].residents.first().cloned().expect("residents");
+        resident.job = job;
+        resident
+    }
+
+    #[test]
+    fn every_page_fits_the_chest_and_never_collides() {
         let (world, id) = village();
         let v = &world.settlements[&id];
-        let mut resident = v.residents.first().cloned().expect("founded village has residents");
-        resident.job = job;
-        dialogue_menu(&DialogueInput {
-            village: v, resident: &resident, is_member: false,
-            routine: "work".into(), on_duty: true, wants, stock_known,
-        })
+        let mayor = resident_with(&world, id, Job::Merchant);
+        let wants = [(Good::Wood, 8)];
+        for page in [MenuPage::Main, MenuPage::Village, MenuPage::Trade] {
+            let entries = page_entries(page, &input_for(v, &mayor, &wants, true, true));
+            let slots: std::collections::BTreeSet<_> = entries.iter().map(|e| e.slot).collect();
+            assert_eq!(slots.len(), entries.len(), "{page:?} has colliding slots");
+            assert!(entries.iter().all(|e| e.slot < usize::from(DIALOGUE_ROWS) * 9), "{page:?}");
+            assert!(entries.iter().all(|e| e.text.chars().count() <= 60), "{page:?}");
+            // Trade input slots stay free for the player.
+            if page == MenuPage::Trade {
+                assert!(entries.iter().all(|e| !TRADE_INPUT.contains(&e.slot)));
+            }
+        }
     }
 
     #[test]
-    fn menu_entries_fit_the_chest_and_never_collide() {
-        let entries = menu_for(Job::Merchant, &[(Good::Wood, 8), (Good::Stone, 25)], true);
-        let slots: std::collections::BTreeSet<_> = entries.iter().map(|e| e.slot).collect();
-        assert_eq!(slots.len(), entries.len());
-        assert!(entries.iter().all(|e| e.slot < usize::from(DIALOGUE_ROWS) * 9));
-        assert!(entries.iter().all(|e| e.text.chars().count() <= 60 && !e.text.is_empty()));
+    fn main_page_offers_trade_only_to_trading_roles() {
+        let (world, id) = village();
+        let v = &world.settlements[&id];
+        let find = |entries: &[MenuEntry], slot: usize| entries.iter().find(|e| e.slot == slot).cloned();
+        let mayor = resident_with(&world, id, Job::Merchant);
+        let wants = [(Good::Wood, 8)];
+        let page = page_entries(MenuPage::Main, &input_for(v, &mayor, &wants, true, true));
+        assert_eq!(find(&page, 13).unwrap().action, MenuAction::Go(MenuPage::Trade));
+        let farmer = resident_with(&world, id, Job::Farmer);
+        let page = page_entries(MenuPage::Main, &input_for(v, &farmer, &[], true, true));
+        assert_eq!(find(&page, 13).unwrap().action, MenuAction::None);
     }
 
     #[test]
-    fn trade_slot_is_thematic_per_role() {
-        let find = |entries: &[MenuEntry]| entries.iter().find(|e| e.slot == 22).unwrap().text.clone();
-        let mayor = find(&menu_for(Job::Merchant, &[(Good::Wood, 8)], true));
-        assert!(mayor.starts_with("I buy: wood x8 at"), "{mayor}");
-        assert!(mayor.contains("right-click"));
-        assert!(find(&menu_for(Job::Merchant, &[], true)).contains("nothing from you"));
-        assert!(find(&menu_for(Job::Merchant, &[], false)).contains("out of sight"));
-        assert!(find(&menu_for(Job::Farmer, &[], true)).contains("do not trade"));
+    fn join_button_only_for_non_members_and_sell_only_for_members_with_wants() {
+        let (world, id) = village();
+        let v = &world.settlements[&id];
+        let mayor = resident_with(&world, id, Job::Merchant);
+        let wants = [(Good::Wood, 8)];
+        let action_at = |page: MenuPage, member: bool, wants: &[(Good, u32)], slot: usize| {
+            page_entries(page, &input_for(v, &mayor, wants, member, true))
+                .into_iter().find(|e| e.slot == slot).unwrap().action
+        };
+        assert_eq!(action_at(MenuPage::Main, false, &wants, 15), MenuAction::Join);
+        assert_eq!(action_at(MenuPage::Main, true, &wants, 15), MenuAction::None);
+        assert_eq!(action_at(MenuPage::Trade, true, &wants, 22), MenuAction::Sell);
+        assert_eq!(action_at(MenuPage::Trade, false, &wants, 22), MenuAction::None);
+        assert_eq!(action_at(MenuPage::Trade, true, &[], 22), MenuAction::None);
+    }
+
+    #[test]
+    fn navigation_buttons_lead_back_and_close() {
+        let (world, id) = village();
+        let v = &world.settlements[&id];
+        let mayor = resident_with(&world, id, Job::Merchant);
+        let wants = [(Good::Wood, 8)];
+        let input = input_for(v, &mayor, &wants, true, true);
+        let village_page = page_entries(MenuPage::Village, &input);
+        assert!(village_page.iter().any(|e| e.action == MenuAction::Go(MenuPage::Main)));
+        let trade_page = page_entries(MenuPage::Trade, &input);
+        assert!(trade_page.iter().any(|e| e.action == MenuAction::Go(MenuPage::Main)));
+        assert!(trade_page.iter().any(|e| e.action == MenuAction::Close));
+        assert!(page_entries(MenuPage::Main, &input).iter().any(|e| e.action == MenuAction::Close));
+    }
+}
+
+
+#[cfg(test)]
+mod guarded_partial_native_actor_recovery_tests {
+    use super::*;
+
+    fn partial_spawn() -> (World, u64, u64) {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0, 70, 0], "owner").unwrap();
+        let first = world.settlements[&id].residents[0].id;
+        world.settlements.get_mut(&id).unwrap().actors_spawned = true;
+        world.bind_actor(id, first, 0x123456).unwrap();
+        let missing = world.settlements[&id].residents[7].id;
+        world.validate().unwrap();
+        (world, id, missing)
+    }
+
+    #[test]
+    fn cannot_recover_before_initial_spawn_is_durably_reserved() {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0, 70, 0], "owner").unwrap();
+        let worker = world.settlements[&id].residents[7].id;
+        assert!(world.reserve_actor_recovery(id, worker).is_err());
+        assert!(world.settlements[&id].actor_recovery_issued.is_empty());
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn pending_recovery_can_only_be_reserved_once_even_after_reload() {
+        let (mut world, id, worker) = partial_spawn();
+        world.reserve_actor_recovery(id, worker).unwrap();
+        assert!(world.reserve_actor_recovery(id, worker).is_err());
+        let mut restored: World = serde_json::from_str(
+            &serde_json::to_string(&world).unwrap()).unwrap();
+        restored.validate().unwrap();
+        assert!(restored.settlements[&id].actor_recovery_issued.contains(&worker));
+        assert!(restored.reserve_actor_recovery(id, worker).is_err());
+    }
+
+    #[test]
+    fn native_uuid_link_clears_pending_recovery_without_new_residents() {
+        let (mut world, id, worker) = partial_spawn();
+        let original_count = world.settlements[&id].residents.len();
+        world.reserve_actor_recovery(id, worker).unwrap();
+        world.bind_actor(id, worker, 0x789abc).unwrap();
+        assert!(world.settlements[&id].actor_recovery_issued.is_empty());
+        assert_eq!(world.settlements[&id].residents.len(), original_count);
+        assert_eq!(world.settlements[&id].residents.iter().find(
+            |r| r.id == worker).unwrap().entity_uuid, Some(0x789abc));
+        assert!(world.reserve_actor_recovery(id, worker).is_err());
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn another_citizens_uuid_never_clears_pending_recovery() {
+        let (mut world, id, worker) = partial_spawn();
+        world.reserve_actor_recovery(id, worker).unwrap();
+        let other = world.settlements[&id].residents[8].id;
+        world.bind_actor(id, other, 0xabc).unwrap();
+        assert!(world.settlements[&id].actor_recovery_issued.contains(&worker));
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn unknown_dead_and_already_linked_resident_ids_cannot_be_reserved() {
+        let (mut world, id, missing) = partial_spawn();
+        assert!(world.reserve_actor_recovery(id, u64::MAX).is_err());
+        let linked = world.settlements[&id].residents[0].id;
+        assert!(world.reserve_actor_recovery(id, linked).is_err());
+        world.settlements.get_mut(&id).unwrap().residents.iter_mut()
+            .find(|r| r.id == missing).unwrap().alive = false;
+        assert!(world.reserve_actor_recovery(id, missing).is_err());
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn dead_resident_with_prior_recovery_attempt_is_safe_to_reload_but_not_respawn() {
+        let (mut world, id, worker) = partial_spawn();
+        world.reserve_actor_recovery(id, worker).unwrap();
+        world.settlements.get_mut(&id).unwrap().residents.iter_mut()
+            .find(|r| r.id == worker).unwrap().alive = false;
+        world.validate().unwrap();
+        let mut restored: World = serde_json::from_str(
+            &serde_json::to_string(&world).unwrap()).unwrap();
+        restored.validate().unwrap();
+        assert!(restored.settlements[&id].actor_recovery_issued.contains(&worker));
+        assert!(restored.reserve_actor_recovery(id, worker).is_err());
+    }
+
+    #[test]
+    fn invalid_recovery_marker_fails_json_validation() {
+        let (mut world, id, _) = partial_spawn();
+        world.settlements.get_mut(&id).unwrap()
+            .actor_recovery_issued.insert(u64::MAX);
+        assert!(world.validate().is_err());
+    }
+
+    #[test]
+    fn recovery_marker_cannot_precede_initial_actor_reservation() {
+        let (mut world, id, worker) = partial_spawn();
+        world.reserve_actor_recovery(id, worker).unwrap();
+        world.settlements.get_mut(&id).unwrap().actors_spawned = false;
+        assert!(world.validate().is_err());
     }
 }

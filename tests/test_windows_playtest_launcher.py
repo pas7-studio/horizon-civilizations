@@ -20,6 +20,15 @@ class TestWindowsPlaytestLauncher(unittest.TestCase):
         self.assertLess(SCRIPT.index("@('prepare')"),
                         SCRIPT.index("@('play', '--world', $WorldName, '--creative')"))
 
+    def test_windows_gui_launcher_is_awaited_before_next_stage(self):
+        # Horizon Launcher is a Windows GUI executable; an unpiped call
+        # can return to PowerShell before import-build/prepare has exited.
+        self.assertIn("& $launcherBinary @LaunchArgs | Out-Host", SCRIPT)
+        self.assertIn("$global:LASTEXITCODE = $null", SCRIPT)
+        self.assertIn("if ($null -eq $exitCode)", SCRIPT)
+        self.assertIn("if ($exitCode -ne 0)", SCRIPT)
+        self.assertNotIn("    & $launcherBinary @LaunchArgs\n", SCRIPT)
+
     def test_fails_closed_on_unexpected_launcher_type(self):
         self.assertIn("$launcher.CommandType -ne 'Application'", SCRIPT)
         self.assertNotIn("Invoke-Expression", SCRIPT)

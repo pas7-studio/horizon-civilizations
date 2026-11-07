@@ -783,7 +783,279 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
      recovery. Collect logs, source block/actor UUID checks and
      actual barrel item counts. This proves a receipt witness only,
      NOT a visually held Minecraft ItemStack.
-245. Hall information boards (source-only; NOT run in game). In a disposable
+
+## Native edit crash-window + multi-village fairness acceptance (unreleased)
+
+245. Check out exact latest stacked branch in a Windows machine with
+     Rust 1.95, Python 3.11+, Git and network. Run rustfmt, cargo
+     check/test, Clippy, all Python tests and pinned native Horizon
+     compile+game client. Log exact commit SHA and all first failures.
+246. Create two valid settlements in the same dimension, each with
+     different active verified physical gathers and loaded UUID workers.
+     Stall the first village's worker far from its return hall. Confirm
+     the second village continues its own log/stone work within multiple
+     8-tick cycles instead of starving on the first job.
+247. Use 3 settlements and a mixture of Wood/Stone with one blocked
+     and one unloaded source; blocked/unloaded jobs must be skipped.
+     Check loadable candidates receive roughly even opportunities as
+     observed from server logs and saved receipts; no native mutations
+     in unloaded chunks or wrong dimensions.
+248. Plan, bind worker, persist Issued. Before command returns
+     deliberately interrupt process. Reload with original block
+     intact. The Issued but unconfirmed job is quarantined and cannot
+     retry automatically or credit even if worker arrives at the hall.
+249. Repeat interrupt immediately after native block edit but before
+     native_edit_confirmed persistence. Reload with native block
+     already air. No reissue and ZERO automatic material credit,
+     even after the assigned worker visits source and hall. Operator
+     sees uncertain receipt and can abandon after real inspection.
+250. After successful native conditional command, verify a new
+     authoritative read sees exactly air, then that
+     native_edit_confirmed=true is committed durably BEFORE pickup
+     witness. Stop/reload at this boundary and resume source witness,
+     then separate 3D hall return without a second block command.
+251. Induce native command refusal, conditional no-op (source changed
+     between preflight and edit) and unloaded result. Each must block
+     without granting item, must not blindly retry or treat command
+     acceptance alone as proof the original log was removed.
+252. Load an old PR #30 save with an Issued gather whose
+     pickup_witnessed=true but native_edit_confirmed is missing.
+     The whole settlement must LOAD, with zero new stock; the issued
+     job is quarantined automatically and requires manual OP audit.
+253. For a 3–4-log natural oak, verify every next saved segment resets
+     native_edit_confirmed=false and pickup_witnessed=false while
+     retaining the assigned resident ID. Each block independently
+     requires native success, live air, source witness and hall return.
+254. Repeat across world restart, different dimension, night shift,
+     other same-role workers at the hall, downloaded/unloaded chunk,
+     corrupted journal data, and warehouse maximum capacity.
+     Document native log, block entity count, actual worker UUID and
+     save contents. This is NOT proof of rendered carried ItemStacks.
+
+## Local first-play gate harness and native/game readiness (unreleased)
+
+255. On current branch, `py -3 tools/first_play_gate.py --dry-run
+     --build-client` must show the exact commands with no writes
+     to source, network, or output evidence. Check pinned revisions.
+256. On clean exact branch, `py -3 tools/first_play_gate.py --build-client`
+     must record SHA, Rust 1.95, Git branch, command logs, elapsed
+     stage durations and PASS/failure for all source and native steps.
+257. If a real Cargo/Rustfmt/Clippy/Python test fails, gate must STOP
+     immediately, return nonzero, and retain report.json, report.md,
+     stage log and first blocker. Do not misreport ready or playable.
+258. If Git branch or expected SHA does not match, or source files
+     are dirty, refuse release evidence. `--allow-dirty` may still
+     collect diagnostic logs but must NEVER produce a passing gate.
+259. Missing Rust/Python prerequisites must be reported, not silently
+     skipped. Generated target/, Python caches and compiled files
+     must not turn a clean checkout into dirty or alter source.
+260. With successful native client compilation, `READY_FOR_GAMEPLAY_E2E`
+     is allowed only as *ready to launch*, NOT a gameplay PASS. Then
+     manually run the original physical village/multi-study equivalent
+     scenarios (NPC spawn, hall, wood/stone, native barrel, bakery,
+     reload and crash reconciliation) in a disposable MC world;
+     record game logs and original/native item counts.
+261. Execute `python -m unittest tests/test_first_play_gate_cli.py`
+     (or discover) with controlled fake executable stubs. These verify
+     only release-gate correctness; on Linux 7/7 PASS. Repeat on
+     Windows for platform parity, then native-gate with REAL tools.
+
+## Native executable attestation, gate correctness and first-play evidence
+
+262. From exact current branch execute the local gate with
+     `--build-client`. On true success, report.json MUST list
+     pinned native Horizon revision, native check verified,
+     expected client executable path, actual byte count and SHA-256.
+263. Simulate/observe native build command exits 0 but compiled
+     Horizon executable is missing or empty. Gate MUST become
+     BLOCKED with first blocker describing absent binary; no
+     READY_FOR_GAMEPLAY_E2E false positives.
+264. Native build JSON with wrong horizon_revision, missing
+     cargo_check=PASS, missing modded path or wrong client output
+     path MUST fail even with native command exit 0.
+265. `--native-check` requires pinned native Cargo check and
+     valid build report but NOT a client executable. Source-only
+     gate is explicitly a weaker assurance level.
+266. Confirm report.md/report.json preserve exact SHA, branch,
+     stage output and SHA-256 of a genuinely fresh compiled
+     client. Never substitute a fabricated/hash-only artifact
+     for a Rust/native compilation pass.
+267. Run `py -3 -m unittest discover -s tests
+     -p test_first_play_gate_cli.py -v` locally on Windows:
+     the ten mock harness tests must PASS; these never certify
+     actual Rust or gameplay. Then run the full local gate
+     with REAL Rust 1.95 and owned Minecraft Java resources
+     in a disposable instance, followed by the prior in-game
+     E2E and integrity scenarios.
+
+## Compile-first local release gate (revision of native acceptance)
+
+268. Run `py -3 tools/first_play_gate.py --dry-run --build-client`
+     on the latest branch. Verify `cargo-test` executes before
+     Clippy, then strict rustfmt/cargo fmt checks and native build.
+269. Simulate a Rust compile error AND an unformatted source:
+     the first stage and first blocker must be cargo-test, not fmt.
+270. Simulate cargo passing but cargo fmt failing: no
+     SOURCE_CHECK_PASS or READY_FOR_GAMEPLAY_E2E is allowed.
+271. With all real source stages passing, the previous strict native
+     client executable, SHA-256 and manual game-world gates still apply.
+     This ordering improvement is not native compilation evidence.
+
+## Partial village spawn, UUID ownership and guarded recovery (unreleased)
+
+272. Use the current stacked branch with real local `cargo test`,
+     full Python unittest, native Horizon build and a fresh
+     disposable world. Record commit SHA, binary hash and logs.
+273. Create a village on natural loaded ground. Confirm all ten
+     initial NPCs receive distinct saved UUIDs. Stop/restart;
+     no duplicate batch. `/civ roster NAME` displays resident IDs.
+274. Simulate native refusal halfway through the first ten actor
+     spawns. `actors_spawned` remains reserved, with only successfully
+     UUID-linked residents saved; no automatic duplicate respawn.
+275. OP: `/civ reconcile NAME` before any recovery. If an original
+     tagged or legacy villager still exists, bind it once by UUID.
+     The existing NPC should remain intact and no new entity spawn.
+276. On an actually missing resident, use `/civ roster NAME` to
+     identify its numeric ID. Ensure the 96-block native neighborhood
+     is fully loaded and no matching entity exists. Run
+     `/civ recoveractor NAME RESIDENT_ID attempt` within 32 blocks
+     of the center, as OP level 2, in the correct dimension.
+277. The recovery command first persists `actor_recovery_issued`,
+     then issues a SINGLE native villager spawn at a genuinely clear
+     natural ground position, reads the real UUID, persists binding
+     and removes pending marker. Verify no other resident changes.
+278. Crash AFTER reservation but BEFORE native spawn. Reload
+     and verify a repeated recovery call is refused, no native
+     duplicate appears and original linked NPCs still work.
+279. Crash AFTER entity creation but BEFORE UUID save.
+     Do NOT respawn. Load the same chunk, run OP reconcile;
+     the unique original named villager binds to its real UUID
+     and clears the pending marker without creating another NPC.
+280. Block chunks in the 96-block scan, wrong dimension,
+     non-OP player, >32-block operator distance, missing
+     'attempt' confirmation or occupied site. Each refusal must
+     occur BEFORE saving recovery reservation or native spawning.
+281. Attempt recovery on already linked, dead, unknown or
+     previously reserved resident ID. No second native entity is
+     created. A saved invalid pending ID must fail world validation.
+282. Confirm ordinary village autonomy still starts with ten safe
+     surveyed positions, and 1–9 safe positions never starts a
+     new full batch. Single-target recovery can use one safe
+     unoccupied natural spot after explicit OP confirmation.
+     Re-run NPC builder, farm, warehouse and restarts. No game
+     readiness claim from source-contract checks alone.
+283. After reserving recovery, mark the resident dead before restart. The saved one-shot attempt must remain loadable and in the audit; the dead resident cannot be newly spawned or reserved again. The entire village must not fail validation.
+
+
+## Shared surveyed initial native spawning (unreleased PR #34)
+
+284. In a disposable world, obstruct the ten initial natural spawn spots
+     or unload surrounding chunks. Check that automatic initialization and
+     OP `/civ actors NAME` create **zero** entities and do **not** reserve
+     `actors_spawned`. Restore terrain/chunks and retry the pre-spawn survey.
+285. Place a living mob on an otherwise safe candidate position. Both
+     startup paths must skip occupied positions and only reserve/spawn if
+     ten other safe, loaded, natural-ground spots exist.
+286. Before first reservation, mark one of the first ten residents dead,
+     give one a UUID, or insert an already-loaded villager with its exact
+     tag or legacy name. The shared preflight must fail, with no reservation
+     and no duplicate or dead-resident spawn.
+287. On terrain with varying Y height, execute explicit OP
+     `/civ actors NAME`. All ten entities must appear at surveyed
+     positions, not the old hard-coded central Y. Verify ten unique UUIDs,
+     save/reload, and no repeated batch. Native tests and in-game evidence
+     are required; source assertions do not prove gameplay.
+
+288. On the current PR #34 branch, run
+     `py -3 tools/first_play_gate.py --dry-run --build-client` and then
+     the real non-dry-run command. It must identify the current branch
+     rather than the superseded PR #33 branch. With `--expected-sha`,
+     only the exact chosen head may produce a passing build report.
+
+
+## Crash-safe spawn spacing, save consistency, first error reporting (unreleased PR #34)
+
+289. On loaded flat natural terrain, the first preflight finds ten
+     non-overlapping positions at least three blocks apart. Confirm
+     native UUID-bound villagers do not collide with one another,
+     previously loaded mobs or blocked ground. Reload without duplicates.
+290. Force a save error during OP `/civ reconcile NAME` after UUID
+     binding in memory. Verify the dispatcher does not silently retry
+     the failed save or replace in-memory reservations with a stale
+     snapshot. The world must halt until the operator repairs storage.
+291. Fault-inject an error after a previously successful durable
+     command save. The dispatcher must never restore an older clone
+     over the committed `world.json`; it instead halts for inspection.
+     Never use valuable saves when testing fault injection.
+292. In the first-play CLI mock, make the Rust test stage emit
+     `error[E0425]: unknown value in native actor code` and exit 101.
+     `report.json`, `report.md` and console must surface that first
+     diagnostic and preserve `BLOCKED`. The complete stage log remains
+     available. Repeat using real Rust error logs when the actual
+     Windows build is run.
+
+
+## Aborted first save / temporary recovery artifacts (unreleased PR #34)
+
+293. On a disposable world, create only `world.json.tmp` containing
+     incomplete settlement JSON. With no `world.json` primary, starting
+     Horizon Civilizations must **NOT** initialize an empty world. It must
+     show an interrupted-save error and leave the temp bytes untouched.
+294. Leave a valid `world.json` alongside stale `world.json.tmp`.
+     The loader must refuse to proceed until the operator archives and
+     inspects both files; it must not select one silently.
+295. With stale `world.json.tmp`, attempt an ordinary world save.
+     The write must fail BEFORE opening/truncating the temp file; compare
+     exact original bytes. Existing `world.json.swap` protection must remain.
+296. Close/reopen after a fully successful save: neither temp nor swap
+     file should remain, and the identical settlement/UUID bindings should
+     reload. Record Rust and real Minecraft evidence before release.
+
+
+## Native Rust suite inventory and zero-match protection (unreleased PR #34)
+
+297. Run pinned `tools/native_build.py --test` with real Rust and the
+     exact Horizon revision. Both `civilizations_core::` and
+     `civilizations_glue::` must enumerate at least one Rust test and
+     pass their actual filtered executions; evidence must show counts.
+298. Simulate a Cargo `--list` success returning `0 tests, 0 benchmarks`
+     for `civilizations_glue::`. It must block native readiness **before**
+     running that empty suite; an exit code of zero alone is insufficient.
+299. Simulate failure of the Cargo test inventory command and ensure
+     that no filtered tests are launched afterward. Preserve the
+     first-failure log in the first-play report.
+300. Simulate native-build exit zero with a valid-looking client binary
+     but missing `civilizations_glue::` evidence, or evidence with a zero
+     discovered count. Both must produce `BLOCKED`, not
+     `READY_FOR_GAMEPLAY_E2E`. Only a real native successful run can
+     certify the build gate, not these mocks.
+
+
+## Windows launcher sequencing and read-only NPC recovery evidence (unreleased PR #34)
+
+301. On Windows PowerShell with the official GUI Horizon Launcher, verify
+     that `import-build` finishes and provides an exit code before
+     `prepare` runs. No unpiped GUI invocation may be treated as success.
+302. Force `import-build` to exit nonzero; `prepare` and `play` must not
+     run. Force `prepare` to exit nonzero; `play` must not run.
+     Capture the exit status without running a valuable Minecraft world.
+303. In read-only `playtest_evidence.py`, leave `world.json.tmp`
+     alongside an otherwise valid save, and then as the ONLY remaining
+     first-save artifact. Both must yield FAIL without editing either file.
+304. Supply a valid, UUID-unbound `actor_recovery_issued` entry for a live
+     resident. The saved-state audit reports pending recovery as a
+     warning and requires reconciliation before any further spawn.
+     A marker for a UUID-bound or nonexistent resident is a hard FAIL.
+305. A dead, unbound resident with a pending one-shot recovery tombstone
+     must remain loadable and must NOT be treated as a new NPC to respawn.
+     The audit reports the unresolved marker, not false corruption.
+306. Confirm that the current PLAYTEST guide selects the same Draft PR #34
+     source as `first_play_gate.py`. Do not reuse a passing old binary;
+     native build and in-game E2E evidence remain mandatory.
+
+## Civic hall information boards (unreleased)
+
+307. Hall information boards (source-only; NOT run in game). In a disposable
      world with a COMPLETED hall: six oak wall signs appear on the front wall
      (row y+1: land, mayor, needs, diplomacy; row y+2: treasury, council).
      Verify colored line text renders; if the log shows "colored sign text
