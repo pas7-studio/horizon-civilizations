@@ -39,9 +39,12 @@ class NaturalForestryAndGatherJournalContracts(unittest.TestCase):
 
     def test_live_source_provenance_is_checked_at_issue_time(self):
         runner = GLUE.split("fn gather_one_step(", 1)[1].split("\n}", 1)[0]
-        self.assertIn("!seems_natural_resource(game, &dimension, job.position, job.good)", runner)
+        self.assertIn("let valid_resource = if let Some(stem) = saved_stem", runner)
+        self.assertIn("inspect_oak_stem(stem, |pos| world_block(", runner)
+        self.assertIn("seems_natural_resource(game, &dimension, job.position, job.good)", runner)
+        self.assertIn("|| !valid_resource", runner)
         self.assertIn("!state.world.as_ref().unwrap().gather_site_unclaimed(id, job.position, job.stand)", runner)
-        self.assertLess(runner.index("!seems_natural_resource("),
+        self.assertLess(runner.index("|| !valid_resource"),
                         runner.index("mark_gather_issued(id)?"))
 
     def test_uncertain_issued_gather_is_not_automatically_discarded(self):

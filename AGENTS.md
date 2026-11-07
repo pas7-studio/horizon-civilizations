@@ -1,3 +1,26 @@
+# CURRENT SOURCE HANDOFF — verified short oak stem (2026-11-08)
+
+- Latest source branch: `feat/verified-oak-stem-harvest-v0115`, stacked after
+  PR #26. Keep Draft; **GitHub Actions OFF**, main unchanged. No native
+  compile/game-world proof yet. Do not publish playable claims.
+- New optional saved `Settlement.oak_stem` pairs with gather_job.
+  A confirmed **3–4-log** natural rooted oak is cut segment by segment,
+  with separate Issued state before each native edit, actual air
+  verification and UUID-bound lumberjack return before one-log credit.
+  Next log starts UNISSUED only after previous receipt is committed.
+- A failed planner save must restore the WHOLE world pre-image, including
+  oak_stem; an uncertain issued edit is quarantined, never auto-reissued.
+  OP gathercheck/discardgather recover only with live block evidence and
+  ZERO credit on abandoning uncertain segments.
+- Test suite in docs/TEST_PLAN.md cases 200–211; static tests in
+  tests/test_short_oak_stem.py and Rust module
+  verified_short_oak_stem_tests. Run full local Rust 1.95 and Python
+  toolchain tests plus pinned native Horizon compile before any merge.
+- Saplings and tree replanting, forestry/quarry buildings, real hand-carried
+  item entities and gameplay E2E are not done.
+
+---
+
 # Latest stacked local source handoff (2026-11-08)
 
 - Work from `feat/natural-forestry-gather-journal-v0115`, not `main`.

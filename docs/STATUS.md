@@ -1,3 +1,38 @@
+# Unreleased source: short-oak stem harvesting with per-log receipts
+
+Branch `feat/verified-oak-stem-harvest-v0115`, stacked after Draft PR #26.
+**No new playable release.** Manifest is still 0.1.14, GitHub Actions are OFF,
+and these changes have not passed native compile or Minecraft E2E.
+
+- [x] Verified naturally soil-rooted, leaf-bearing **3–4-log oak stems** now
+  produce a persisted multi-segment job, not merely one removed root block.
+  Tall/uncertain trees are deliberately skipped; no magical reach/scaffolding.
+- [x] Each log is separately conditional-edited with write-ahead Issued state,
+  later verified as air and credited **once** to the physical delivery queue
+  only after a UUID-bound lumberjack has returned to the town hall.
+  A following segment is created as a fresh UNISSUED gather only after
+  that confirmation; no multi-log batch credit.
+- [x] Before each upper segment, re-read the entire stem: previous native
+  blocks must be air, remaining blocks must be actual oak logs, leaf crown
+  must remain and no block may be unloaded. Revalidate purchased land.
+- [x] On planning save failure, roll back BOTH gather_job and oak_stem using
+  a full original world snapshot. On uncertain Issued crash/refusal,
+  quarantine the current segment and remaining stem; OP abandonment
+  destroys the task with ZERO credit. Legacy single-log saves migrate
+  through serde default without minting any continuation.
+- [x] /civ diagnose and /civ gathercheck report stem segment N / total.
+- [x] Eight Rust domain regression cases and nine Python source contracts
+  authored; adjusted prior diagnosis/forestry source tests for new routing.
+- [ ] Cargo/rustfmt/Clippy/full Python/native pinned Horizon/game E2E
+  unverified. No toolchain/network from working container.
+- [ ] Sapling collection/consumption, actual planting and growth,
+  fully visible lumberyard and quarry structures, and item-rendered
+  haulers are still NOT implemented. No free tree regeneration.
+
+Follow disposable-world TEST_PLAN cases 200–211. Do not merge to main.
+
+---
+
 # Unreleased native forestry & resource-journal hardening
 
 Branch `feat/natural-forestry-gather-journal-v0115`, stacked after Draft PR #25.
