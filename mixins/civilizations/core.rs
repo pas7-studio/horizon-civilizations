@@ -370,6 +370,40 @@ pub fn hut_plan(origin: [i32; 3]) -> Vec<HutBlock> {
     plan
 }
 
+/// Founding civic hall uses the existing 5x5 safe physical shell, with an
+/// identifiable mayor desk, two resource barrels and two bulletin signs.
+/// Barrel contents are not treated as a vanilla chest inventory: the guarded
+/// civic warehouse ledger is authoritative until a verified container API
+/// can support crash-atomic external transfers.
+pub const HALL_WOOD_LOGS: u32 = 24;
+pub const HALL_COBBLESTONE: u32 = 25;
+pub const HUT_WOOD_LOGS: u32 = 20;
+pub const HUT_COBBLESTONE: u32 = 25;
+
+pub fn town_hall_plan(origin: [i32; 3]) -> Vec<HutBlock> {
+    let mut plan = hut_plan(origin);
+    for (dx, dz, block) in [
+        (-1, 1, "minecraft:barrel"),
+        (1, 1, "minecraft:barrel"),
+        (-1, -1, "minecraft:oak_sign"),
+        (1, -1, "minecraft:oak_sign"),
+        (0, 1, "minecraft:lectern"),
+    ] {
+        plan.push(HutBlock {
+            pos: [origin[0] + dx, origin[1], origin[2] + dz],
+            block, floor: false,
+        });
+    }
+    plan
+}
+
+/// Bulletin signs are real blocks inside the civic hall; the native adapter
+/// supplies validated, bounded sign text after the town hall is complete.
+pub fn hall_board_positions(origin: [i32; 3]) -> [[i32; 3]; 2] {
+    [[origin[0] - 1, origin[1], origin[2] - 1],
+     [origin[0] + 1, origin[1], origin[2] - 1]]
+}
+
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 pub struct VisualBuildJob {
     pub origin: [i32; 3],
@@ -436,6 +470,31 @@ pub fn inspect_hut(job: &VisualBuildJob, mut read: impl FnMut([i32; 3]) -> Optio
     BuildInspection::Complete
 }
 
+
+/// Same fail-closed crash reconciliation as ordinary huts, but with
+/// the distinct civic center blueprint and actual warehouse blocks.
+pub fn inspect_town_hall(
+    job: &VisualBuildJob, mut read: impl FnMut([i32; 3]) -> Option<String>
+) -> BuildInspection {
+    if job.blocked { return BuildInspection::Paused; }
+    let plan = town_hall_plan(job.origin);
+    if job.cursor > plan.len() { return BuildInspection::InvalidCursor; }
+    for (index, step) in plan.iter().enumerate() {
+        if index > job.cursor { break; }
+        let Some(actual) = read(step.pos) else { return BuildInspection::Unloaded; };
+        if actual == step.block {
+            if index == job.cursor { return BuildInspection::Advance; }
+            continue;
+        }
+        let replaceable = if step.floor { is_ground(&actual) } else { actual == "minecraft:air" };
+        if !replaceable { return BuildInspection::Blocked { position: step.pos, found: actual }; }
+        if index < job.cursor { return BuildInspection::Rewind(index); }
+        return BuildInspection::Place {
+            position: step.pos, old_block: actual, new_block: step.block,
+        };
+    }
+    BuildInspection::Complete
+}
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -670,6 +729,17 @@ pub struct Settlement {
     pub founder: String,
     pub residents: Vec<Resident>,
     pub stock: BTreeMap<Good, u32>,
+    /// Physical goods acquired from verified inventory transfers and
+    /// completed observable harvests. NOT the abstract daily stock.
+    #[serde(default)]
+    pub warehouse: BTreeMap<Good, u32>,
+    /// Active physical civic hall construction; never inferred from a JSON
+    /// house counter, and can resume after restarting with observed blocks.
+    #[serde(default)]
+    pub hall_job: Option<VisualBuildJob>,
+    /// The civic center is proven complete only after all plan blocks read.
+    #[serde(default)]
+    pub hall_complete: bool,
     /// Player civic coin payments are transferred here, not silently burned.
     #[serde(default)]
     pub treasury_coins: u64,
@@ -890,6 +960,33 @@ impl Settlement {
         priorities.sort_by(|a, b| b.urgency.cmp(&a.urgency).then(a.need.cmp(&b.need)));
         priorities.truncate(5);
         priorities
+    }
+
+    pub fn warehouse_quantity(&self, good: Good) -> u32 {
+        self.warehouse.get(&good).copied().unwrap_or(0)
+    }
+
+    /// Physical receipt; reject overflow rather than silently mint or lose items.
+    pub fn warehouse_credit(&mut self, good: Good, count: u32) -> Result<(), String> {
+        let next = self.warehouse_quantity(good).checked_add(count)
+            .ok_or("physical warehouse capacity overflow")?;
+        self.warehouse.insert(good, next);
+        Ok(())
+    }
+
+    pub fn warehouse_debit(&mut self, good: Good, count: u32) -> Result<(), String> {
+        let current = self.warehouse_quantity(good);
+        if current < count { return Err(format!(
+            "warehouse lacks {} {}: {} available, {} required",
+            good.as_str(), current, count
+        )); }
+        self.warehouse.insert(good, current - count);
+        Ok(())
+    }
+
+    pub fn hall_materials_missing(&self) -> (u32, u32) {
+        (HALL_WOOD_LOGS.saturating_sub(self.warehouse_quantity(Good::Wood)),
+         HALL_COBBLESTONE.saturating_sub(self.warehouse_quantity(Good::Stone)))
     }
 
     pub fn quantity(&self, good: Good) -> u32 {
@@ -1173,6 +1270,10 @@ impl World {
                 (Good::Wheat, 20), (Good::Bread, 12), (Good::Wood, 12),
                 (Good::Stone, 8), (Good::Iron, 2),
             ]),
+            // Founding abstract stock is NOT physical inventory.
+            warehouse: BTreeMap::new(),
+            hall_job: None,
+            hall_complete: false,
             treasury_coins: 0,
             houses: 2,
             building_progress: 0,
