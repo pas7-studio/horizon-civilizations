@@ -161,3 +161,20 @@ them playable until the local Horizon client E2E proves the actual world state.
 - [ ] Local compiler, Rust/Python tests, native Horizon check and gameplay E2E.
 - [ ] Genuine player land claims, placed sign/structure detection, plotted
   roads/paths and a veto-capable town council (not implemented).
+
+## Needs-driven village council (v0.1.10 source-only)
+
+- [x] Pure, stable urgency ranking from food risk, war state, low morale,
+  actor identity integrity, missing physical homes and house-material shortages.
+- [x] Reuse the real abstract economy daily model **on a clone** for the
+  three-day council outlook; do not reimplement production or mutate saves.
+- [x] Bound hypothetical forecasts to seven days even for untrusted inputs;
+  default to a three-day window.
+- [x] Read-only `/civ council NAME` and `/civ forecast NAME`, with
+  explicit model exclusions and player/OP decision boundaries.
+- [x] Preserve old saves (schema 1), deterministic tie order, and no extra
+  native Horizon hooks.
+- [ ] Local cargo test/fmt/Clippy and Python test suite, pinned Horizon
+  native compile and first game E2E (GitHub Actions intentionally disabled).
+- [ ] Real autonomous follow-through with veto/consent and persistent
+  civic decision history, after safety/ownership and local E2E.
