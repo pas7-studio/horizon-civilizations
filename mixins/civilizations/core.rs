@@ -455,6 +455,8 @@ pub struct BarrelTransfer {
     pub phase: BarrelPhase,
     /// Exact count of this plain item in this specific barrel before issue.
     pub before: u32,
+    /// One bounded batch per durable journal (at most 8 native items).
+    pub count: u32,
     /// Exact native container slot (required for ToBuilder).
     pub slot: Option<usize>,
 }
@@ -462,8 +464,8 @@ pub struct BarrelTransfer {
 impl BarrelTransfer {
     pub fn expected_after(&self) -> Option<u32> {
         match self.direction {
-            BarrelDirection::ToBarrel => self.before.checked_add(1),
-            BarrelDirection::ToBuilder => self.before.checked_sub(1),
+            BarrelDirection::ToBarrel => self.before.checked_add(self.count),
+            BarrelDirection::ToBuilder => self.before.checked_sub(self.count),
         }
     }
 }
@@ -1202,7 +1204,8 @@ impl World {
             }
             if let Some(t) = &village.barrel_transfer {
                 if !village.hall_complete || !hall_storage_positions(village.center).contains(&t.position)
-                    || t.before > 10_000_000 || t.expected_after().is_none() {
+                    || t.before > 10_000_000 || !(1..=8).contains(&t.count)
+                    || t.expected_after().is_none() {
                     return Err("invalid official barrel transfer record".into());
                 }
                 match t.direction {
@@ -1553,7 +1556,7 @@ impl World {
     /// creates no item and deducts no warehouse quantity.
     pub fn plan_barrel_transfer(
         &mut self, id: u64, position: [i32; 3], good: Good,
-        direction: BarrelDirection, before: u32, slot: Option<usize>,
+        direction: BarrelDirection, before: u32, count: u32, slot: Option<usize>,
     ) -> Result<(), String> {
         let v = self.settlements.get(&id).ok_or("unknown settlement")?;
         if !v.hall_complete { return Err("physical town hall not complete".into()); }
@@ -1561,14 +1564,16 @@ impl World {
         if !hall_storage_positions(v.center).contains(&position) {
             return Err("barrel is not an official village hall warehouse".into());
         }
-        if before > 10_000_000 { return Err("invalid native barrel item count".into()); }
+        if before > 10_000_000 || !(1..=8).contains(&count) {
+            return Err("invalid native barrel batch or item count".into());
+        }
         match direction {
             BarrelDirection::ToBarrel => {
-                if v.warehouse_quantity(good) == 0 {
-                    return Err("no confirmed incoming goods awaiting barrel delivery".into());
+                if v.warehouse_quantity(good) < count {
+                    return Err("insufficient confirmed goods awaiting barrel delivery".into());
                 }
                 if slot.is_some() { return Err("deposit is not a slot extraction".into()); }
-                before.checked_add(1).ok_or("barrel count overflow")?;
+                before.checked_add(count).ok_or("barrel count overflow")?;
             }
             BarrelDirection::ToBuilder => {
                 if v.visual_job.is_none() || v.hut_supplies_reserved {
@@ -1579,16 +1584,17 @@ impl World {
                     Good::Stone => HUT_COBBLESTONE,
                     _ => return Err("builders only reserve verified wood and cobblestone".into()),
                 };
-                if v.build_escrow.get(&good).copied().unwrap_or(0) >= required {
-                    return Err("this building material is already fully reserved".into());
+                if v.build_escrow.get(&good).copied().unwrap_or(0)
+                    .checked_add(count).is_none_or(|n| n > required) {
+                    return Err("building material batch exceeds project bill".into());
                 }
-                if before == 0 || slot.is_none() {
+                if before < count || slot.is_none() {
                     return Err("missing native barrel item/slot for extraction".into());
                 }
             }
         }
         self.settlements.get_mut(&id).unwrap().barrel_transfer = Some(BarrelTransfer {
-            position, good, direction, phase: BarrelPhase::Planned, before, slot,
+            position, good, direction, phase: BarrelPhase::Planned, before, count, slot,
         });
         Ok(())
     }
@@ -1615,10 +1621,10 @@ impl World {
         let good = t.good;
         let direction = t.direction;
         match direction {
-            BarrelDirection::ToBarrel => v.warehouse_debit(good, 1)?,
+            BarrelDirection::ToBarrel => v.warehouse_debit(good, t.count)?,
             BarrelDirection::ToBuilder => {
                 let previous = v.build_escrow.get(&good).copied().unwrap_or(0);
-                let next = previous.checked_add(1).ok_or("building escrow overflow")?;
+                let next = previous.checked_add(t.count).ok_or("building escrow overflow")?;
                 v.build_escrow.insert(good, next);
             }
         }
