@@ -660,3 +660,38 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
      after two or more relogs and day/night transitions. Keep complete
      crash logs/screenshots. No claim of real sapling replanting,
      full forestry building or rendered item courier at this stage.
+
+## Native 3D actor presence and resource work-stand acceptance (unreleased)
+
+212. On exact latest branch, run rustfmt, cargo check/test, clippy,
+     the full Python suite and pinned native Horizon client build locally.
+     Record SHA and first failure; old CI/Windows binaries are not proof.
+213. Place UUID-linked lumberjack/miner in the cave 15-25 blocks vertically
+     below a saved natural gather site while retaining identical X/Z.
+     No native block edit, Issued journal or resource credit may occur.
+214. Move the worker onto the saved clear two-high natural stand at the
+     correct Y. A normal 3–4-log tree harvest can proceed one log per
+     return, with actual 4.5-block eye-to-source-block reach.
+215. Move a worker near the source only in X/Z but to Y +10 and Y -10;
+     even if their name and UUID are valid, no mining command is allowed.
+216. After planning a gather but before its native Issued action, place a
+     stone wall in the saved stand (or one block above it). Preflight
+     must block safely, neither overwrite the foreign block nor credit wood.
+217. After planning but before issue, remove/replace the worker stand's
+     walkable floor or unload that chunk. Native extraction must refuse.
+     Restore source/stand and replan only after safe settlement state.
+218. Place the steward 15 blocks above/below the completed town hall while
+     keeping X/Z identical. Warehouse barrel insertion/extraction must
+     not be authorized until a true 3D presence at the hall.
+219. Place the returning miner and farmer in a cave directly underneath
+     the hall. Their issued physical receipts must not be credited as
+     delivered until an actual UUID-linked worker returns to hall height.
+220. Test bakery crafter far above/below crafting table: cannot consume
+     wheat or produce bread. Test builder directly below/above an
+     unfinished hut/civic hall/bakery: cannot place native blocks.
+221. Confirm vertical navigation correction triggers when resident is at
+     target X/Z but wrong Y, and that missing/blocked path does not
+     silently teleport, complete jobs or mint resource credits.
+222. Test non-finite actor positions, negative/nonfinite radii in Rust,
+     dimension mismatch, two villages and short-tree upper logs. No
+     cross-dimensional, off-shift or fake remote worker confirmation.
