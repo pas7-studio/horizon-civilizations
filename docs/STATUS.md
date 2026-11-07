@@ -8,7 +8,7 @@
 - No player ownership or free starting currency is invented; original
   manually OP-founded villages preserve their prior semantics.
 - Public read-only `/civ nearby` for exploration and navigation.
-- Five Rust domain regressions plus eleven Python source contracts
+- Six Rust domain regressions plus eleven Python source contracts
   authored. Runtime Rust/Horizon builds and Minecraft E2E **not executed**.
 
 ---
