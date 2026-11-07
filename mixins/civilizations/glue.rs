@@ -1504,11 +1504,12 @@ fn autonomous_village_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Resu
             }) {
                 continue;
             }
-            // Bounded 41*41*6 cells over already-loaded chunks. Rotate
-            // the starting point so a refused source is not retried forever.
+            // Inspect at most 320 of 1,681 X/Z candidates per planner
+            // turn, with up to 6 nearby Y levels. Never scan thousands of
+            // chunks at once; rotate to visit new places on later turns.
             let candidates = 41_usize * 41;
-            let start = ((state.physical_ticks / 100) as usize * 17) % candidates;
-            for step in 0..candidates {
+            let start = ((state.physical_ticks / 100) as usize * 101) % candidates;
+            for step in 0..320_usize {
                 let index = (start + step) % candidates;
                 let dx = (index / 41) as i32 * 2 - 40;
                 let dz = (index % 41) as i32 * 2 - 40;
