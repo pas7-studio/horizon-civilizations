@@ -1052,3 +1052,50 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
 306. Confirm that the current PLAYTEST guide selects the same Draft PR #34
      source as `first_play_gate.py`. Do not reuse a passing old binary;
      native build and in-game E2E evidence remain mandatory.
+
+
+## Autonomous NPC village founding and player discovery (PR #34 / v0.1.15)
+
+307. In a clean disposable Overworld with no existing civilizations, stand
+     on an active loaded plain for at least 2,400 authoritative ticks.
+     The source should select only a natural, 5x5 clear site about 88–91
+     blocks from a genuine nearby player. Confirm saved settlement founder
+     is `civilizations:npc`, not that player's UUID. No player title or
+     coin balance is created by the founding itself.
+308. With only trees/cliffs/foreign blocks or unloaded chunks at candidate
+     sites, no new civilization is persisted and no block/mob mutation
+     occurs. Restore load/terrain and wait for the next bounded survey.
+309. Ensure at least ten natural, clear, mutually separated native NPC spawn
+     positions before settlement creation. A seemingly clear 5x5 town hall
+     area with obstructed surrounding positions must NOT create a town.
+310. In a disposable world with one existing manual or autonomous village,
+     stay within 192 blocks of its center for multiple founding periods:
+     no second village appears just from staying there. On traveling
+     farther away, verify new towns respect minimum 192-block separation.
+311. Inspect an automatically founded community before joining:
+     ten residents, default autonomy ON, hall UNBUILT, physical storage
+     empty, no human Lord. `/civ join NAME` grants normal Citizen status;
+     OP `/civ found NAME` still grants the previous founder title.
+312. Observe autonomous NPC spawn, physical hall funding, worker gathering,
+     construction and farming through normal code paths (not a special
+     free-material path). Restart midway, then verify no duplicate town,
+     NPC UUID, hall or warehouse resources.
+313. Try in the Nether/End and on a dedicated server without active
+     players. No natural founding occurs. Verify host singleplayer and
+     genuine LAN/dedicated guests are both independently supported.
+314. Travel widely; no more than eight NPC-founded villages can exist.
+     Manual OP founding still works until the overall 64-settlement cap.
+315. Use `/civ nearby` in each dimension. Verify nearest-four ordering,
+     nonnegative distance, coordinates and correct hall status. A
+     settlement in another dimension must never appear in this list.
+     An empty result must explain how to explore.
+316. Leave `/civ nearby` running repeatedly: no player inventory, JSON
+     save, chunk loads, native commands or settlement state may change.
+     Compare before/after `world.json` and Minecraft block snapshots.
+317. Revisit identical terrain after a completed first founding, exit/restart
+     and wait additional founding periods: the original center remains
+     unique, ID monotonic, history no double-found event; full citizen
+     roster retains stable IDs across reload.
+318. On partial native spawn or a storage/persistence error, stop native
+     mutations according to the existing recovery gate. Auto-founding must
+     never bypass a blocked world or reissue one-shot NPC creation.
