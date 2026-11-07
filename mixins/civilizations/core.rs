@@ -1197,6 +1197,23 @@ impl World {
                     return Err("invalid physical gather record".into());
                 }
             }
+            if village.build_escrow.values().any(|&amount| amount > 10_000_000) {
+                return Err("physical builder escrow entry too large".into());
+            }
+            if let Some(t) = &village.barrel_transfer {
+                if !village.hall_complete || !hall_storage_positions(village.center).contains(&t.position)
+                    || t.before > 10_000_000 || t.expected_after().is_none() {
+                    return Err("invalid official barrel transfer record".into());
+                }
+                match t.direction {
+                    BarrelDirection::ToBuilder if t.slot.is_none()
+                        || !matches!(t.good, Good::Wood | Good::Stone) =>
+                        return Err("invalid builder barrel extraction slot".into()),
+                    BarrelDirection::ToBarrel if t.slot.is_some() =>
+                        return Err("native barrel deposit cannot name a slot".into()),
+                    _ => {}
+                }
+            }
             if village.hall_complete && village.hall_job.is_some() {
                 return Err("civic hall cannot be simultaneously complete and under construction".into());
             }
@@ -1868,12 +1885,27 @@ impl World {
         if job.cursor != 0 || job.blocked {
             return Err("unfunded partial/blocked hut needs inspection before any physical work".into());
         }
-        if v.warehouse_quantity(Good::Wood) < HUT_WOOD_LOGS
-            || v.warehouse_quantity(Good::Stone) < HUT_COBBLESTONE {
-            return Ok(false);
+        // A completed town hall changes the authoritative storage source:
+        // only goods physically extracted from its real vanilla barrels
+        // into the write-ahead builder escrow can pay this construction bill.
+        let available = if v.hall_complete {
+            v.build_escrow.get(&Good::Wood).copied().unwrap_or(0) >= HUT_WOOD_LOGS
+                && v.build_escrow.get(&Good::Stone).copied().unwrap_or(0) >= HUT_COBBLESTONE
+        } else {
+            // Historical pre-hall work orders may finish from their already
+            // accounted delivered ledger; new automatic huts wait for the
+            // real completed civic hall.
+            v.warehouse_quantity(Good::Wood) >= HUT_WOOD_LOGS
+                && v.warehouse_quantity(Good::Stone) >= HUT_COBBLESTONE
+        };
+        if !available { return Ok(false); }
+        if v.hall_complete {
+            *v.build_escrow.get_mut(&Good::Wood).ok_or("missing wood escrow")? -= HUT_WOOD_LOGS;
+            *v.build_escrow.get_mut(&Good::Stone).ok_or("missing stone escrow")? -= HUT_COBBLESTONE;
+        } else {
+            v.warehouse_debit(Good::Wood, HUT_WOOD_LOGS)?;
+            v.warehouse_debit(Good::Stone, HUT_COBBLESTONE)?;
         }
-        v.warehouse_debit(Good::Wood, HUT_WOOD_LOGS)?;
-        v.warehouse_debit(Good::Stone, HUT_COBBLESTONE)?;
         v.hut_supplies_reserved = true;
         Ok(true)
     }
