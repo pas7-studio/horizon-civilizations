@@ -2192,6 +2192,8 @@ fn autonomous_village_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Resu
         && actors.iter().any(|(known, _)| *known == r.id));
     let has_builder = village.residents.iter().any(|r| r.alive && r.job == Job::Builder
         && actors.iter().any(|(known, _)| *known == r.id));
+    let has_baker = village.residents.iter().any(|r| r.alive && r.job == Job::Baker
+        && actors.iter().any(|(known, _)| *known == r.id));
     // Recover from a refused/modified extraction without paying any wood or
     // stone; the next planning cycle may choose another untouched source.
     if village.gather_job.as_ref().is_some_and(|job| job.blocked) {
@@ -2300,9 +2302,11 @@ fn autonomous_village_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Resu
         }
     }
     let need_field = has_farmer && village.farm.is_none();
+    let need_bakery = has_builder && has_baker && village.hall_complete
+        && village.bakery.is_none();
     let need_hut = has_builder && village.hall_complete && village.visual_job.is_none()
         && village.pending_visual_buildings > 0 && village.physical_housing().2 > 0;
-    if !need_field && !need_hut { return Ok(()); }
+    if !need_field && !need_hut && !need_bakery { return Ok(()); }
 
     for [dx, dz] in crate::game::civilizations_core::HOUSING_PLOT_OFFSETS {
         let Some(x) = village.center[0].checked_add(dx) else { continue; };
@@ -2319,6 +2323,19 @@ fn autonomous_village_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Resu
                     state.world.as_mut().unwrap().start_farm(id, site)?;
                     save_autonomous(state, prior)?;
                     log::info!("[civilizations] {} autonomously reserved crop field at {:?}", village.name, site);
+                    return Ok(());
+                }
+            }
+            // After the field and civic hall exist, build the first
+            // functional workshop on the same loaded, physically empty,
+            // non-player-owned plot policy as ordinary housing.
+            if need_bakery && check_empty_hut_site(game, &dimension, site).is_ok() {
+                let mut trial = state.world.as_ref().unwrap().clone();
+                if trial.start_bakery(id, site).is_ok() {
+                    let old = state.world.as_ref().unwrap().clone();
+                    state.world.as_mut().unwrap().start_bakery(id, site)?;
+                    save_autonomous(state, old)?;
+                    log::info!("[civilizations] {} autonomously reserved real bakery at {:?}", village.name, site);
                     return Ok(());
                 }
             }
