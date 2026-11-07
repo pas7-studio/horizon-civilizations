@@ -96,3 +96,31 @@ bindings = [
   { name = "pos", ty = "[i32; 3]", value = "pos" },
   { name = "cancel", ty = "&mut bool", value = "&mut *cancel" },
 ]
+
+# Native API 334: prevent external hopper/automation pipelines from moving
+# items into/out of a settlement's two registered public barrel inventories.
+[[injection]]
+id = "hopper_transfer"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_inventory_move_item"
+helper = "hopper_transfer.rs"
+bindings = [
+  { name = "game", ty = "&crate::game::Game<'_>", value = "&*self" },
+  { name = "source", ty = "[i32; 3]", value = "source" },
+  { name = "destination", ty = "[i32; 3]", value = "destination" },
+  { name = "item", ty = "&str", value = "item" },
+  { name = "cancel", ty = "&mut bool", value = "&mut *cancel" },
+]
+
+# Native API 14: registered civic buildings and private parcels respect
+# actual native player block-breaking permission, not only NPC build rules.
+[[injection]]
+id = "protect_break"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_destroy_block"
+helper = "protect_block.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "pos", ty = "[i32; 3]", value = "pos" },
+  { name = "cancel", ty = "&mut bool", value = "&mut *canceled" },
+]
