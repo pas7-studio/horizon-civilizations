@@ -150,3 +150,7 @@ dependencies retain their licenses. Millenaire is a design reference only here.
 No copied GPL Java code, assets, Minecraft resources or Millenaire cultural
 content are included. Minecraft is a trademark of Mojang/Microsoft and a
 legitimate Java Edition account is required by Horizon.
+
+### Verification evidence
+
+The pinned native Horizon compile gate has passed ([GitHub run 42375553368](https://github.com/pas7-studio/horizon-civilizations/actions/runs/42375553368)); Core Rust/Clippy/package checks passed ([run 42375993049](https://github.com/pas7-studio/horizon-civilizations/actions/runs/42375993049)). These are **build/test checks only**. Neither run launches an interactive world, and physical construction/NPC behavior still requires the disposable-world scenarios in docs/TEST_PLAN.md. Follow-up changes to scheduling and crash-recovery must pass their own CI before merge.

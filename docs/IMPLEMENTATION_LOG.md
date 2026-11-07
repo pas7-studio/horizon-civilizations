@@ -39,3 +39,10 @@
 - Improved Windows save replacement with recoverable `.swap`/`.bak`; skip save on a quarantined world and reject unexpected pending swap on load.
 - Confirmed relevant native APIs and level hook exist in the pinned Horizon SHA through its public source.
 - Ran offline Python 4/4 package/structure tests and checked deterministic `.hnmod` bytes. Rust compiler unavailable, native build, world edits and gameplay NOT tested.
+
+## 2026-11-07 — build recovery and multi-settlement fairness
+
+- Confirmed pinned Horizon native compile PASS (CI run 42375553368) and Core CI PASS (42375993049); no game was launched by CI.
+- Refactored previously ad hoc physical block checks to a side-effect-free Rust inspection contract: unloaded chunks, rollback rewind, obstruction, previously placed blocks and completed jobs.
+- Changed construction selection to rotate among loaded jobs so the first stalled village does not block every other settlement.
+- Added scenario-driven Rust tests and explicit in-game acceptance requirements. Physical building remains experimental until the real-world E2E is captured.

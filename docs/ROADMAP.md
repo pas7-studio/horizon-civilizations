@@ -67,3 +67,11 @@ release until all preceding gates have evidence.
 Production-quality construction still requires explicit plot ownership/claims, collision checks for entities,
 recovery command for blocked projects, safety auditing, block-entity handling, durable cross-chunk save testing,
 and either authoritative mob UUID ownership or a well-scoped identity registry.
+
+## Post-native-build reliability work (2026-11-07)
+
+- [x] The pinned Horizon native compile gate passed on GitHub Actions run 42375553368.
+- [x] Core Rust/Clippy/package gate passed on run 42375993049.
+- [x] Construction reconciliation extracted to a pure decision engine and covered by Rust tests for rollback, foreign blocks, loaded chunks and completion (new CI still required).
+- [x] Physical construction opportunities rotate across loaded, unblocked villages so an unloaded first settlement cannot starve others (new CI still required).
+- [ ] Real in-game E2E: launch, NPC navigation, hut construction/restart, multi-village fairness.
