@@ -378,3 +378,12 @@ Keep the area loaded. Do **not** run `/civ actors`, `/civ construct` or
 read-only snapshot; NPC movement and production still require visual checks.
 If the build or launcher fails, capture exact command, source SHA, error log
 and the first failing test rather than assuming the game code worked.
+
+## Physical bakery stock control (not yet game-verified)
+
+A completed bakery no longer attempts infinite bread production in source:
+it stops at two loaves per living resident, capped at 64, counting native
+barrel bread plus confirmed incoming bread and bread already carried by
+the baker. Player bread purchases can reopen demand. If the actual native
+barrel state is unavailable, wheat extraction and crafting pause. This
+does not count abstract day-simulation food. Test cases: 182–188.
