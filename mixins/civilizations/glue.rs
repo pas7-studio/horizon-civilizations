@@ -1149,17 +1149,18 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             "no explicit saved-state blocker; check natural plots, NPC routes and native game logs".to_owned()
         };
         let gather_state = if let Some(stem) = &v.oak_stem {
-            format!("oak log {}/{} at {:?}, issued={}, pickup={}, blocked={}",
+            format!("oak log {}/{} at {:?}, issued={}, native={}, pickup={}, blocked={}",
                 stem.cursor + 1, stem.height,
                 v.gather_job.as_ref().map(|job| (job.position, job.worker_id)),
                 v.gather_job.as_ref().is_some_and(|job| job.issued),
+                v.gather_job.as_ref().is_some_and(|job| job.native_edit_confirmed),
                 v.gather_job.as_ref().is_some_and(|job| job.pickup_witnessed),
                 v.gather_job.as_ref().is_some_and(|job| job.blocked))
         } else {
             v.gather_job.as_ref().map(|job| format!(
-                "{:?} at {:?}, worker={:?}, issued={}, pickup={}, blocked={}",
+                "{:?} at {:?}, worker={:?}, issued={}, native={}, pickup={}, blocked={}",
                 job.good, job.position, job.worker_id, job.issued,
-                job.pickup_witnessed, job.blocked
+                job.native_edit_confirmed, job.pickup_witnessed, job.blocked
             )).unwrap_or_else(|| "idle".to_owned())
         };
         reply(game, format!(
@@ -1197,9 +1198,10 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             stem.cursor + 1, stem.height, stem.root
         )).unwrap_or_default();
         reply(game, format!(
-            "{} gather audit: {:?} at {:?}, worker stand {:?}, assigned resident {:?}, planned native block {}, issued={}, source pickup witnessed={}, blocked={}, live native block {:?}.{} Blocked ISSUED receipts are quarantined. Inspect world save and original block before OP /civ discardgather {} intact|empty; abandonment provides ZERO materials.",
+            "{} gather audit: {:?} at {:?}, worker stand {:?}, assigned resident {:?}, planned native block {}, issued={}, native edit confirmed={}, source pickup witnessed={}, blocked={}, live native block {:?}.{} Blocked ISSUED receipts are quarantined. Inspect world save and original block before OP /civ discardgather {} intact|empty; abandonment provides ZERO materials.",
             v.name, job.good, job.position, job.stand, job.worker_id, job.source_block(),
-            job.issued, job.pickup_witnessed, job.blocked, observed, stem_progress, v.name
+            job.issued, job.native_edit_confirmed, job.pickup_witnessed,
+            job.blocked, observed, stem_progress, v.name
         ));
         return;
     }
