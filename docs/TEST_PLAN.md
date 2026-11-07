@@ -859,3 +859,44 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
      (or discover) with controlled fake executable stubs. These verify
      only release-gate correctness; on Linux 7/7 PASS. Repeat on
      Windows for platform parity, then native-gate with REAL tools.
+
+## Native executable attestation, gate correctness and first-play evidence
+
+262. From exact current branch execute the local gate with
+     `--build-client`. On true success, report.json MUST list
+     pinned native Horizon revision, native check verified,
+     expected client executable path, actual byte count and SHA-256.
+263. Simulate/observe native build command exits 0 but compiled
+     Horizon executable is missing or empty. Gate MUST become
+     BLOCKED with first blocker describing absent binary; no
+     READY_FOR_GAMEPLAY_E2E false positives.
+264. Native build JSON with wrong horizon_revision, missing
+     cargo_check=PASS, missing modded path or wrong client output
+     path MUST fail even with native command exit 0.
+265. `--native-check` requires pinned native Cargo check and
+     valid build report but NOT a client executable. Source-only
+     gate is explicitly a weaker assurance level.
+266. Confirm report.md/report.json preserve exact SHA, branch,
+     stage output and SHA-256 of a genuinely fresh compiled
+     client. Never substitute a fabricated/hash-only artifact
+     for a Rust/native compilation pass.
+267. Run `py -3 -m unittest discover -s tests
+     -p test_first_play_gate_cli.py -v` locally on Windows:
+     the ten mock harness tests must PASS; these never certify
+     actual Rust or gameplay. Then run the full local gate
+     with REAL Rust 1.95 and owned Minecraft Java resources
+     in a disposable instance, followed by the prior in-game
+     E2E and integrity scenarios.
+
+## Compile-first local release gate (revision of native acceptance)
+
+268. Run `py -3 tools/first_play_gate.py --dry-run --build-client`
+     on the latest branch. Verify `cargo-test` executes before
+     Clippy, then strict rustfmt/cargo fmt checks and native build.
+269. Simulate a Rust compile error AND an unformatted source:
+     the first stage and first blocker must be cargo-test, not fmt.
+270. Simulate cargo passing but cargo fmt failing: no
+     SOURCE_CHECK_PASS or READY_FOR_GAMEPLAY_E2E is allowed.
+271. With all real source stages passing, the previous strict native
+     client executable, SHA-256 and manual game-world gates still apply.
+     This ordering improvement is not native compilation evidence.

@@ -523,3 +523,36 @@
   missing toolchain still yields a traceable report.
 - No Rust cargo test, native Horizon compile, or Minecraft E2E run
   in this environment. Previous source work stays Draft.
+
+## 2026-11-08 — build success must include a real native executable
+
+- Found a false-positive readiness defect in PR #32: a native command
+  returning 0 was sufficient to announce READY_FOR_GAMEPLAY_E2E,
+  even if the client executable was missing. Fixed it by parsing
+  the pinned native build script's final JSON evidence and checking
+  Horizon revision, cargo_check, checkout output directory, and
+  the exact native executable file path/size.
+- Report now records client SHA-256, bytes and path; a bad/missing
+  artifact or mismatched upstream revision overrides command success
+  and blocks the gate, with the failed stage named.
+- Actually executed ten Python unittest harness checks on Linux,
+  including new false exit-zero/missing binary, wrong native revision,
+  and native-only check without client binary; 10/10 PASS. Verified
+  exact GitHub Python text against the locally tested script.
+- Rust toolchain/native build/full Python source tests/Minecraft
+  world E2E remain unavailable and NOT RUN; all stacked PRs Draft.
+
+## 2026-11-08 — prioritize compiler failure over cosmetic formatting
+
+- Reviewed current local build gate and found `cargo fmt --check`
+  originally ran before any compilation. The accumulated prototype's
+  Rust formatting could stop the first build before reporting an
+  actionable type/borrow/compile error.
+- Reordered stage plan to `cargo test` → `cargo clippy -D warnings`
+  → strict formatting checks → full Python unittest → packaging/static
+  checks → optional pinned Horizon native build/client.
+- Real local harness exercise: 12/12 mock-toolchain tests PASS, including
+  simulated compiler AND formatter failure where compiler must be first,
+  plus simulated format-only failure that still blocks full PASS.
+- Exact GitHub Python files matched the locally executed source by
+  length and weighted checksum. No Rust build or Minecraft E2E run.

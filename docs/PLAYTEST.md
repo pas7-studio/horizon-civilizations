@@ -559,3 +559,37 @@ new source SHA. Only a successful real `--build-client` can reach
 binary with owned Minecraft Java assets and manual disposable-world
 E2E. Follow TEST_PLAN 255–261 plus previous physical gameplay cases.
 
+
+## Latest first-play gate — verify an actual native game binary
+
+Checkout `fix/first-play-binary-evidence-v0115`:
+
+```powershell
+git fetch origin
+git switch fix/first-play-binary-evidence-v0115
+py -3 tools/first_play_gate.py --dry-run --build-client
+py -3 tools/first_play_gate.py --build-client
+```
+
+This release gate now checks the pinned `native_build.py` JSON
+and **the actual compiled Horizon executable** before it can
+report READY_FOR_GAMEPLAY_E2E. It records the binary's SHA-256,
+size, path and source SHA. A missing executable with exit=0,
+bad pinned revision or incorrect output path becomes BLOCKED.
+
+Read `target/first-play-gate/<UTC>/report.md`, JSON and first
+failing step log. No GitHub Actions or deployment are run.
+The 10/10 local Python mock harness tests are NOT real
+Rust compilation, nor Minecraft gameplay tests; use a
+disposable game instance with owned Java assets for E2E.
+
+## Updated local order: diagnose actual compiler errors first
+
+On `fix/first-play-binary-evidence-v0115`, run
+`py -3 tools/first_play_gate.py --build-client` without source
+formatting. Gate now executes `cargo test` before Clippy/formatting,
+so the first build failure is actionable. Formatting must still PASS;
+the script never silently changes Rust source. Open
+`target/first-play-gate/<UTC>/report.md` for the first blocker.
+The runner's 12/12 mock harness tests passed on Linux; native
+compilation/Minecraft gameplay remain unverified.

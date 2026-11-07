@@ -1,3 +1,19 @@
+# Current source branch — native binary evidence gate (2026-11-08)
+
+- Latest stacked Draft `fix/first-play-binary-evidence-v0115`,
+  based on PR #32. Keep GitHub Actions OFF and `main` untouched.
+- `tools/first_play_gate.py --build-client` must reject
+  native command exit=0 without a valid exact-path Horizon client.
+  Validate pinned native JSON, horizon_revision, cargo_check
+  and modded checkout path; store binary SHA-256 and size.
+- The Python gate harness now has 10 mock tests, actually
+  executed 10/10 PASS on Linux. They are **NOT** proof
+  of a true Cargo build/native game E2E.
+- Continue from the first actual compile failure. No release
+  until real native Horizon client and disposable-world E2E.
+
+---
+
 # First-play evidence gate — current newest stacked source
 
 - Branch `chore/first-play-native-validation-v0115`, stacked after

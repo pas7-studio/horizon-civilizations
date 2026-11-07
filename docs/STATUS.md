@@ -1,3 +1,45 @@
+# 2026-11-08 — compiler-first local diagnostics (updated PR #33)
+
+- [x] Release gate now runs real `cargo test` first, then Clippy,
+  then the still-required strict `cargo fmt --check` and standalone
+  mixin rustfmt checks. A formatting failure can no longer hide the
+  first Rust compiler failure.
+- [x] Two additional local harness cases verify compiler error takes
+  priority and formatting remains a PASS blocker.
+- [x] **12/12 harness unittests actually executed with mock executables
+  and passed on Linux/Python 3.13**. Python syntax compilation and
+  `--dry-run --build-client` step order also passed.
+- [ ] No real cargo compiler or native Horizon client is available in
+  this environment. Still **NOT gameplay verified**.
+
+---
+
+# Latest Draft — prevent false native client build readiness
+
+Stacked branch `fix/first-play-binary-evidence-v0115`, based on
+PR #32; `main` unchanged, GitHub Actions OFF, version 0.1.14.
+
+- [x] Release gate now parses the terminal JSON result of the pinned
+  `tools/native_build.py` rather than trusting process exit=0 alone.
+- [x] Requires exact compatible `horizon_revision`,
+  `cargo_check=PASS`, expected modded output path, and when
+  `--build-client` is supplied, the matching native client binary
+  must actually exist at the expected path and be nontrivial.
+- [x] Adds binary path, file size, SHA-256 and native result
+  verification to `report.json`/Markdown evidence; missing
+  binary or incorrect revision is a BLOCKED gate with log.
+- [x] Controlled mock tests **10/10 actually executed on Linux**
+  with Python 3.13; specifically falsified exit-zero build without
+  an executable and a wrong pinned commit. Separate native-check
+  works without requiring a client file.
+- [ ] Actual cargo/Rustfmt/Clippy/full Python project suite,
+  native Horizon client compilation, and in-game E2E remain
+  **NOT EXECUTED** in this environment. No playable claim.
+- [ ] Before release, use the exact Windows command documented in
+  PLAYTEST, review first error and run disposable-world tests.
+
+---
+
 # Latest Draft: executable local first-play gate / evidence capture
 
 Latest stacked branch `chore/first-play-native-validation-v0115` follows

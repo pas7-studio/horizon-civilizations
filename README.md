@@ -1,3 +1,30 @@
+## Current Draft — release gate verifies the actual native client artifact
+
+Newest stacked branch: `fix/first-play-binary-evidence-v0115`.
+Compared to #32, `tools/first_play_gate.py` now **rejects a native
+command returning exit code 0 if no valid Horizon client executable
+was produced**. It validates the final JSON record emitted by pinned
+`native_build.py`, the expected Horizon commit, `cargo_check=PASS`,
+the exact modded output path, then checks that the reported executable
+really exists at the expected native build location. It captures file
+size and SHA-256 into report.json/report.md for evidence. Missing,
+wrong-path or tiny binaries fail the gate instead of reporting
+`READY_FOR_GAMEPLAY_E2E`.
+
+The release-gate Python mock suite was actually executed on Linux:
+**10/10 PASS**. These are harness tests with fake cargo and native
+binary; **real Rust/native build and Minecraft gameplay remain
+NOT EXECUTED**. Main untouched, Actions OFF.
+
+```powershell
+git fetch origin
+git switch fix/first-play-binary-evidence-v0115
+py -3 tools/first_play_gate.py --build-client
+```
+
+See [first-play evidence](docs/PLAYTEST.md) and
+[acceptance plan](docs/TEST_PLAN.md).
+
 ## Current next gate: reproducible local build evidence (Draft)
 
 The latest stacked source branch is `chore/first-play-native-validation-v0115`.
