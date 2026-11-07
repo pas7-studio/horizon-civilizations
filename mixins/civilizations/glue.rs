@@ -616,7 +616,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
         let plots: Vec<String> = village.player_parcels.iter()
             .filter(|plot| plot.owner == actor).take(32)
             .map(|plot| format!(
-                "{:?} ({})", plot.origin, if plot.commissioned { "NPC commission" } else { "private, build freely" }
+                "{:?} ({})", plot.origin, if plot.commissioned { "private hut owned or commissioned" } else { "empty private parcel; build freely" }
             )).collect();
         reply(game, format!(
             "{} owns {} purchased plots; {} parcels registered in {}. {}. These protect against CIVILIZATIONS NPC edits only, not external players or mods.",
