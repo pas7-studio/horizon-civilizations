@@ -2245,22 +2245,21 @@ fn barrel_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
             && DailyPhase::at(game.world.day_time).on_shift(Job::Baker)
             && storage_worker_near(game, state.world.as_ref().unwrap(), id, Job::Baker);
         if bakery_needs_wheat {
-            // The bakery must stop ordering wheat once actual bread stock and
-            // saved deliveries cover the settlement's bounded food buffer.
-            // A missing/unloaded barrel is NOT an empty barrel.
-            let Some(stored) = physical_barrel_stock(game, &dimension, village.center)
-            else { continue; };
-            let physical_bread = stored.iter().find(|(good, _)| *good == Good::Bread)
-                .map(|(_, count)| *count).unwrap_or(0);
-            if !crate::game::civilizations_core::needs_real_bread(&village, physical_bread) {
-                continue;
-            }
-            let missing = crate::game::civilizations_core::BREAD_WHEAT_RECIPE
-                - village.bakery.as_ref().unwrap().wheat_escrow;
-            if request_workshop_pickup(
-                game, state, id, Good::Wheat, missing, BarrelDirection::ToBakerIngredients,
-            )? {
-                return Ok(());
+            // Do not order wheat once native bread stock + confirmed incoming
+            // deliveries cover the buffer; continue servicing other warehouse
+            // goods in the same village even when baking is not required.
+            if let Some(stored) = physical_barrel_stock(game, &dimension, village.center) {
+                let physical_bread = stored.iter().find(|(good, _)| *good == Good::Bread)
+                    .map(|(_, count)| *count).unwrap_or(0);
+                if crate::game::civilizations_core::needs_real_bread(&village, physical_bread) {
+                    let missing = crate::game::civilizations_core::BREAD_WHEAT_RECIPE
+                        - village.bakery.as_ref().unwrap().wheat_escrow;
+                    if request_workshop_pickup(
+                        game, state, id, Good::Wheat, missing, BarrelDirection::ToBakerIngredients,
+                    )? {
+                        return Ok(());
+                    }
+                }
             }
         }
 
