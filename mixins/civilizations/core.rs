@@ -27,6 +27,7 @@ pub const COUNCIL_FORECAST_DAYS: u8 = 3;
 pub const MAX_COUNCIL_FORECAST_DAYS: u8 = 7;
 pub const LAND_PRICE_COINS: u64 = 10;
 pub const COMMISSION_PRICE_COINS: u64 = 15;
+pub const FINISHED_HUT_PRICE_COINS: u64 = 35;
 pub const MAX_PLAYER_PARCELS: usize = 32;
 
 fn autonomous_by_default() -> bool { true }
@@ -933,7 +934,13 @@ impl Settlement {
         }
         // Avoid growing infinitely many abstract houses with a fixed population.
         let desired_houses = self.population().div_ceil(3).saturating_add(1);
-        if self.count(Job::Builder) > 0 && self.population() > 0 && self.houses < desired_houses {
+        // Homes sold to players or commissioned privately are no longer
+        // public stock. The abstract economy must eventually replace them
+        // using its normal wood/stone costs rather than mint free houses.
+        let private_houses = self.player_parcels.iter()
+            .filter(|plot| plot.commissioned).count() as u32;
+        let public_houses = self.houses.saturating_sub(private_houses);
+        if self.count(Job::Builder) > 0 && self.population() > 0 && public_houses < desired_houses {
             // Buildings are simulated here. Physical blocks are not placed until a
             // construction adapter explicitly commits a structure in the level.
             if self.take(Good::Wood, 8) {
@@ -1324,6 +1331,42 @@ impl World {
         let name = self.settlements[&village_id].name.clone();
         self.event(format!("{name}: player-owned 5x5 parcel sold at {},{},{}", origin[0], origin[1], origin[2]));
         Ok(LAND_PRICE_COINS)
+    }
+
+    /// Buy a finished, genuinely recorded public hut, not an abstract house.
+    /// Native command verifies its real loaded Minecraft blocks first.
+    /// Residents leave the sold building; future daily economy may pay for
+    /// replacement public housing using normal material consumption.
+    pub fn buy_finished_house(
+        &mut self, player_id: &str, village_id: u64, origin: [i32; 3]
+    ) -> Result<u64, String> {
+        let v = self.settlements.get(&village_id).ok_or("unknown settlement")?;
+        if !v.visual_sites.contains(&origin) {
+            return Err("no completed physical village hut at this site".into());
+        }
+        let p = self.players.get(player_id).ok_or("join the village first")?;
+        if p.settlement != Some(village_id) { return Err("join the village first".into()); }
+        if p.coins < FINISHED_HUT_PRICE_COINS { return Err("not enough civic coins for this hut".into()); }
+        if v.player_parcels.len() >= MAX_PLAYER_PARCELS { return Err("plot registry is full".into()); }
+        let treasury_after = v.treasury_coins.checked_add(FINISHED_HUT_PRICE_COINS)
+            .ok_or("village treasury overflow")?;
+        if self.settlements.values().filter(|s| s.dimension == v.dimension).any(|s| {
+            s.player_parcels.iter().any(|plot| near_plot(plot.origin, origin))
+        }) {
+            return Err("this physical hut is already privately owned".into());
+        }
+        self.players.get_mut(player_id).unwrap().coins -= FINISHED_HUT_PRICE_COINS;
+        let v = self.settlements.get_mut(&village_id).unwrap();
+        v.player_parcels.push(PlayerParcel {
+            origin, owner: player_id.to_owned(), commissioned: true
+        });
+        v.treasury_coins = treasury_after;
+        let name = v.name.clone();
+        self.event(format!(
+            "{name}: finished hut sold into private ownership at {},{},{}",
+            origin[0], origin[1], origin[2]
+        ));
+        Ok(FINISHED_HUT_PRICE_COINS)
     }
 
     /// Commission a physical hut on a bought plot. This is a WORLD-JSON
