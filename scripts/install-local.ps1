@@ -22,8 +22,12 @@ elseif (Get-Command python -ErrorAction SilentlyContinue) { $PythonExe = 'python
 else { throw 'Python 3.11+ is required.' }
 Push-Location $Root
 try {
-    & cargo fmt --all --check
+    # The source-only bundle may not arrive rustfmt-clean; normalize it
+    # before checking/compiling so a fresh checkout is installable.
+    & cargo fmt --all
     if ($LASTEXITCODE -ne 0) { throw 'cargo fmt failed' }
+    & cargo fmt --all --check
+    if ($LASTEXITCODE -ne 0) { throw 'cargo fmt --check failed' }
     & cargo test
     if ($LASTEXITCODE -ne 0) { throw 'cargo test failed' }
     & $PythonExe @PythonArgs tools/package.py
