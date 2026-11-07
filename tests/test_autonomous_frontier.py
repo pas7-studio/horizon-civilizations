@@ -101,7 +101,8 @@ class AutonomousFrontierContracts(unittest.TestCase):
 
     def test_real_rust_regressions_cover_join_limit_and_roundtrip(self):
         tests = CORE.split("mod autonomous_frontier_tests", 1)[1]
-        self.assertEqual(tests.count("#[test]"), 5)
+        self.assertEqual(tests.count("#[test]"), 6)
+        self.assertIn("reload_cannot_found_a_second_npc_town_on_the_same_site", tests)
         self.assertIn("npc_founding_creates_full_independent_society_without_player_gifts", tests)
         self.assertIn("a_real_player_may_join_an_independent_village", tests)
         self.assertIn("autonomous_villages_are_bounded", tests)
