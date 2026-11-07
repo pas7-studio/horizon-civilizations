@@ -6,6 +6,8 @@ use std::collections::{BTreeMap, BTreeSet};
 pub const SCHEMA: u32 = 1;
 pub const MAX_SETTLEMENTS: usize = 64;
 pub const MAX_SIM_DAYS: u32 = 30;
+/// Bounded on-disk audit of observed visual harvests.
+pub const MAX_HARVEST_RECEIPTS: usize = 32;
 pub const MIN_SETTLEMENT_DISTANCE: i64 = 192;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
@@ -308,6 +310,15 @@ pub enum FarmStage {
     Replanting,
 }
 
+/// Evidence that all eight crops were observed as physically harvested.
+/// This does NOT authorize any warehouse stock, player items or coin credit.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct HarvestReceipt {
+    pub sequence: u64,
+    pub world_day: u64,
+    pub crops: u8,
+}
+
 /// One operator-approved field (8 crops around a permanent center water block).
 /// Harvest is visual-only: Minecraft blocks and simulation stock are distinct.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -319,6 +330,11 @@ pub struct FarmPlot {
     pub blocked: bool,
     #[serde(default)]
     pub completed_cycles: u32,
+    /// Persistent lifetime counter: older receipt entries may be compacted.
+    #[serde(default)]
+    pub harvest_sequence: u64,
+    #[serde(default)]
+    pub harvest_receipts: Vec<HarvestReceipt>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq)]
@@ -621,6 +637,22 @@ impl World {
                 let count = if plot.stage == FarmStage::Preparing { farm_plan(plot.origin).len() } else { 8 };
                 if plot.cursor > count { return Err("farm cursor beyond phase".into()); }
                 if plot.completed_cycles > 1_000_000 { return Err("farm cycle counter invalid".into()); }
+                if plot.harvest_receipts.len() > MAX_HARVEST_RECEIPTS {
+                    return Err("farm harvest receipt history too large".into());
+                }
+                let mut previous = 0_u64;
+                for receipt in &plot.harvest_receipts {
+                    if receipt.sequence <= previous
+                        || receipt.sequence > plot.harvest_sequence
+                        || receipt.crops != 8
+                        || receipt.world_day > self.day {
+                        return Err("farm receipt invalid or out of order".into());
+                    }
+                    previous = receipt.sequence;
+                }
+                if plot.harvest_receipts.last().is_some_and(|r| r.sequence != plot.harvest_sequence) {
+                    return Err("farm receipt tail does not match sequence".into());
+                }
             }
             if village.visual_sites.len() > 32 { return Err("visual building site cap exceeded".into()); }
             if village.visual_sites.len() as u32 > village.houses { return Err("visual buildings exceed houses".into()); }
@@ -825,6 +857,7 @@ impl World {
         }
         self.settlements.get_mut(&village_id).unwrap().farm = Some(FarmPlot {
             origin, stage: FarmStage::Preparing, cursor: 0, blocked: false, completed_cycles: 0,
+            harvest_sequence: 0, harvest_receipts: Vec::new(),
         });
         Ok(())
     }
@@ -840,6 +873,7 @@ impl World {
     }
 
     pub fn advance_farm(&mut self, village_id: u64, decision: FarmDecision) -> Result<bool, String> {
+        let world_day = self.day;
         let village = self.settlements.get_mut(&village_id).ok_or("unknown settlement")?;
         let farm = village.farm.as_mut().ok_or("no farm")?;
         match decision {
@@ -869,7 +903,20 @@ impl World {
                 farm.stage = match farm.stage {
                     FarmStage::Preparing => FarmStage::Growing,
                     FarmStage::Growing => FarmStage::Harvesting,
-                    FarmStage::Harvesting => FarmStage::Replanting,
+                    FarmStage::Harvesting => {
+                        let sequence = farm.harvest_sequence.checked_add(1)
+                            .ok_or("harvest sequence overflow")?;
+                        farm.harvest_sequence = sequence;
+                        farm.harvest_receipts.push(HarvestReceipt {
+                            sequence, world_day, crops: 8,
+                        });
+                        if farm.harvest_receipts.len() > MAX_HARVEST_RECEIPTS {
+                            farm.harvest_receipts.remove(0);
+                        }
+                        // Receipt + phase are committed in one JSON save.
+                        // No inventory/warehouse/coin credit is applied.
+                        FarmStage::Replanting
+                    },
                     FarmStage::Replanting => {
                         farm.completed_cycles = farm.completed_cycles.saturating_add(1);
                         FarmStage::Growing
@@ -1390,7 +1437,8 @@ mod visual_farm_tests {
     use super::*;
 
     fn plot() -> FarmPlot {
-        FarmPlot { origin: [25, 72, -20], stage: FarmStage::Preparing, cursor: 0, blocked: false, completed_cycles: 0 }
+        FarmPlot { origin: [25, 72, -20], stage: FarmStage::Preparing, cursor: 0, blocked: false,
+            completed_cycles: 0, harvest_sequence: 0, harvest_receipts: Vec::new() }
     }
     fn block(name: &str, age: Option<u8>) -> Option<FarmBlock> {
         Some(FarmBlock { name: name.into(), age })
@@ -1582,5 +1630,163 @@ mod visual_farm_transition_tests {
         assert_eq!(farm.stage, FarmStage::Growing);
         assert_eq!(farm.cursor, 0);
         world.validate().unwrap();
+    }
+}
+
+#[cfg(test)]
+mod harvest_receipt_tests {
+    use super::*;
+
+    fn harvest_world() -> (World, u64) {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0, 70, 0], "operator").unwrap();
+        world.start_farm(id, [20, 70, 0]).unwrap();
+        (world, id)
+    }
+
+    #[test]
+    fn full_harvest_records_once_and_never_mints_stock() {
+        let (mut world, id) = harvest_world();
+        let prior_stock = world.settlements[&id].stock.clone();
+        {
+            let farm = world.settlements.get_mut(&id).unwrap().farm.as_mut().unwrap();
+            farm.stage = FarmStage::Harvesting;
+            farm.cursor = 8;
+        }
+        world.advance_farm(id, FarmDecision::StageComplete).unwrap();
+        let farm = world.settlements[&id].farm.as_ref().unwrap();
+        assert_eq!(farm.stage, FarmStage::Replanting);
+        assert_eq!(farm.harvest_sequence, 1);
+        assert_eq!(farm.harvest_receipts, vec![HarvestReceipt {
+            sequence: 1, world_day: 0, crops: 8,
+        }]);
+        assert_eq!(world.settlements[&id].stock, prior_stock);
+        // Another callback cannot record the same completed harvest again.
+        assert!(world.advance_farm(id, FarmDecision::StageComplete).is_err());
+        assert_eq!(world.settlements[&id].farm.as_ref().unwrap().harvest_sequence, 1);
+        world.validate().unwrap();
+        let decoded: World = serde_json::from_str(&serde_json::to_string(&world).unwrap()).unwrap();
+        decoded.validate().unwrap();
+        assert_eq!(decoded.settlements[&id].farm.as_ref().unwrap().harvest_receipts.len(), 1);
+    }
+
+    #[test]
+    fn receipt_ring_is_bounded_and_rejects_duplicate_or_invalid_evidence() {
+        let (mut world, id) = harvest_world();
+        for _ in 0..MAX_HARVEST_RECEIPTS + 3 {
+            let farm = world.settlements.get_mut(&id).unwrap().farm.as_mut().unwrap();
+            farm.stage = FarmStage::Harvesting;
+            farm.cursor = 8;
+            world.advance_farm(id, FarmDecision::StageComplete).unwrap();
+        }
+        let farm = world.settlements[&id].farm.as_ref().unwrap();
+        assert_eq!(farm.harvest_sequence, (MAX_HARVEST_RECEIPTS + 3) as u64);
+        assert_eq!(farm.harvest_receipts.len(), MAX_HARVEST_RECEIPTS);
+        assert_eq!(farm.harvest_receipts[0].sequence, 4);
+        world.validate().unwrap();
+        let farm = world.settlements.get_mut(&id).unwrap().farm.as_mut().unwrap();
+        farm.harvest_receipts[1].sequence = farm.harvest_receipts[0].sequence;
+        assert!(world.validate().is_err());
+    }
+
+    #[test]
+    fn legacy_farm_missing_audit_fields_loads_with_no_invented_harvests() {
+        let (world, id) = harvest_world();
+        let mut raw: serde_json::Value = serde_json::to_value(&world).unwrap();
+        let map = raw["settlements"][id.to_string()]["farm"].as_object_mut().unwrap();
+        map.remove("harvest_sequence");
+        map.remove("harvest_receipts");
+        let loaded: World = serde_json::from_value(raw).unwrap();
+        loaded.validate().unwrap();
+        let farm = loaded.settlements[&id].farm.as_ref().unwrap();
+        assert_eq!(farm.harvest_sequence, 0);
+        assert!(farm.harvest_receipts.is_empty());
+    }
+}
+
+#[cfg(test)]
+mod harvest_full_cycle_in_memory_tests {
+    use super::*;
+
+    fn plot_world() -> (World, u64, BTreeMap<[i32; 3], FarmBlock>) {
+        let mut world = World::default();
+        let id = world.found("Ashford", "minecraft:overworld", [0, 70, 0], "operator").unwrap();
+        world.start_farm(id, [20, 70, 0]).unwrap();
+        let farm = world.settlements[&id].farm.as_ref().unwrap();
+        let mut blocks = BTreeMap::new();
+        for step in farm_plan(farm.origin) {
+            let name = if step.floor { "minecraft:dirt" } else { "minecraft:air" };
+            blocks.insert(step.pos, FarmBlock { name: name.into(), age: None });
+        }
+        (world, id, blocks)
+    }
+
+    fn run_until_waiting(
+        world: &mut World,
+        village_id: u64,
+        blocks: &mut BTreeMap<[i32; 3], FarmBlock>,
+    ) {
+        for _ in 0..200 {
+            let snapshot = world.settlements[&village_id].farm.as_ref().unwrap().clone();
+            let decision = inspect_farm(&snapshot, |pos| blocks.get(&pos).cloned());
+            match decision {
+                FarmDecision::Place { position, new_block, .. } => {
+                    // Mock the Horizon command without immediately advancing JSON.
+                    blocks.insert(position, FarmBlock {
+                        name: new_block.into(),
+                        age: (new_block == "minecraft:wheat").then_some(0),
+                    });
+                }
+                FarmDecision::Paused => return,
+                FarmDecision::Unloaded | FarmDecision::Blocked { .. }
+                | FarmDecision::InvalidCursor => panic!("valid farm unexpectedly stopped: {:?}", decision),
+                other => {
+                    world.advance_farm(village_id, other).unwrap();
+                }
+            }
+        }
+        panic!("farm did not become idle within bounded work");
+    }
+
+    #[test]
+    fn complete_wheat_cycle_tracks_real_blocks_and_one_audit_receipt() {
+        let (mut world, id, mut blocks) = plot_world();
+        let original_stock = world.settlements[&id].stock.clone();
+
+        // Simulate a block committed to a chunk, followed by a crash before
+        // the world.json cursor is committed. On reload it must be observed.
+        let snapshot = world.settlements[&id].farm.as_ref().unwrap().clone();
+        let first = inspect_farm(&snapshot, |pos| blocks.get(&pos).cloned());
+        let FarmDecision::Place { position, new_block, .. } = first else {
+            panic!("expected first terrain step");
+        };
+        blocks.insert(position, FarmBlock { name: new_block.into(), age: None });
+        world = serde_json::from_str(&serde_json::to_string(&world).unwrap()).unwrap();
+
+        run_until_waiting(&mut world, id, &mut blocks);
+        assert_eq!(world.settlements[&id].farm.as_ref().unwrap().stage, FarmStage::Growing);
+        let plan = farm_plan(world.settlements[&id].farm.as_ref().unwrap().origin);
+        for step in plan.iter().skip(9) {
+            let wheat = blocks.get_mut(&step.pos).unwrap();
+            assert_eq!(wheat.name, "minecraft:wheat");
+            assert_eq!(wheat.age, Some(0));
+            wheat.age = Some(7);
+        }
+        run_until_waiting(&mut world, id, &mut blocks);
+        let farm = world.settlements[&id].farm.as_ref().unwrap();
+        assert_eq!(farm.stage, FarmStage::Growing);
+        assert_eq!(farm.completed_cycles, 1);
+        assert_eq!(farm.harvest_sequence, 1);
+        assert_eq!(farm.harvest_receipts.len(), 1);
+        assert_eq!(world.settlements[&id].stock, original_stock);
+        for step in plan.iter().skip(9) {
+            let planted = blocks.get(&step.pos).unwrap();
+            assert_eq!(planted.name, "minecraft:wheat");
+            assert_eq!(planted.age, Some(0));
+        }
+        world.validate().unwrap();
+        let loaded: World = serde_json::from_str(&serde_json::to_string(&world).unwrap()).unwrap();
+        loaded.validate().unwrap();
+        assert_eq!(loaded.settlements[&id].farm.as_ref().unwrap().harvest_sequence, 1);
     }
 }

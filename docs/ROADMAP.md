@@ -85,3 +85,11 @@ and either authoritative mob UUID ownership or a well-scoped identity registry.
 - [x] No generated item drops or warehouse credits from physical harvest (prevents double accounting against abstract daily stock).
 - [ ] Gameplay evidence: irrigation, crop growth under vanilla random ticks, conditional harvest and replant, unloaded-chunk restart recovery, and client logs.
 - [ ] Durable physical-harvest-to-ledger credit journal and full economic coupling. **Do not claim this is implemented yet.**
+
+## Harvest audit milestone (v0.1.5)
+
+- [x] Save a bounded monotonic audit of eight-crop visual harvests, including observed world day.
+- [x] Keep receipt creation and harvest phase transition together in mod JSON, with legacy load defaults.
+- [x] Read-only /civ harvests NAME for tracking observed physical work.
+- [ ] Cross-store atomicity between Minecraft chunks and mod JSON; no economic stock credits until verified.
+- [ ] In-game evidence: confirmed crop removal, audit persistence after restart, corruption detection and rollback.

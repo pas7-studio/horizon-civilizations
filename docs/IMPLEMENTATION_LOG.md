@@ -72,3 +72,10 @@
 - Pending GitHub Core/native checks and real-world E2E, including vanilla crop hydration/growth.
 
 - Added fail-closed operator `/civ recoverfarm NAME`, with world-block preflight before clearing a blocked farm; simple unblock without checks is forbidden.
+
+## 2026-11-07 — v0.1.5 harvest evidence
+
+- Created HarvestReceipt journal on FarmPlot: monotonic sequence, world day, eight crops; bounded 32 entries.
+- Receipt and Harvesting->Replanting transition mutate the same persisted JSON object.
+- Added /civ harvests NAME inspection and core tests for duplicate completion, bounded rollover, validation and legacy JSON.
+- No economy credits or player item drops from receipts; two-store recovery remains future work.

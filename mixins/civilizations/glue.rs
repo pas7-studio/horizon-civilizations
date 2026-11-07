@@ -119,6 +119,7 @@ pub fn register(commands: &mut Vec<NativeCommand>) {
         "civ", "civ help", "civ list", "civ info", "civ info <name:word>",
         "civ roster <name:word>",
         "civ construction <name:word>", "civ farming <name:word>",
+        "civ harvests <name:word>",
         "civ join <name:word>", "civ title", "civ promote", "civ history",
         "civ sell <good:word> <amount:integer>", "civ buy <good:word> <amount:integer>",
     ] {
@@ -480,7 +481,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
     let actor = format!("{:032x}", player.uuid);
     let action = args.next().unwrap_or("help");
     if action == "help" {
-        reply(game, "Civilizations: /civ list | info [name] | roster <name> | construction <name> | farming <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, day [days], construct <name>, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
+        reply(game, "Civilizations: /civ list | info [name] | roster <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, day [days], construct <name>, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
         return;
     }
     if action == "list" {
@@ -499,6 +500,26 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
         reply(game, format!("{} actors: {}/{} nearby and loaded | {}", s.name, linked.len(), s.population(), listing.join(", ")));
         return;
     }
+    if action == "harvests" {
+        let name = args.next().unwrap_or("");
+        let Some(village) = world.by_name(name) else {
+            error(game, "unknown settlement");
+            return;
+        };
+        let Some(farm) = &village.farm else {
+            reply(game, format!("{}: no physical farm", village.name));
+            return;
+        };
+        let details: Vec<String> = farm.harvest_receipts.iter().rev().take(5)
+            .map(|receipt| format!("#{} day {} ({} crops)",
+                receipt.sequence, receipt.world_day, receipt.crops)).collect();
+        reply(game, format!(
+            "{} visual harvest evidence: {} recorded harvests, {} kept in bounded log. {}. No physical stock has been credited.",
+            village.name, farm.harvest_sequence, farm.harvest_receipts.len(),
+            if details.is_empty() { "No harvest receipts".to_owned() } else { details.join(" | ") },
+        ));
+        return;
+    }
     if action == "farming" {
         let name = args.next().unwrap_or("");
         let Some(settlement) = world.by_name(name) else {
@@ -507,10 +528,10 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
         };
         let message = if let Some(farm) = &settlement.farm {
             format!(
-                "{} 3x3 crop field at {:?}: {:?}, {}/{} steps, blocked={}, completed visual cycles={}. No farm stock is minted.",
+                "{} 3x3 crop field at {:?}: {:?}, {}/{} steps, blocked={}, completed visual cycles={}, observed harvest batches={}. No farm stock is minted.",
                 settlement.name, farm.origin, farm.stage, farm.cursor,
                 if farm.stage == FarmStage::Preparing { farm_plan(farm.origin).len() } else { 8 },
-                farm.blocked, farm.completed_cycles,
+                farm.blocked, farm.completed_cycles, farm.harvest_sequence,
             )
         } else {
             format!("{} has no farm; OP: select empty 3x3 natural patch 12..80 blocks away, /civ farm {}", settlement.name, settlement.name)
