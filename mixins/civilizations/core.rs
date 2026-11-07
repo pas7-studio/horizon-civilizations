@@ -1674,9 +1674,6 @@ impl World {
         let p = self.players.get(player_id).ok_or("join the village first")?;
         if p.settlement != Some(village_id) { return Err("join this village before commissioning".into()); }
         if p.coins < COMMISSION_PRICE_COINS { return Err("not enough coins for a building commission".into()); }
-        if village.quantity(Good::Wood) < 8 || village.quantity(Good::Stone) < 6 {
-            return Err("village requires 8 wood and 6 stone for the commission".into());
-        }
         let houses = village.houses.checked_add(1).ok_or("house count overflow")?;
         let pending = village.pending_visual_buildings.checked_add(1).ok_or("pending job overflow")?;
         let treasury_after = village.treasury_coins.checked_add(COMMISSION_PRICE_COINS)
@@ -1686,7 +1683,10 @@ impl World {
         // the same save object. The command adapter rolls back on save error.
         self.players.get_mut(player_id).unwrap().coins -= COMMISSION_PRICE_COINS;
         let village = self.settlements.get_mut(&village_id).unwrap();
-        assert!(village.take(Good::Wood, 8) && village.take(Good::Stone, 6));
+        // The owner's labor fee pays the civic treasury. The physical
+        // bill-of-materials is charged exactly once later, immediately
+        // before the first world block, by reserve_hut_supplies().
+        // No virtual abstract stone/wood may pay for that construction.
         village.houses = houses;
         village.pending_visual_buildings = pending;
         village.treasury_coins = treasury_after;
