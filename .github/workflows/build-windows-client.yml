@@ -3,7 +3,14 @@ on:
   workflow_dispatch:
   push:
     branches:
+      - main
       - ci/windows-client-smoke
+    paths:
+      - '.github/workflows/build-windows-client.yml'
+      - 'mixins/**'
+      - 'compatibility.json'
+      - 'tools/native_build.py'
+      - 'Cargo.toml'
 permissions:
   contents: read
 jobs:
