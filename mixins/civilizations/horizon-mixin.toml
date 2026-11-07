@@ -81,3 +81,18 @@ bindings = [
   { name = "kind", ty = "&str", value = "kind" },
   { name = "claimed", ty = "&mut bool", value = "&mut *claimed" },
 ]
+
+# Native API 233: cancel unpriced access to a settlement's public barrels.
+# This does NOT claim unrelated vanilla or player-owned containers.
+[[injection]]
+id = "warehouse_inventory"
+kind = "HEAD"
+target = "horizon_client::game::native_hooks::Game<'_>::native_inventory_block_start"
+helper = "warehouse_block_start.rs"
+bindings = [
+  { name = "game", ty = "&mut crate::game::Game<'_>", value = "&mut *self" },
+  { name = "player", ty = "u128", value = "player" },
+  { name = "name", ty = "&str", value = "name" },
+  { name = "pos", ty = "[i32; 3]", value = "pos" },
+  { name = "cancel", ty = "&mut bool", value = "&mut *cancel" },
+]
