@@ -162,3 +162,15 @@ follow the local compilation instructions above on this new branch;
 GitHub Actions are intentionally disabled. The forecast excludes war
 attrition, player trades and physical farming, and must not be described
 as an exact future simulation or a financial ledger.
+
+### Simplified one-command Windows validation (optional)
+
+Instead of manually repeating the Rust and Python commands above, use
+`./scripts/validate-local.ps1 -Format` on a fresh checkout of
+`feat/civic-council-priorities-v0110`, followed by
+`./scripts/validate-local.ps1 -BuildClient` for the pinned native
+integration and executable. Omit `-Format` to refuse unformatted sources
+without modifying them. `-Format` explicitly changes local source files;
+all commands may create `target/` artifacts. Rust 1.95, Python 3.11+,
+Git and enough available disk are required. Native compile needs external
+network access for upstream Git sources; no GitHub Actions are used.
