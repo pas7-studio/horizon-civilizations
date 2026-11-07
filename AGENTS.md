@@ -1,3 +1,20 @@
+# Latest assignment gate — 2026-11-08
+
+- Work on `feat/assigned-resource-courier-v0115`, stacked on PR #28.
+  Do NOT enable GitHub Actions, merge Drafts, or claim a playable game.
+- `GatherJob.worker_id` is serde-default `Option<u64>`. Native worker
+  is selected from UUID-linked loaded 3D source actors and durably saved
+  before Issue. Same assigned resident ID is required at hall to credit
+  ONE physical wood/stone receipt, retained for each oak segment.
+- Old Issued records with worker_id None are quarantined and cannot
+  credit the village; OP recovery only with live evidence and no grant.
+  Dead/wrong-role/foreign workers cannot be newly assigned.
+- Verify Rust 1.95, Clippy, all Python source tests, pinned Horizon
+  native client compilation then disposable Minecraft TEST_PLAN 223-233.
+  Do not infer item-held animations or autonomous courier inventory.
+
+---
+
 # Newest stacked source branch — 3D native worker guards
 
 - Branch `feat/three-dimensional-native-worker-guards-v0115` now contains
