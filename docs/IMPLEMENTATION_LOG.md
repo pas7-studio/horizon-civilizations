@@ -658,3 +658,20 @@
   GitHub DNS in the container. Exact-source checks run via GitHub;
   full Python unittest, Rust and Minecraft E2E **not executed**.
 - Keep PR #34 Draft, no main merge or Actions changes.
+
+
+## 2026-11-08 — reject silently skipped native Rust tests
+
+- The native script previously used only the `civilizations_core::` Cargo
+  filter, so tests added to `civilizations_glue::` would never execute.
+- Added `run_filtered_native_tests`: enumerate tests with Cargo `--list`,
+  require a nonzero inventory, then run the exact filter. Both core and
+  glue suites are now mandatory and their results enter `native_mod_tests`.
+- The first-play gate verifies two unique suite entries, successful
+  status and integer `discovered >= 1` before accepting native client
+  evidence. A fake executable alone is no longer sufficient.
+- Added three standalone Python mock-Cargo enumeration tests and two
+  first-play gate false-positive cases, and updated native CLI contracts.
+- Verified upstream pinned `horizon-client/src/lib.rs` exposes a
+  library target compatible with `cargo test --lib`.
+- TEST_PLAN 297–300; no real Rust, native client or gameplay E2E run.
