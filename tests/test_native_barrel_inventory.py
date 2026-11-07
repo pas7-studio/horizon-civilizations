@@ -57,6 +57,17 @@ class NativeBarrelInventorySourceContracts(unittest.TestCase):
         self.assertLess(save_index, extract_index)
         self.assertIn("confirm_barrel_transfer(id, actual)?", method)
 
+    def test_reserved_native_slot_is_rechecked_before_extraction(self):
+        source = GLUE.split("fn barrel_one_step(", 1)[1].split("\n}", 1)[0]
+        self.assertIn("Aggregate counts alone do not identify the reserved slot.", source)
+        self.assertIn("entry.slot == selected && entry.can_take", source)
+        self.assertIn("stack.item == transfer.good.item()", source)
+        self.assertIn("stack.count >= transfer.count", source)
+        self.assertIn("block_barrel_transfer(id)?", source)
+        validation = source.index("entry.slot == selected && entry.can_take")
+        issued = source.index("issue_barrel_transfer(id)?")
+        self.assertLess(validation, issued)
+
     def test_real_hut_uses_extracted_barrel_escrow_not_abstract_stock(self):
         self.assertIn("pub build_escrow: BTreeMap<Good, u32>", CORE)
         reserve = CORE.split("pub fn reserve_hut_supplies(", 1)[1].split("\n    }", 1)[0]
