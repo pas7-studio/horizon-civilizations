@@ -49,7 +49,7 @@ class ShortOakStemContracts(unittest.TestCase):
         self.assertIn("let continuation = if let Some(stem)", confirm)
         self.assertIn("v.warehouse_credit(good, 1)?;", confirm)
         self.assertIn("issued: false, blocked: false", confirm)
-        self.assertIn("stem.cursor = cursor", confirm)
+        self.assertIn("v.oak_stem.as_mut().unwrap().cursor = cursor", confirm)
         self.assertIn("v.oak_stem = None", confirm)
         self.assertIn("v.gather_job = None", confirm)
 
