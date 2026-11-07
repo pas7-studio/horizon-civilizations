@@ -470,6 +470,25 @@ impl BarrelTransfer {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MarketPhase {
+    Issued, // coins committed before native extraction; never auto-retry
+    Blocked,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct MarketPurchase {
+    pub buyer: String,
+    pub good: Good,
+    pub count: u32,
+    pub price: u64,
+    pub position: [i32; 3],
+    pub slot: usize,
+    pub before: u32,
+    pub phase: MarketPhase,
+}
+
 /// Bulletin signs are real blocks inside the civic hall; the native adapter
 /// supplies validated, bounded sign text after the town hall is complete.
 pub fn hall_board_positions(origin: [i32; 3]) -> [[i32; 3]; 2] {
@@ -815,6 +834,9 @@ pub struct Settlement {
     /// repeated external insertion/extraction on crash or reload.
     #[serde(default)]
     pub barrel_transfer: Option<BarrelTransfer>,
+    /// One direct native-barrel player purchase, precharged in world.json.
+    #[serde(default)]
+    pub market_purchase: Option<MarketPurchase>,
     /// Active physical civic hall construction; never inferred from a JSON
     /// house counter, and can resume after restarting with observed blocks.
     #[serde(default)]
@@ -1405,6 +1427,7 @@ impl World {
             warehouse: BTreeMap::new(),
             build_escrow: BTreeMap::new(),
             barrel_transfer: None,
+            market_purchase: None,
             hall_job: None,
             hall_complete: false,
             gather_job: None,
