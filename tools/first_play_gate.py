@@ -73,11 +73,11 @@ def git_value(root: Path, *args: str) -> str:
 
 
 _DIAGNOSTIC_LINE = re.compile(
-    r"(?i)(?:\\berror(?:\\[[a-z0-9]+\\])?:|\\bfatal error\\b|"
-    r"^\\s*(?:FAIL:|FAILED\\b|ERROR:|Traceback\\b|Caused by:|"
+    r"(?i)(?:\berror(?:\[[a-z0-9]+\])?:|\bfatal error\b|"
+    r"^\s*(?:FAIL:|FAILED\b|ERROR:|Traceback\b|Caused by:|"
     r"ModuleNotFoundError:|AssertionError:|FileNotFoundError:))"
 )
-_ANSI_COLOR = re.compile(r"\\x1b\\[[0-9;]*m")
+_ANSI_COLOR = re.compile(r"\x1b\[[0-9;]*m")
 
 
 def first_stage_error(log_path: Path) -> str:
