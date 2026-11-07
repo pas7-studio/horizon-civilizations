@@ -13,7 +13,8 @@
 - Record one-shot reservation BEFORE native spawn; a failed or
   interrupted UUID persistence must not reissue the spawn. Exact
   UUID binding clears only that ID's marker.
-- 7 Rust cases, 12 Python static source tests, TEST_PLAN 272–282.
+- Dead resident after an issued attempt: keep the recovery tombstone valid across restart. Do not resummon; no world save corruption.
+- 8 Rust cases, 12 Python static source tests, TEST_PLAN 272–283.
   No Rust/native Horizon compile or Minecraft E2E in this container.
 
 ---
