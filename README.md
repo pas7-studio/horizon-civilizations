@@ -8,6 +8,24 @@ Millenaire code or Minecraft assets. Original project code is MIT-licensed.
 
 > Status: **source prototype, not gameplay-verified**. See [verification status](docs/STATUS.md).
 
+> **Newest stacked Draft, not a release (2026-11-08):**
+> `feat/source-pickup-witness-v0115` adds identity-bound wood/stone
+> harvesting with a persisted worker observation at the removed block,
+> followed by a separate worker return to the native hall. It includes
+> all prior experimental physical hall, bakery, native-barrel and
+> autonomous settlement changes. **This branch has not been compiled
+> or tested in Minecraft**; main/older successful CI runs do not prove
+> the latest state. GitHub Actions remain intentionally disabled.
+> See [STATUS](docs/STATUS.md), [PLAYTEST](docs/PLAYTEST.md) and
+> [TEST_PLAN](docs/TEST_PLAN.md) for evidence and first-game steps.
+>
+> To validate this exact branch on a networked Windows machine with
+> Rust 1.95 and Python 3.11+:
+> `git switch feat/source-pickup-witness-v0115`, then
+> `.\scripts\validate-local.ps1 -Format` and
+> `.\scripts\validate-local.ps1 -BuildClient`.
+> These are local build checks, **not a gameplay pass**.
+
 ## Available in the current source
 
 - Found settlements with a center and ten persistent residents (ten occupations)
@@ -22,9 +40,13 @@ Millenaire code or Minecraft assets. Original project code is MIT-licensed.
 - Save to `<world>/horizon-civilizations/world.json`, `.bak` backup, fail-closed corrupted or inconsistent save
 - Server hooks and independent Rust domain unit tests
 
-Not available yet: warehouse credit from physical harvests, physical mining, generalized building templates,
-full trade UI, courts/dynasties, physical war, crash-safe item ledger. The real wheat plot
-and harvest receipts are observation-only, with no item drops or stock credit.
+On the original main baseline, physical mining/warehouse credit is still
+incomplete. Newer **stacked Draft branches** introduce experimental real-block
+harvest receipts, native barrel transfers and bakery production; none have
+current native-game E2E proof. Still unavailable: real NPC-held Minecraft
+ItemStack pickup, robust native pathfinding/LOS, full lumberyard/quarry,
+sapling regeneration, dynasties, physical war and a proven crash-atomic
+transaction across world blocks and mod JSON.
 The newest stacked branch **automatically** starts native villager spawning,
 physical wheat-field construction and starter-hut builds after a settlement
 exists; the older main branch does not contain this. Player-owned lots are
