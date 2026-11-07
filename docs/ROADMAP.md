@@ -116,7 +116,7 @@ and either authoritative mob UUID ownership or a well-scoped identity registry.
 
 - [x] Compute capacity only from the completed physical hut registry, not abstract houses.
 - [x] Assign up to three standing places per completed hut deterministically by resident ID.
-- [x] Verify real Minecraft loaded floor, unobstructed interior and two-high doorway before night route.
+- [x] Verify loaded floor, indoor lane and two-high doorway before night route (full structural integrity/pathfinding still unverified).
 - [x] Fall back to existing commons route for no/unsafe/unloaded homes without mutating world blocks.
 - [x] Show physical housing capacity and allocation with read-only `/civ homes NAME` and NPC dialogue.
 - [ ] Local Rust/Clippy/Python validation, pinned Horizon native compile and in-world pathfinding E2E.
