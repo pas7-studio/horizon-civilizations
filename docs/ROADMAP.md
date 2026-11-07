@@ -101,3 +101,13 @@ and either authoritative mob UUID ownership or a well-scoped identity registry.
 - [x] No double processing across relog/restart or when host clock moves backwards.
 - [x] Bound large time jumps to 30 simulated days and skip the rest without repeated catch-up.
 - [ ] Real-world E2E of sleep/skip-night, /time set, per-dimension behavior and pause/server lifetime.
+
+## Daily NPC routines (v0.1.7 source-only; game E2E pending)
+
+- [x] Derive dawn/work/evening/night schedules from native Horizon clock; no save migration.
+- [x] Deterministic near-center commons/night waypoints and job-specific daytime destinations.
+- [x] Keep guards on watch while other professions regroup near village center.
+- [x] Gate physical farm and construction edits to active work window.
+- [x] Read-only `/civ schedule NAME` reports phase and on-duty headcount.
+- [ ] Local Rust formatting, Clippy, native compile and first playable E2E (Actions disabled).
+- [ ] Real indoor sleeping/home ownership, civilian AI and player interaction remain follow-ups.
