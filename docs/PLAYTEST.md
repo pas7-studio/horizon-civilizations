@@ -113,10 +113,10 @@ Run [TEST_PLAN](TEST_PLAN.md) steps 60–66, preserving screenshots and
 logs for actual pathfinding evidence. No sleeps/beds or full house
 ownership are claimed; no Actions workflows are used.
 
-## Offline-first local compile (stacked v0.1.11, no GitHub Actions)
+## Offline-first local compile (stacked v0.1.12, no GitHub Actions)
 
 PR #19 is stacked on #18 → #17 → #16 → #15. Check out
-`feat/autonomous-physical-village-v0111` when testing **all five
+`feat/physical-town-hall-warehouse-v0112` when testing **all five
 features together**, not `main` or the older GitHub Windows artifact.
 
 From PowerShell in the local repository with Rust 1.95.0, Git, Python 3.11+
@@ -167,7 +167,7 @@ as an exact future simulation or a financial ledger.
 
 Instead of manually repeating the Rust and Python commands above, use
 `./scripts/validate-local.ps1 -Format` on a fresh checkout of
-`feat/autonomous-physical-village-v0111`, followed by
+`feat/physical-town-hall-warehouse-v0112`, followed by
 `./scripts/validate-local.ps1 -BuildClient` for the pinned native
 integration and executable. Omit `-Format` to refuse unformatted sources
 without modifying them. `-Format` explicitly changes local source files;
@@ -222,3 +222,38 @@ player title, village treasury and removed public housing capacity.
 Changing one owned plot's blocks in a **disposable** world must not
 cause the village to reclaim or overwrite it. Run [TEST_PLAN](TEST_PLAN.md)
 cases 99–102.
+
+## First real town hall and resource acquisition test — v0.1.12
+
+Use `feat/physical-town-hall-warehouse-v0112`, not `main`. The previous
+autonomous-source release can appear idle because it only had virtual
+materials and no central functional building. In a **disposable** grassy
+world, issue `/civ found Ashford`; wait for loaded NPCs and run:
+
+```
+/civ hall Ashford
+/civ warehouse Ashford
+/civ development Ashford
+/civ roster Ashford
+```
+
+Try nearby leafy oak trees and exposed natural stone with the named
+lumberjack/miner, and also deliver enough real items by the normal
+inventory sale commands:
+
+```
+/civ sell wood 24
+/civ sell stone 25
+```
+
+You need real oak logs and cobblestone in inventory first. Then observe
+the central physical hall being built, including barrels and bulletin signs,
+and inspect native game logs for rejected conditional or sign NBT commands.
+Test log/stone gathering before assuming self-sufficient supply. Additional
+public huts need 20 logs and 25 stone each. Details in
+[TEST_PLAN](TEST_PLAN.md), cases 103–119.
+
+This code does **not** yet make the barrels real vanilla inventory gateways.
+Their block contents are not mapped to the saved warehouse ledger. Do not
+assume that putting items manually into a barrel credits the settlement.
+GitHub Actions are intentionally disabled; run only local validation.
