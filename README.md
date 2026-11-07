@@ -115,6 +115,8 @@ to compile/trust the native mod before the game can run.
 | `/civ council NAME`, `/civ forecast NAME` | All | Read-only needs and three-day abstract economic outlook |
 | `/civ survey NAME` | All | Propose up to five loaded, unoccupied building sites; never reserves land |
 | `/civ development NAME` | All | Inspect default-on NPC population, real farm/building activity and blockers |
+| `/civ hall NAME` | All | Inspect physical town hall, mayor, construction progress and real material needs |
+| `/civ warehouse NAME` | All | Inspect resource-backed village warehouse inventory, never abstract stock |
 | `/civ plots NAME` | All | See your bought land and privately owned structures |
 | `/civ buyplot NAME` | Joined players | Purchase a clear 5x5 village parcel for 10 civic coins |
 | `/civ buyhouse NAME` | Joined players | Purchase an intact finished public hut for 35 civic coins |
