@@ -2,7 +2,7 @@
 // translates server hooks, commands, inventory changes, and native NPC spawns.
 use crate::game::{
     civilizations_core::{farm_plan, hut_plan, inspect_farm, inspect_hut, is_ground,
-        BuildInspection, FarmBlock, FarmDecision, FarmStage, Good, Job, World, MAX_SIM_DAYS},
+        BuildInspection, DailyPhase, FarmBlock, FarmDecision, FarmStage, Good, Job, World, MAX_SIM_DAYS},
     native_mobs::NativeSpawn,
     native_server::{NativeCommand, NativeServerPlayer},
     Game,
@@ -144,7 +144,7 @@ pub fn closed() {
 pub fn register(commands: &mut Vec<NativeCommand>) {
     for usage in [
         "civ", "civ help", "civ list", "civ info", "civ info <name:word>",
-        "civ roster <name:word>",
+        "civ roster <name:word>", "civ schedule <name:word>",
         "civ construction <name:word>", "civ farming <name:word>",
         "civ harvests <name:word>",
         "civ join <name:word>", "civ title", "civ promote", "civ history",
@@ -210,23 +210,31 @@ fn loaded_actors(game: &mut Game<'_>, world: &World, settlement_id: u64) -> Vec<
     }).collect()
 }
 
-/// Profession-aware routing in loaded chunks. Economic production remains an
-/// abstract daily simulation, not a claim that this path actually harvested.
+/// Profession-aware day/night routing, limited to loaded UUID-bound actors.
+/// This does not implement actual sleeping or independent resource generation.
 fn guide_actors(game: &mut Game<'_>, world: &World) {
     let current_dim = game.dim.id().to_owned();
+    let phase = DailyPhase::at(game.world.day_time);
     let mut targets = Vec::new();
     for village in world.settlements.values().filter(|v| v.dimension == current_dim && v.actors_spawned) {
         for (resident_id, mob_id) in loaded_actors(game, world, village.id) {
             let Some(resident) = village.residents.iter().find(|r| r.id == resident_id && r.alive) else { continue; };
-            let offset = resident.job.workplace(resident_id);
-            let pos = if resident.job == Job::Farmer && village.farm.is_some() {
-                let farm = village.farm.as_ref().unwrap();
-                [f64::from(farm.origin[0]) + 0.5,
-                 f64::from(farm.origin[1]),
-                 f64::from(farm.origin[2] - 3) + 0.5]
-            } else if resident.job == Job::Builder {
+            let offset = phase.offset(resident.job, resident_id);
+            let pos = if phase.on_shift(resident.job) && resident.job == Job::Farmer {
+                if let Some(farm) = &village.farm {
+                    [f64::from(farm.origin[0]) + 0.5,
+                     f64::from(farm.origin[1]),
+                     f64::from(farm.origin[2] - 3) + 0.5]
+                } else {
+                    [f64::from(village.center[0] + offset[0]) + 0.5,
+                     f64::from(village.center[1] + offset[1]),
+                     f64::from(village.center[2] + offset[2]) + 0.5]
+                }
+            } else if phase.on_shift(resident.job) && resident.job == Job::Builder {
                 if let Some(job) = &village.visual_job {
-                    [f64::from(job.origin[0]) + 0.5, f64::from(job.origin[1]), f64::from(job.origin[2] - 4) + 0.5]
+                    [f64::from(job.origin[0]) + 0.5,
+                     f64::from(job.origin[1]),
+                     f64::from(job.origin[2] - 4) + 0.5]
                 } else {
                     [f64::from(village.center[0] + offset[0]) + 0.5,
                      f64::from(village.center[1] + offset[1]),
@@ -281,6 +289,8 @@ fn check_empty_hut_site(game: &Game<'_>, dimension: &str, origin: [i32; 3]) -> R
 /// A physical builder must be nearby. The command path never edits blocks;
 /// mutations occur on a later authoritative server tick.
 fn build_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), String> {
+    // Even a builder at the plot must not edit blocks off shift.
+    if !DailyPhase::at(game.world.day_time).on_shift(Job::Builder) { return Ok(()); }
     let dim = game.dim.id().to_string();
     // The next active build is chosen fairly, only among loaded plots in this
     // dimension. A paused first settlement cannot starve another village.
@@ -387,6 +397,8 @@ fn check_empty_farm_site(game: &Game<'_>, dimension: &str, origin: [i32; 3]) -> 
 /// level. The vanilla crop's age property determines maturity; neither
 /// harvested items nor simulated wheat stock are minted by this phase.
 fn farm_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), String> {
+    // A farmer's proximity does not permit night-time crop edits.
+    if !DailyPhase::at(game.world.day_time).on_shift(Job::Farmer) { return Ok(()); }
     let dim = game.dim.id().to_owned();
     let selected = state.world.as_ref().and_then(|world| {
         world.next_farm(&dim, (state.physical_ticks / 8) as usize, |pos| {
@@ -508,7 +520,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
     let actor = format!("{:032x}", player.uuid);
     let action = args.next().unwrap_or("help");
     if action == "help" {
-        reply(game, "Civilizations: /civ list | info [name] | roster <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, day [days], construct <name>, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
+        reply(game, "Civilizations: /civ list | info [name] | roster <name> | schedule <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, day [days], construct <name>, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
         return;
     }
     if action == "list" {
@@ -517,6 +529,22 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             items.push(format!("#{} {} [{}] pop={} houses={}", s.id, s.name, s.culture, s.population(), s.houses));
         }
         reply(game, if items.is_empty() { "No settlements yet. OP: /civ found Ashford".into() } else { items.join(" | ") });
+        return;
+    }
+    if action == "schedule" {
+        let name = args.next().unwrap_or("");
+        let Some(village) = world.by_name(name) else {
+            error(game, "unknown settlement: /civ schedule <name>");
+            return;
+        };
+        let phase = DailyPhase::at(game.world.day_time);
+        let on_duty = village.residents.iter()
+            .filter(|resident| resident.alive && phase.on_shift(resident.job)).count();
+        reply(game, format!(
+            "{} routine: {} (Horizon tick {}) | on duty {} / {} | guards watch overnight | physical farm/build edits only on work shift 2000..10999 | navigation only",
+            village.name, phase.name(), game.world.day_time.rem_euclid(24_000),
+            on_duty, village.population()
+        ));
         return;
     }
     if action == "roster" {
