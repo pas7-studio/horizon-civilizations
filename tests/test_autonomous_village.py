@@ -94,6 +94,25 @@ class AutonomousVillageContracts(unittest.TestCase):
         self.assertIn("game.native_run_command(&command)", GLUE)
         self.assertIn("if block {x} {y} {z} {old_block}", GLUE)
 
+    def test_purchase_complete_hut_requires_all_real_loaded_blocks(self):
+        self.assertIn("pub const FINISHED_HUT_PRICE_COINS: u64 = 35;", CORE)
+        buy = CORE.split("pub fn buy_finished_house(", 1)[1].split("\n    }", 1)[0]
+        self.assertIn("v.visual_sites.contains(&origin)", buy)
+        self.assertIn("FINISHED_HUT_PRICE_COINS", buy)
+        self.assertIn("v.treasury_coins = treasury_after", buy)
+        self.assertIn("commissioned: true", buy)
+        adapter = GLUE.split('"buyhouse" => (|| {', 1)[1].split('\n        })(),', 1)[0]
+        self.assertIn("inspect_hut(&VisualBuildJob", adapter)
+        self.assertIn("BuildInspection::Complete", adapter)
+        self.assertIn("buy_finished_house(&actor, village.id, origin)", adapter)
+        self.assertIn("village.player_parcels", adapter)
+
+    def test_sold_village_houses_are_removed_from_public_economy(self):
+        self.assertIn("let private_houses = self.player_parcels.iter()", CORE)
+        self.assertIn(".filter(|plot| plot.commissioned).count() as u32", CORE)
+        self.assertIn("self.houses.saturating_sub(private_houses)", CORE)
+        self.assertIn("pub fn public_huts(&self)", CORE)
+
     def test_package_mixin_compatibility_and_backwards_save(self):
         cargo = tomllib.loads((ROOT / "Cargo.toml").read_text())
         mixin = tomllib.loads((ROOT / "mixins/civilizations/horizon-mixin.toml").read_text())
