@@ -2227,6 +2227,9 @@ mod tests {
         let encoded = serde_json::to_string(&w).unwrap();
         let mut reloaded: World = serde_json::from_str(&encoded).unwrap();
         reloaded.validate().unwrap();
+        // This older fixture bypasses native block placement; explicitly
+        // emulate a previously persisted warehouse materials reservation.
+        reloaded.settlements.get_mut(&id).unwrap().hut_supplies_reserved = true;
         reloaded.finish_visual_house(id).unwrap();
         assert_eq!(reloaded.settlements[&id].visual_sites, vec![[20, 64, 0]]);
         assert_eq!(reloaded.settlements[&id].pending_visual_buildings, 0);
@@ -3309,6 +3312,7 @@ mod village_land_and_autonomy_tests {
         world.validate().unwrap();
         world.settlements.get_mut(&id).unwrap().visual_job.as_mut().unwrap().cursor =
             hut_plan([20, 70, 0]).len();
+        world.settlements.get_mut(&id).unwrap().hut_supplies_reserved = true;
         world.finish_visual_house(id).unwrap();
         assert_eq!(world.settlements[&id].public_huts(), 0);
         assert_eq!(world.settlements[&id].physical_housing(), (0, 0, 10));
