@@ -2604,6 +2604,11 @@ fn autonomous_village_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Resu
                         let position = [x, y, z];
                         if !seems_natural_resource(game, &dimension, position, good) { continue; }
                         let Some(stand) = gather_stand(game, &dimension, position) else { continue; };
+                        // Preserve the full pre-image, not merely the
+                        // former one-block GatherJob. A stem plan also
+                        // mutates oak_stem; both fields must roll back if
+                        // persistence fails before the physical job starts.
+                        let prior = state.world.as_ref().unwrap().clone();
                         let planned = if good == Good::Wood {
                             // Each naturally rooted short oak is ONE durable
                             // job with a bounded sequence of separate actual
@@ -2619,13 +2624,9 @@ fn autonomous_village_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Resu
                                 .plan_gather(id, good, position, stand).is_ok()
                         };
                         if planned {
-                            // Previous value has no gather job. Save the
-                            // intent before authorizing a future world edit.
-                            let before = state.world.as_ref().unwrap().clone();
-                            // Reconstruct pre-image by clearing only our
-                            // newly planned intent in the transaction backup.
-                            let mut prior = before;
-                            prior.settlements.get_mut(&id).unwrap().gather_job = None;
+                            // The entire old settlement, including the
+                            // optional tree continuation, is restored on
+                            // failed save. No native block command is sent.
                             save_autonomous(state, prior)?;
                             log::info!("[civilizations] {} sent a {} to {:?}", village.name,
                                 profession.name(), position);
