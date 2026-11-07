@@ -1465,6 +1465,75 @@ fn autonomous_village_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Resu
         && actors.iter().any(|(known, _)| *known == r.id));
     let has_builder = village.residents.iter().any(|r| r.alive && r.job == Job::Builder
         && actors.iter().any(|(known, _)| *known == r.id));
+    // Recover from a refused/modified extraction without paying any wood or
+    // stone; the next planning cycle may choose another untouched source.
+    if village.gather_job.as_ref().is_some_and(|job| job.blocked) {
+        let before = state.world.as_ref().unwrap().clone();
+        state.world.as_mut().unwrap().discard_blocked_gather(id)?;
+        save_autonomous(state, before)?;
+        return Ok(());
+    }
+
+    // Fetch REAL materials before allocating any physical structure. A
+    // lumberjack needs a leafy oak trunk and a miner needs exposed natural
+    // stone; both require verified empty standing space and UUID identity.
+    let (wood_needed, stone_needed) = if !village.hall_complete {
+        village.hall_materials_missing()
+    } else if village.visual_job.is_some()
+        && !village.hut_supplies_reserved
+        || village.pending_visual_buildings > 0 && village.physical_housing().2 > 0 {
+        (
+            crate::game::civilizations_core::HUT_WOOD_LOGS
+                .saturating_sub(village.warehouse_quantity(Good::Wood)),
+            crate::game::civilizations_core::HUT_COBBLESTONE
+                .saturating_sub(village.warehouse_quantity(Good::Stone)),
+        )
+    } else { (0, 0) };
+
+    if village.gather_job.is_none() {
+        for (good, need, profession) in [
+            (Good::Wood, wood_needed, Job::Lumberjack),
+            (Good::Stone, stone_needed, Job::Miner),
+        ] {
+            if need == 0 || !village.residents.iter().any(|r| {
+                r.alive && r.job == profession
+                    && actors.iter().any(|(rid, _)| *rid == r.id)
+            }) {
+                continue;
+            }
+            // Bounded 21*21*6 cells, each point read from already loaded chunks.
+            for dx in (-40_i32..=40).step_by(4) {
+                for dz in (-40_i32..=40).step_by(4) {
+                    let (Some(x), Some(z)) = (
+                        village.center[0].checked_add(dx),
+                        village.center[2].checked_add(dz)
+                    ) else { continue; };
+                    for dy in [-2_i32, -1, 0, 1, 2, 3] {
+                        let Some(y) = village.center[1].checked_add(dy) else { continue; };
+                        let position = [x, y, z];
+                        if !seems_natural_resource(game, &dimension, position, good) { continue; }
+                        let Some(stand) = gather_stand(game, &dimension, position) else { continue; };
+                        let planned = state.world.as_mut().unwrap()
+                            .plan_gather(id, good, position, stand).is_ok();
+                        if planned {
+                            // Previous value has no gather job. Save the
+                            // intent before authorizing a future world edit.
+                            let before = state.world.as_ref().unwrap().clone();
+                            // Reconstruct pre-image by clearing only our
+                            // newly planned intent in the transaction backup.
+                            let mut prior = before;
+                            prior.settlements.get_mut(&id).unwrap().gather_job = None;
+                            save_autonomous(state, prior)?;
+                            log::info!("[civilizations] {} sent a {} to {:?}", village.name,
+                                profession.name(), position);
+                            return Ok(());
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     // Town hall is physically assembled first from the verified warehouse
     // bill of materials; it may remain pending while players deliver goods.
     // The planner does NOT consume abstract simulation wood/stone.
