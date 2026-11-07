@@ -247,3 +247,29 @@ play. That was a **product gap**, not cosmetic polish.
   actual store supply.
 - [ ] Native player land/block provenance and protection interoperability:
   recorded plot exclusions do NOT equal universal anti-grief.
+
+## v0.1.13 — real vanilla barrels and NPC resource couriers (source-only)
+
+- [x] Use pinned Horizon native inventory API 48 to read actual slots of
+  exactly two civic-hall barrels, preserving vanilla stack metadata rules.
+- [x] Move receipt-backed resource queue to native barrels through a
+  journaled, observed 1–8 item insertion; never keep one item in both ledgers.
+- [x] Physically extract 20 logs/25 cobble from native barrels to a saved
+  dedicated builder escrow; prevent building before on-site reservation.
+- [x] Route UUID-bound lumberjacks/miners and farmers to the hall for
+  delivery confirmation; route builders to hall before construction site.
+- [x] Post-hall trade purchases take real vanilla barrel items with a
+  precharged market journal; buying from virtual abstract stock is stopped.
+- [x] Apply native API 233 to prevent unauthorised player free withdrawal
+  from the village's two public barrels. Private containers unaffected.
+- [x] Make boards and /civ hall/warehouse report actual live barrel stock,
+  separate courier/merchant queue, escrow and unresolved journals.
+- [ ] Local Rust/Python tests, pinned Horizon native compilation, barrel
+  permissions and in-world replay/anti-duplication E2E (NOT RUN).
+- [ ] Player-facing authorized read-only civic warehouse UI, automatic
+  recovery after exact deterministic reconciliation, operator quarantine
+  recovery tools and improved server-native save transaction support.
+- [ ] Hopper/other-mod protection interop, native block break claims and
+  actual graphical carried-stack/delivery animations.
+- [ ] Warehousing ownership policies, physical bakery, lumberyard/quarry,
+  walkable roads and pathfinding under actual world conditions.
