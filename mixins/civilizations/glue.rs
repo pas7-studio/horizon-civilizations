@@ -1134,7 +1134,11 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             .is_some_and(|job| job.blocked) {
             "bakery construction blocked by modified ground; inspect blocks".to_owned()
         } else if v.gather_job.as_ref().is_some_and(|job| job.blocked) {
-            "natural gathering attempt blocked; planner will discard without credit".to_owned()
+            if v.gather_job.as_ref().is_some_and(|job| job.issued) {
+                "issued wood/stone gather QUARANTINED; OP: /civ gathercheck NAME, then inspect before /civ discardgather NAME intact|empty".to_owned()
+            } else {
+                "never-issued gather candidate blocked; planner may discard without credit".to_owned()
+            }
         } else if !loaded_role(Job::Builder) {
             "no loaded UUID-bound builder; required for real buildings".to_owned()
         } else if !phase.on_shift(Job::Builder) {
