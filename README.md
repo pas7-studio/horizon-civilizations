@@ -1,3 +1,17 @@
+## Crash-safe first save: orphaned temporary files (Draft PR #34)
+
+An interrupted initial write can leave `world.json.tmp` **without** a
+`world.json`. Horizon Civilizations now refuses to initialize a default empty
+world when either `world.json.tmp` or `world.json.swap` exists. Saving also
+refuses to truncate these artifacts. Back up the entire
+`horizon-civilizations` world folder and manually reconcile primary,
+backup and temporary files before loading a valuable save. Never just delete
+an unknown pending save; it may contain the only copy of a new settlement.
+
+Three Rust filesystem regression tests and three Python source contracts were
+added. **Source only:** native compilation and Minecraft gameplay remain
+unverified.
+
 ## Latest stacked Draft: partial NPC spawn recovery (source-only)
 
 The first-play gate now defaults to this branch, so on the current checkout
