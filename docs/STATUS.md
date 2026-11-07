@@ -1,3 +1,39 @@
+# Unreleased: same-resident wood/stone courier receipts (source-only)
+
+Latest stacked branch: `feat/assigned-resource-courier-v0115`, based on
+Draft PR #28. `main` remains unchanged, GitHub Actions OFF, native
+Horizon compilation/gameplay E2E not executed.
+
+- [x] Each physical `GatherJob` has a backward-compatible optional
+  stable resident `worker_id`. The source worker is selected only after
+  observing its UUID-bound native NPC at the saved 3D work stand and
+  within actual 4.5-block reach, and the assignment is **saved before**
+  `Issued` or any native Minecraft block mutation.
+- [x] Only this exact assigned resident can later confirm delivery from
+  the real town-hall receiving area. Another lumberjack/miner standing
+  at the hall cannot credit someone else's resource.
+- [x] All further logs of a 3-4-block native oak retain that same
+  resident assignment across receipt, save and reload. After assignment,
+  other same-role NPCs stop following this gather route.
+- [x] Domain disallows issuing unassigned gathers and crediting
+  unassigned Issued jobs. Legacy unbound Issued journals are quarantined
+  in the adapter and may be manually abandoned by OP **without credit**;
+  unissued legacy jobs can be assigned safely.
+- [x] Saved worker IDs validated against a real resident with matching
+  job; a dead resident cannot be assigned to a new job. No physical
+  inventory items are created by assignment.
+- [x] Six new Rust domain regression cases plus ten Python source
+  contracts authored (not executed). Real worker route, inventory
+  escrow and actual NPC-held item visual E2E remain unverified.
+- [ ] Cargo, native Horizon client compilation, all Python tests and
+  Minecraft E2E MUST pass before marking playable or merging.
+- [ ] This establishes identity continuity only; an actual carried
+  ItemStack model/animation and physical lumberyard/quarry remain future work.
+
+Use TEST_PLAN cases 223-233 for same-worker acceptance.
+
+---
+
 # Unreleased: 3D native worker proximity and real work-stand enforcement
 
 Current branch: `feat/three-dimensional-native-worker-guards-v0115`, stacked
