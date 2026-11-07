@@ -1,3 +1,19 @@
+## Windows first-play launcher and recovery audit (Draft PR #34)
+
+A Windows GUI-subsystem executable such as Horizon Launcher can return to
+PowerShell before it exits. `start-windows-playtest.ps1` now explicitly
+waits for each `import-build`, `prepare` and `play` command through a
+pipeline and checks its exit status; no following step starts after a
+failed predecessor. The official Horizon CLI contract at pinned revision
+`18840db9146b2521dd46ad52a4559a49be180f8f` was checked.
+
+`tools/playtest_evidence.py` now reports both `world.json.swap` and
+`world.json.tmp` as interrupted transactions, and surfaces one-shot
+`actor_recovery_issued` markers so unfinished villager recovery cannot
+look like a completely clean save. This is a **read-only saved-state
+audit**, not confirmation of NPCs visible in the world. Windows execution
+and full Python/Rust/Minecraft E2E have **not** run here.
+
 ## Native test gate: both Rust modules are mandatory
 
 The pinned Horizon native build now enumerates and runs **both**
