@@ -5,13 +5,13 @@ These checks do not replace a real filesystem fault-injection playtest.
 from pathlib import Path
 import unittest
 
-GLUE = (Path(__file__).resolve().parents[1] /
-        "mixins" / "civilizations" / "glue.rs").read_text()
+from civil_sources import core_source, glue_source
+GLUE = glue_source()
 
 class WorldSwitchSafetyContracts(unittest.TestCase):
     def test_world_switch_never_discards_world_after_failed_save(self):
         start = GLUE.index("fn active(path: PathBuf)")
-        end = GLUE.index("\nfn save(active:", start)
+        end = GLUE.index("fn save(active:", start)
         code = GLUE[start:end]
         self.assertIn("if let Err(error) = save(old)", code)
         self.assertIn("return locked;", code)
@@ -19,16 +19,14 @@ class WorldSwitchSafetyContracts(unittest.TestCase):
         self.assertLess(code.index("return locked;"), code.rindex("*locked = Some(load(path));"))
 
     def test_shutdown_retains_in_memory_world_on_save_failure(self):
-        start = GLUE.index("pub fn closed()")
-        end = GLUE.index("\npub fn register(", start)
-        code = GLUE[start:end]
+        code = GLUE.split("pub fn closed()", 1)[1].split("\n}\n", 1)[0]
         self.assertIn("if let Err(error) = save(state)", code)
         self.assertIn("return;", code)
         self.assertLess(code.index("return;"), code.index("*guard = None;"))
 
     def test_orphaned_first_save_tmp_blocks_empty_world_creation(self):
         start = GLUE.index("fn load(path: PathBuf)")
-        end = GLUE.index("\nfn active(path:", start)
+        end = GLUE.index("fn active(path:", start)
         code = GLUE[start:end]
         self.assertIn('["world.json.swap", "world.json.tmp"]', code)
         self.assertIn("world: None, problem: Some(message)", code)

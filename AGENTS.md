@@ -1,3 +1,33 @@
+# Module layout gate — 2026-11-08
+
+- `main` now holds the module split: the former 310 KB `core.rs` / 182 KB
+  `glue.rs` are `mixins/civilizations/core/` (16 domain modules, one
+  `impl World` file per domain under `core/world/`, unit tests under
+  `core/tests/`) and `mixins/civilizations/glue/` (`commands` setup, `reports`
+  read-only, `actions` mutating, plus store/actors/build/economy/logistics/
+  boards/gather/dialogue/chunks/protect/interact/shop/hooks).
+- Put new code in the matching module and declare it with a plain `mod name;`
+  in `core/mod.rs` or `glue/mod.rs`. `tests/test_module_layout.py` fails any
+  module over 700 lines, so a shared blob cannot grow back.
+- The Horizon mixin tool only accepts self-contained payloads, so
+  `tools/mixin_sources.py` flattens the tree for `tools/package.py`,
+  `tools/native_build.py` and the Python contracts (`tests/civil_sources.py`).
+  Unit tests stay in the payload on purpose: the native gate filters
+  `civilizations_core::` and `civilizations_glue::`, and dropping them would
+  match zero tests.
+- `tools/modularize/` replays the split if `core.rs`/`glue.rs` reappear on an
+  older branch; it prints each move and refuses to guess where new code goes.
+- Verified on this commit: `cargo test` 196/196; `tools/package.py` +
+  `verify_static.py` PASS; `horizon-mixins plan` ok (2 modules, 11 injections);
+  Python suite exactly at the pre-split baseline (22 known failures, 248
+  passing); native `cargo check -p horizon-client --no-default-features`
+  against pinned Horizon 18840db PASSES; native tests `civilizations_core::`
+  196/196 and `civilizations_glue::` 3/3.
+- No Minecraft world was opened. Compilation and unit tests are not
+  playability: the TEST_PLAN scenarios and any E2E claim stay open.
+
+---
+
 # Latest source: guarded recovery of partial villager spawning
 
 - Branch `feat/guarded-partial-villager-recovery-v0115` stacks after

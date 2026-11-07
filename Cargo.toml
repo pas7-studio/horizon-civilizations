@@ -8,7 +8,7 @@ description = "Autonomous settlements, economy and politics for Horizon Minecraf
 publish = false
 
 [lib]
-path = "mixins/civilizations/core.rs"
+path = "mixins/civilizations/core/mod.rs"
 
 [dependencies]
 serde = { version = "1", features = ["derive"] }

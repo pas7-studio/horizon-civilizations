@@ -29,7 +29,8 @@ class LocalReleaseGateHarnessTests(unittest.TestCase):
             "import unittest\nclass Smoke(unittest.TestCase):\n"
             "    def test_mock(self): self.assertTrue(True)\n")
         (self.repo / "mixins" / "civilizations").mkdir(parents=True)
-        (self.repo / "mixins" / "civilizations" / "core.rs").write_text("// fake\n")
+        (self.repo / "mixins" / "civilizations" / "core").mkdir(parents=True)
+        (self.repo / "mixins" / "civilizations" / "core" / "mod.rs").write_text("// fake\n")
         (self.repo / ".gitignore").write_text("/target/\n")
         for file in ("package.py", "verify_static.py"):
             (self.repo / "tools" / file).write_text("print('mock only')\n")

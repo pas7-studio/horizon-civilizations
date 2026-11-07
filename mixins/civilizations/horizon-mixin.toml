@@ -12,13 +12,13 @@ horizon_revision = "18840db9146b2521dd46ad52a4559a49be180f8f"
 id = "core"
 file = "crates/horizon-client/src/game.rs"
 name = "civilizations_core"
-source = "core.rs"
+source = "core/mod.rs"
 
 [[module]]
 id = "glue"
 file = "crates/horizon-client/src/game.rs"
 name = "civilizations_glue"
-source = "glue.rs"
+source = "glue/mod.rs"
 
 [[injection]]
 id = "register"

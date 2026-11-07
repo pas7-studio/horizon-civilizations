@@ -7,8 +7,9 @@ import tomllib
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-CORE = (ROOT / "mixins/civilizations/core.rs").read_text()
-GLUE = (ROOT / "mixins/civilizations/glue.rs").read_text()
+from civil_sources import core_source, glue_source
+CORE = core_source()
+GLUE = glue_source()
 
 
 class CivicCouncilContracts(unittest.TestCase):
@@ -53,7 +54,7 @@ class CivicCouncilContracts(unittest.TestCase):
             self.assertNotIn("save(state)", body)
             self.assertNotIn("start_visual_house", body)
             self.assertNotIn("native_run_command", body)
-            self.assertIn("return;", body)
+            self.assertIn("return true;", body)
 
     def test_abstract_forecast_exclusions_are_visible_in_chat(self):
         self.assertIn("Excludes World war attrition", GLUE)

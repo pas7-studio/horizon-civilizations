@@ -9,8 +9,9 @@ from pathlib import Path
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-CORE = (ROOT / "mixins/civilizations/core.rs").read_text()
-GLUE = (ROOT / "mixins/civilizations/glue.rs").read_text()
+from civil_sources import core_source, glue_source
+CORE = core_source()
+GLUE = glue_source()
 
 
 class VillageChunkTicketContracts(unittest.TestCase):

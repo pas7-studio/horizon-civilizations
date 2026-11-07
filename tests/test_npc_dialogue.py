@@ -9,6 +9,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
 SRC = ROOT / "mixins" / "civilizations"
+from civil_sources import glue_source
 
 
 class NpcDialogueContracts(unittest.TestCase):
@@ -23,7 +24,7 @@ class NpcDialogueContracts(unittest.TestCase):
         self.assertTrue((SRC / hooks["interact_entity"]["helper"]).is_file())
 
     def test_vanilla_mobs_are_not_intercepted_or_misidentified(self):
-        code = (SRC / "glue.rs").read_text()
+        code = glue_source()
         self.assertIn('kind != "minecraft:villager"', code)
         self.assertIn('resident.entity_uuid == Some(uuid)', code)
         self.assertIn('game.native_on(MOD_ID)', code)

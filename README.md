@@ -308,8 +308,13 @@ Supported goods: `wheat`, `bread`, `wood` (= oak logs), `stone` (= cobblestone),
 
 ## Architecture
 
-- `mixins/civilizations/core.rs` - pure Rust domain, built standalone via Cargo
-- `mixins/civilizations/glue.rs` - game adapter, persistence, command handling
+- `mixins/civilizations/core/mod.rs` - pure Rust domain model, built standalone via Cargo
+- `mixins/civilizations/core/*.rs` - domain types split by area (goods, jobs, housing,
+  signs, dialogue, chunks, ...); `core/world/` holds one `impl World` file per domain
+- `mixins/civilizations/glue/` - game adapter: `commands` (setup), `reports` (read-only),
+  `actions` (mutating), plus store/actors/build/economy/logistics/boards/gather/dialogue/...
+- `tools/mixin_sources.py` - flattens the module tree into the single self-contained
+  payload each support module must be (the Horizon mixin tool rejects external `mod`)
 - `mixins/civilizations/{register,command,tick,lifecycle}.rs` - HEAD hook bindings
 - `mixins/civilizations/horizon-mixin.toml` - native mixin manifest
 - `tools/package.py` - deterministic source-only package for launcher

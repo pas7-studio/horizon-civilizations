@@ -705,3 +705,31 @@
   direct GitHub DNS or Windows PowerShell in the current runner; real
   Rust/Python full suite, Windows launcher and gameplay E2E not executed.
   PR Draft, main untouched, Actions not enabled.
+
+## 2026-11-08 - module split lands on main (core/ and glue/ trees)
+
+- The 310 KB `core.rs` and 182 KB `glue.rs` are ordinary module trees now, so
+  parallel work no longer collides in one file. Applied on `main` after the
+  quarry-pit and dialogue work; no game rule, command text or save field
+  changed.
+- `core/`: 16 domain modules, `core/world/` with one inherent `impl World` per
+  domain, unit tests under `core/tests/`. The crate root re-exports every
+  public name; Cargo `[lib] path` is `mixins/civilizations/core/mod.rs`.
+- `glue/`: `commands` (argument/state setup only), `reports` (read-only `/civ`
+  output), `actions` (mutating commands), plus store, actors, build, economy,
+  logistics, boards, gather, dialogue, chunks, protect, interact, shop, hooks
+  and the adapter's own unit tests.
+- The Horizon mixin tool only accepts self-contained payloads, so
+  `tools/mixin_sources.py` flattens the tree (`mod name;` inlined) for
+  `tools/package.py`, `tools/native_build.py` and the Python source contracts.
+  `tests/test_module_layout.py` pins the layout; `tools/modularize/` can replay
+  the split on a branch that still has the old files.
+- Gates: `cargo test` 196/196; `tools/package.py` and `tools/verify_static.py`
+  PASS; `horizon-mixins plan` ok (2 modules, 11 injections); Python suite at
+  the pre-split baseline (22 known failures, 248 passing); native
+  `cargo check -p horizon-client --no-default-features` against pinned Horizon
+  18840db PASSES; native tests `civilizations_core::` 196/196 and
+  `civilizations_glue::` 3/3 PASS.
+- Not verified: an actual client build, any Minecraft world and every
+  `docs/TEST_PLAN.md` scenario.
+

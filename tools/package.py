@@ -1,18 +1,25 @@
 #!/usr/bin/env python3
 """Build a reproducible Horizon native-mod source archive (.hnmod).
 
-This script does NOT compile or test the native Rust code.
+This script does NOT compile or test the native Rust code. Module payloads are
+flattened by tools/mixin_sources.py, because the Horizon mixin tool requires
+each support module to be a single self-contained file.
 """
 from __future__ import annotations
 
 import hashlib
 import json
 from pathlib import Path
+import sys
+import tempfile
 import tomllib
 import zipfile
 
 ROOT = Path(__file__).resolve().parents[1]
 BUNDLE = ROOT / "mixins" / "civilizations"
+
+sys.path.insert(0, str(ROOT / "tools"))
+import mixin_sources  # noqa: E402
 
 
 def package() -> Path:
@@ -34,9 +41,12 @@ def package() -> Path:
     files: dict[str, bytes] = {
         "horizon-native.json": (json.dumps(entry, indent=2, sort_keys=True) + "\n").encode("utf-8")
     }
-    for source in sorted(BUNDLE.iterdir()):
-        if source.is_file() and source.suffix in {".rs", ".toml"}:
-            files[source.relative_to(ROOT).as_posix()] = source.read_bytes()
+    with tempfile.TemporaryDirectory(prefix="civ-package-") as work:
+        staged = mixin_sources.stage(BUNDLE, Path(work)) / BUNDLE.name
+        for source in sorted(staged.rglob("*")):
+            if source.is_file() and source.suffix in {".rs", ".toml"}:
+                name = (BUNDLE / source.relative_to(staged)).relative_to(ROOT).as_posix()
+                files[name] = source.read_bytes()
     for module in mixin["module"]:
         name = (BUNDLE / module["source"]).relative_to(ROOT).as_posix()
         if name not in files:

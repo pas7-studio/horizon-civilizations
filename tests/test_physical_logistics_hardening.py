@@ -6,8 +6,9 @@ from pathlib import Path
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-CORE = (ROOT / "mixins/civilizations/core.rs").read_text(encoding="utf-8")
-GLUE = (ROOT / "mixins/civilizations/glue.rs").read_text(encoding="utf-8")
+from civil_sources import core_source, glue_source
+CORE = core_source()
+GLUE = glue_source()
 
 
 class PhysicalLogisticsHardeningContracts(unittest.TestCase):

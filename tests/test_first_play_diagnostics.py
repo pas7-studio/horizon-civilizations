@@ -3,7 +3,8 @@ from pathlib import Path
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-GLUE = (ROOT / "mixins/civilizations/glue.rs").read_text(encoding="utf-8")
+from civil_sources import core_source, glue_source
+GLUE = glue_source()
 
 
 class FirstPlayDiagnosticsContracts(unittest.TestCase):

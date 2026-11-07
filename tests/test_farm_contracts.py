@@ -5,11 +5,12 @@ Runtime semantics are exercised by Rust unit tests and pinned native CI.
 import unittest
 from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
+from civil_sources import core_source, glue_source
 MIXINS = ROOT / "mixins" / "civilizations"
 
 class FarmContracts(unittest.TestCase):
     def test_farm_writes_require_authoritative_loaded_block_checks(self):
-        glue = (MIXINS / "glue.rs").read_text()
+        glue = glue_source()
         for feature in ["check_empty_farm_site", "farm_one_step", "world_farm_block",
                         "native_run_command", "native_entity_by_uuid", "inspect_farm",
                         "game.native_on(MOD_ID)", '"civ farm <name:word>"',
@@ -22,11 +23,11 @@ class FarmContracts(unittest.TestCase):
         self.assertIn("farm_one_step(game, state)", glue)
 
     def test_visual_harvest_mints_no_economic_stock(self):
-        core = (MIXINS / "core.rs").read_text()
+        core = core_source()
         beginning = core.index("pub fn inspect_farm(")
         end = core.index("#[derive(Clone, Debug, Serialize, Deserialize)]\npub struct Settlement", beginning)
         self.assertNotIn("stock.insert", core[beginning:end])
-        self.assertNotIn("native_give_items", (MIXINS / "glue.rs").read_text().split("fn farm_one_step(")[1].split("pub fn interact_entity(")[0])
+        self.assertNotIn("native_give_items", glue_source().split("fn farm_one_step(")[1].split("pub fn interact_entity(")[0])
         self.assertIn("minecraft:wheat[age=7]", core)
         self.assertIn("minecraft:air", core)
 

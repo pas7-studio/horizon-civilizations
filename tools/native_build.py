@@ -11,11 +11,14 @@ import json
 import os
 import shutil
 import subprocess
+import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 COMPAT = json.loads((ROOT / 'compatibility.json').read_text())
 NATIVE = ROOT / 'target' / 'native-check'
+sys.path.insert(0, str(ROOT / 'tools'))
+import mixin_sources  # noqa: E402
 
 
 def run(*args: str, cwd: Path | None = None):
@@ -114,7 +117,9 @@ def main():
     run('cargo', 'build', '--locked', '--manifest-path', str(transformer / 'Cargo.toml'),
         '-p', 'horizon-mixins-cli')
     binary = transformer / 'target/debug' / ('horizon-mixins.exe' if os.name == 'nt' else 'horizon-mixins')
-    common = ['--workspace', str(staged_source), '--mods', str(ROOT / 'mixins')]
+    # The mixin planner requires one self-contained file per support module.
+    mods = mixin_sources.stage(ROOT / 'mixins' / 'civilizations', NATIVE / 'bundle')
+    common = ['--workspace', str(staged_source), '--mods', str(mods)]
     run(str(binary), 'plan', *common, '--out', str(plan))
     if out.exists():
         shutil.rmtree(out)

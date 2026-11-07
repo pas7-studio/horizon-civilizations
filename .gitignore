@@ -9,7 +9,4 @@
 .DS_Store
 .stratium-out
 __pycache__/
-*.pyc
 .pytest_cache/
-/.opencode/
-Cargo.lock

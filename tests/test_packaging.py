@@ -11,6 +11,7 @@ import zipfile
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
+from civil_sources import bundle_source
 
 
 def load_packager():
@@ -40,8 +41,8 @@ class PackagingContracts(unittest.TestCase):
             self.assertIsNone(z.testzip())
             items = set(z.namelist())
             self.assertIn('horizon-native.json', items)
-            self.assertIn('mixins/civilizations/core.rs', items)
-            self.assertIn('mixins/civilizations/glue.rs', items)
+            self.assertIn('mixins/civilizations/core/mod.rs', items)
+            self.assertIn('mixins/civilizations/glue/mod.rs', items)
             self.assertIn('mixins/civilizations/level_tick.rs', items)
             self.assertFalse(any(x.endswith(('.exe', '.dll', '.so', '.class', '.jar', '.png')) for x in items))
             index = json.loads(z.read('horizon-native.json'))
@@ -56,7 +57,7 @@ class PackagingContracts(unittest.TestCase):
 
     def test_mod_keeps_upstream_separate(self):
         sources = list((ROOT / 'mixins/civilizations').glob('*.rs'))
-        combined = '\n'.join(x.read_text() for x in sources)
+        combined = bundle_source() + '\n' + '\n'.join(x.read_text() for x in sources)
         self.assertNotIn('org.millenaire', combined)
         self.assertFalse((ROOT / 'crates/horizon-client').exists())
         self.assertIn('native_mob_navigate', combined)

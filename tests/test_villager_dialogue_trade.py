@@ -5,8 +5,9 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 MIXIN = tomllib.loads((ROOT / "mixins/civilizations/horizon-mixin.toml").read_text())
-GLUE = (ROOT / "mixins/civilizations/glue.rs").read_text()
-CORE = (ROOT / "mixins/civilizations/core.rs").read_text()
+from civil_sources import core_source, glue_source
+GLUE = glue_source()
+CORE = core_source()
 
 
 class VillagerDialogueContracts(unittest.TestCase):

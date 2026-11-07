@@ -7,8 +7,9 @@ import tomllib
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-CORE = (ROOT / "mixins/civilizations/core.rs").read_text()
-GLUE = (ROOT / "mixins/civilizations/glue.rs").read_text()
+from civil_sources import core_source, glue_source
+CORE = core_source()
+GLUE = glue_source()
 
 
 class AutonomousVillageContracts(unittest.TestCase):
@@ -107,7 +108,7 @@ class AutonomousVillageContracts(unittest.TestCase):
         adapter = GLUE.split('"buyhouse" => (|| {', 1)[1].split('\n        })(),', 1)[0]
         self.assertIn("inspect_hut(&VisualBuildJob", adapter)
         self.assertIn("BuildInspection::Complete", adapter)
-        self.assertIn("buy_finished_house(&actor, village.id, origin)", adapter)
+        self.assertIn("buy_finished_house(actor, village.id, origin)", adapter)
         self.assertIn("village.player_parcels", adapter)
 
     def test_sold_village_houses_are_removed_from_public_economy(self):

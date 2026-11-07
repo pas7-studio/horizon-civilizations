@@ -7,8 +7,9 @@ from pathlib import Path
 import unittest
 
 ROOT = Path(__file__).resolve().parents[1]
-CORE = (ROOT / "mixins/civilizations/core.rs").read_text(encoding="utf-8")
-GLUE = (ROOT / "mixins/civilizations/glue.rs").read_text(encoding="utf-8")
+from civil_sources import core_source, glue_source
+CORE = core_source()
+GLUE = glue_source()
 
 
 def function(source: str, marker: str, end: str = "\n    }") -> str:
@@ -156,7 +157,7 @@ class GuardedPartialVillagerRecoveryContracts(unittest.TestCase):
                         handler.index("state.world = Some(previous)", handler.index("Err(message) =>")))
 
     def test_core_regression_module_includes_eight_cases(self):
-        chunk = CORE.split("mod guarded_partial_native_actor_recovery_tests", 1)[1]
+        chunk = CORE.split("mod guarded_partial_native_actor_recovery_tests", 1)[1].split("\n}\n", 1)[0]
         self.assertEqual(chunk.count("#[test]"), 8)
 
 
