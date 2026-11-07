@@ -56,10 +56,11 @@ class AutonomousVillageContracts(unittest.TestCase):
         section = CORE.split("pub fn commission_house(", 1)[1].split("\n    }", 1)[0]
         self.assertIn("plot.owner == player_id && !plot.commissioned", section)
         self.assertIn("p.coins < COMMISSION_PRICE_COINS", section)
-        self.assertIn("village.quantity(Good::Wood) < 8", section)
-        self.assertIn("village.quantity(Good::Stone) < 6", section)
-        self.assertIn("village.take(Good::Wood, 8)", section)
-        self.assertIn("village.take(Good::Stone, 6)", section)
+        # Commission creates a physical work order without charging the old
+        # virtual stock. The builder reserves REAL warehouse items later.
+        self.assertNotIn("village.take(Good::Wood", section)
+        self.assertNotIn("village.take(Good::Stone", section)
+        self.assertIn("village.hut_supplies_reserved = false", section)
         self.assertIn("village.treasury_coins = treasury_after", section)
         self.assertIn("village.visual_job = Some(VisualBuildJob", section)
 
