@@ -75,3 +75,12 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
 51. **Time rewinds:** use /time set to an earlier day, re-open, and verify no replay until the previous maximum observed day is exceeded.
 52. **Large time jumps:** advance the host day by 10,000 and confirm at most 30 simulation days and one persistent cursor update; next tick at the same host day must be a no-op.
 53. **World split:** overworld and Nether hooks must not each count an economic day; verify the shared Horizon world clock is used once.
+
+## NPC routine E2E (v0.1.7, manual local only)
+
+54. With 10 UUID-linked Ashford residents and loaded chunks, `/time set 0` should route non-guards toward commons near the center. `/civ schedule Ashford` reports dawn.
+55. `/time set 2000` should route workers toward job positions. Farmers with an approved field and builders with an active hut move to work sites; guards remain on watch.
+56. `/time set 11000` and `/time set 13000`: non-guards return toward near-center evening/night waypoints. The mod must not generate inventory or stock from movement.
+57. At night, keep a farmer within 8 blocks of a ripe field and a builder within 9 blocks of an unfinished hut. Neither crop/block edits nor building progress should happen until tick 2000..10999.
+58. Restart at night and re-open during another time phase. Schedule recomputes without extra `world.json` fields or duplicate resident UUIDs.
+59. With unloaded chunks, other dimensions or mod disabled, scheduling never force-loads, navigates foreign villagers or places blocks. Repeat with two nearby villages, time rewinds and large jumps.
