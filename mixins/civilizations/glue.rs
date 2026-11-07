@@ -1,9 +1,9 @@
 // Horizon bridge. All world logic lives in civilizations_core; this module
 // translates server hooks, commands, inventory changes, and native NPC spawns.
 use crate::game::{
-    civilizations_core::{farm_plan, hut_plan, inspect_farm, inspect_hut, is_ground,
+    civilizations_core::{farm_plan, hut_plan, town_hall_plan, inspect_farm, inspect_hut, inspect_town_hall, is_ground,
         BuildInspection, DailyPhase, FarmBlock, FarmDecision, FarmStage, Good, HomeSlot, Job, VisualBuildJob,
-        World, inspect_home, HOUSING_PLOT_OFFSETS, MAX_HOUSING_SURVEY_RESULTS,
+        World, inspect_home, hall_board_positions, HOUSING_PLOT_OFFSETS, MAX_HOUSING_SURVEY_RESULTS,
         MAX_SIM_DAYS},
     native_mobs::NativeSpawn,
     native_server::{NativeCommand, NativeServerPlayer},
@@ -314,6 +314,65 @@ fn check_empty_hut_site(game: &Game<'_>, dimension: &str, origin: [i32; 3]) -> R
     Ok(())
 }
 
+/// One real, resource-funded civic-hall construction step. The hall is
+/// different from a numbered abstract house and never duplicates that stock.
+fn build_town_hall_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), String> {
+    if !DailyPhase::at(game.world.day_time).on_shift(Job::Builder) { return Ok(()); }
+    let dimension = game.dim.id().to_owned();
+    let next = state.world.as_ref().unwrap().settlements.values()
+        .filter(|v| v.dimension == dimension)
+        .filter_map(|v| v.hall_job.as_ref().map(|job| (v.id, job.clone())))
+        .find(|(_, job)| !job.blocked && game.world.loaded(job.origin[0], job.origin[2]));
+    let Some((village_id, job)) = next else { return Ok(()); };
+    let observation = inspect_town_hall(&job, |point| world_block(game, &dimension, point));
+    match observation {
+        BuildInspection::Unloaded | BuildInspection::Paused => Ok(()),
+        BuildInspection::InvalidCursor => Err("invalid civic hall cursor".into()),
+        BuildInspection::Blocked { position, found } => {
+            let v = state.world.as_mut().unwrap().settlements.get_mut(&village_id).unwrap();
+            v.hall_job.as_mut().unwrap().blocked = true;
+            save(state).map_err(|e| format!("persistence: {e}"))?;
+            Err(format!("civic hall blocked at {position:?} by {found}"))
+        }
+        BuildInspection::Rewind(cursor) => {
+            let v = state.world.as_mut().unwrap().settlements.get_mut(&village_id).unwrap();
+            v.hall_job.as_mut().unwrap().cursor = cursor;
+            save(state).map_err(|e| format!("persistence: {e}"))
+        }
+        BuildInspection::Advance => {
+            let v = state.world.as_mut().unwrap().settlements.get_mut(&village_id).unwrap();
+            v.hall_job.as_mut().unwrap().cursor += 1;
+            save(state).map_err(|e| format!("persistence: {e}"))
+        }
+        BuildInspection::Complete => {
+            state.world.as_mut().unwrap().finish_town_hall(village_id)?;
+            save(state).map_err(|e| format!("persistence: {e}"))
+        }
+        BuildInspection::Place { position, old_block, new_block } => {
+            let world = state.world.as_ref().unwrap();
+            let v = &world.settlements[&village_id];
+            let builders = loaded_actors(game, world, village_id);
+            let near = v.residents.iter().filter(|r| r.alive && r.job == Job::Builder)
+                .any(|r| builders.iter().any(|(id, mob)| {
+                    *id == r.id && game.native_mob(&dimension, *mob).is_some_and(|actor| {
+                        let dx = actor.pos[0] - f64::from(job.origin[0]);
+                        let dz = actor.pos[2] - f64::from(job.origin[2]);
+                        dx * dx + dz * dz <= 9.0 * 9.0
+                    })
+                }));
+            if !near { return Ok(()); }
+            let [x, y, z] = position;
+            let cmd = format!(
+                "execute in {dimension} if block {x} {y} {z} {old_block} run setblock {x} {y} {z} {new_block} replace"
+            );
+            if !game.native_run_command(&cmd) {
+                log::warn!("[civilizations] civic hall block command refused: {cmd}");
+            }
+            Ok(())
+        }
+    }
+}
+
 /// A physical builder must be nearby. The command path never edits blocks;
 /// mutations occur on a later authoritative server tick.
 fn build_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), String> {
@@ -330,6 +389,10 @@ fn build_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), St
     let Some((village_id, job)) = selected else {
         return Ok(());
     };
+    if !state.world.as_ref().unwrap().settlements[&village_id].hut_supplies_reserved
+        && job.cursor > 0 {
+        return Err("unfunded legacy partial hut; inspect before resuming real work".into());
+    }
     // This pure function rechecks all previously reported blocks and makes
     // one conservative decision. It does not mutate the world or save.
     let inspection = inspect_hut(&job, |pos| world_block(game, &dim, pos));
@@ -351,12 +414,18 @@ fn build_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), St
             Ok(())
         }
         BuildInspection::Advance => {
+            if !state.world.as_ref().unwrap().settlements[&village_id].hut_supplies_reserved {
+                return Err("observed unfunded hut block: manual inspection required".into());
+            }
             let s = state.world.as_mut().unwrap().settlements.get_mut(&village_id).unwrap();
             s.visual_job.as_mut().unwrap().cursor += 1;
             save(state).map_err(|e| format!("persistence: {e}"))?;
             Ok(())
         }
         BuildInspection::Complete => {
+            if !state.world.as_ref().unwrap().settlements[&village_id].hut_supplies_reserved {
+                return Err("cannot close an unfunded physical hut".into());
+            }
             state.world.as_mut().unwrap().finish_visual_house(village_id)?;
             save(state).map_err(|e| format!("persistence: {e}"))?;
             Ok(())
@@ -375,6 +444,16 @@ fn build_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), St
             }));
             if !near {
                 return Ok(());
+            }
+            // Paying for a virtual house does NOT supply Minecraft items.
+            // Debit actual warehouse goods exactly once before the first
+            // physical block command and save the reservation first.
+            if !state.world.as_ref().unwrap().settlements[&village_id].hut_supplies_reserved {
+                let previous = state.world.as_ref().unwrap().clone();
+                if !state.world.as_mut().unwrap().reserve_hut_supplies(village_id)? {
+                    return Ok(()); // town hall board shows shortage
+                }
+                save_autonomous(state, previous)?;
             }
             let [x, y, z] = position;
             // Conditional server write: the saved cursor advances only after
