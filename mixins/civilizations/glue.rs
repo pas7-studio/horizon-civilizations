@@ -1810,6 +1810,43 @@ fn storage_worker_near(game: &mut Game<'_>, world: &World, id: u64, role: Job) -
     })
 }
 
+/// Select one exact plain native slot from either hall barrel. This
+/// helper only persists the planned intent. Native extraction happens on a
+/// *later* tick, after a fresh slot read and a durable Issued record.
+fn request_workshop_pickup(
+    game: &Game<'_>, state: &mut ActiveWorld, id: u64,
+    good: Good, amount: u32, direction: BarrelDirection,
+) -> Result<bool, String> {
+    if amount == 0 { return Ok(false); }
+    let village = &state.world.as_ref().unwrap().settlements[&id];
+    let dimension = village.dimension.clone();
+    let center = village.center;
+    for pos in hall_storage_positions(center) {
+        if world_block(game, &dimension, pos).as_deref() != Some("minecraft:barrel") {
+            continue;
+        }
+        let Some(slots) = game.native_container_slots(&dimension, pos, Direction::Up)
+        else { continue; };
+        let item = slots.iter().find_map(|entry| {
+            let stack = entry.stack.as_ref()?;
+            (entry.can_take && stack.item == good.item()
+                && stack.damage == 0 && stack.extra.is_none()
+                && stack.count > 0).then_some((entry.slot, stack.count))
+        });
+        let Some((slot, available)) = item else { continue; };
+        let Some(before) = plain_barrel_count(game, &dimension, pos, good)
+        else { continue; };
+        let count = amount.min(available).min(8);
+        let old = state.world.as_ref().unwrap().clone();
+        state.world.as_mut().unwrap().plan_barrel_transfer(
+            id, pos, good, direction, before, count, Some(slot),
+        )?;
+        save_autonomous(state, old)?;
+        return Ok(true);
+    }
+    Ok(false)
+}
+
 /// Never re-issue a native operation marked Issued in saved world.json.
 /// An uncertain barrel result becomes Blocked rather than being replayed.
 /// The first attempt saves Issued *before* mutating a native inventory.
@@ -1850,7 +1887,7 @@ fn barrel_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
             // An operator/hopper may replace the exact source stack between
             // planning and issuing. Never take a foreign item even when the
             // total number of logs/stone in the barrel is unchanged.
-            if transfer.direction == BarrelDirection::ToBuilder {
+            if transfer.direction != BarrelDirection::ToBarrel {
                 let valid_slot = transfer.slot.is_some_and(|selected| {
                     game.native_container_slots(
                         &dimension, transfer.position, Direction::Up
@@ -1880,7 +1917,9 @@ fn barrel_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
                     };
                     game.insert_stack_through(transfer.position, Direction::Up, item).is_none()
                 }
-                BarrelDirection::ToBuilder => {
+                BarrelDirection::ToBuilder
+                | BarrelDirection::ToBakeryBuilder
+                | BarrelDirection::ToBakerIngredients => {
                     let Some(slot) = transfer.slot else {
                         return Err("native barrel extraction has no recorded slot".into());
                     };
