@@ -4600,6 +4600,8 @@ mod civic_hall_warehouse_tests {
         world.assign_gather_worker(id, worker).unwrap();
         world.mark_gather_issued(id).unwrap();
         assert!(world.mark_gather_issued(id).is_err());
+        let world_assigned = world.settlements[&id].gather_job.as_ref().unwrap().worker_id.unwrap();
+        world.witness_gather_pickup(id, world_assigned).unwrap();
         world.confirm_gather(id).unwrap();
         assert_eq!(world.settlements[&id].warehouse_quantity(Good::Wood), 1);
         assert!(world.confirm_gather(id).is_err());
@@ -5433,6 +5435,8 @@ mod verified_short_oak_stem_tests {
             world.validate().unwrap();
             world.mark_gather_issued(id).unwrap();
             assert!(world.mark_gather_issued(id).is_err());
+            let world_assigned = world.settlements[&id].gather_job.as_ref().unwrap().worker_id.unwrap();
+            world.witness_gather_pickup(id, world_assigned).unwrap();
             world.confirm_gather(id).unwrap();
             assert_eq!(world.settlements[&id].warehouse_quantity(Good::Wood),
                        u32::from(cursor) + 1);
@@ -5447,6 +5451,8 @@ mod verified_short_oak_stem_tests {
     fn crash_reload_preserves_next_segment_and_does_not_reissue_prior_log() {
         let (mut world, id) = world_with_stem();
         world.mark_gather_issued(id).unwrap();
+        let world_assigned = world.settlements[&id].gather_job.as_ref().unwrap().worker_id.unwrap();
+        world.witness_gather_pickup(id, world_assigned).unwrap();
         world.confirm_gather(id).unwrap();
         let json = serde_json::to_string(&world).unwrap();
         let mut replay: World = serde_json::from_str(&json).unwrap();
@@ -5458,6 +5464,8 @@ mod verified_short_oak_stem_tests {
         assert!(replay.confirm_gather(id).is_err());
         replay.mark_gather_issued(id).unwrap();
         assert!(replay.mark_gather_issued(id).is_err());
+        let replay_assigned = replay.settlements[&id].gather_job.as_ref().unwrap().worker_id.unwrap();
+        replay.witness_gather_pickup(id, replay_assigned).unwrap();
         replay.confirm_gather(id).unwrap();
         assert_eq!(replay.settlements[&id].warehouse_quantity(Good::Wood), 2);
     }
@@ -5490,6 +5498,8 @@ mod verified_short_oak_stem_tests {
         world.settlements.get_mut(&id).unwrap()
             .warehouse_credit(Good::Wood, 10_000_000).unwrap();
         world.mark_gather_issued(id).unwrap();
+        let worker = world.settlements[&id].gather_job.as_ref().unwrap().worker_id.unwrap();
+        world.witness_gather_pickup(id, worker).unwrap();
         let snapshot = serde_json::to_value(&world).unwrap();
         assert!(world.confirm_gather(id).is_err());
         assert_eq!(serde_json::to_value(&world).unwrap(), snapshot);
@@ -5500,6 +5510,8 @@ mod verified_short_oak_stem_tests {
     fn abandoning_uncertain_segment_discards_remaining_tree_with_zero_credit() {
         let (mut world, id) = world_with_stem();
         world.mark_gather_issued(id).unwrap();
+        let world_assigned = world.settlements[&id].gather_job.as_ref().unwrap().worker_id.unwrap();
+        world.witness_gather_pickup(id, world_assigned).unwrap();
         world.confirm_gather(id).unwrap();
         world.mark_gather_issued(id).unwrap();
         world.block_gather(id).unwrap();
@@ -5603,6 +5615,8 @@ mod assigned_resource_courier_tests {
         world.assign_gather_worker(id, miner).unwrap();
         world.mark_gather_issued(id).unwrap();
         assert!(world.assign_gather_worker(id, miner).is_err());
+        let world_assigned = world.settlements[&id].gather_job.as_ref().unwrap().worker_id.unwrap();
+        world.witness_gather_pickup(id, world_assigned).unwrap();
         world.confirm_gather(id).unwrap();
         assert_eq!(world.settlements[&id].warehouse_quantity(Good::Stone), 1);
         assert!(world.confirm_gather(id).is_err());
@@ -5635,6 +5649,8 @@ mod assigned_resource_courier_tests {
         world.plan_short_oak_stem(id, [16, 70, 0], [17, 70, 0], 3).unwrap();
         world.assign_gather_worker(id, worker).unwrap();
         world.mark_gather_issued(id).unwrap();
+        let world_assigned = world.settlements[&id].gather_job.as_ref().unwrap().worker_id.unwrap();
+        world.witness_gather_pickup(id, world_assigned).unwrap();
         world.confirm_gather(id).unwrap();
         let mut restored: World =
             serde_json::from_str(&serde_json::to_string(&world).unwrap()).unwrap();
@@ -5645,6 +5661,8 @@ mod assigned_resource_courier_tests {
         assert!(!next.issued);
         assert!(restored.confirm_gather(id).is_err());
         restored.mark_gather_issued(id).unwrap();
+        let restored_assigned = restored.settlements[&id].gather_job.as_ref().unwrap().worker_id.unwrap();
+        restored.witness_gather_pickup(id, restored_assigned).unwrap();
         restored.confirm_gather(id).unwrap();
         assert_eq!(restored.settlements[&id].warehouse_quantity(Good::Wood), 2);
     }
