@@ -32,8 +32,13 @@ class FarmContracts(unittest.TestCase):
 
     def test_manifest_and_package_are_current(self):
         manifest = (MIXINS / "horizon-mixin.toml").read_text()
-        self.assertIn('version = "0.1.4"', manifest)
-        self.assertIn('civilizations-0.1.4.hnmod', (ROOT / "scripts" / "install-local.ps1").read_text())
+        import tomllib
+        mixin = tomllib.loads(manifest)
+        crate = tomllib.loads((ROOT / "Cargo.toml").read_text())
+        version = crate["package"]["version"]
+        self.assertEqual(version, mixin["mod"]["version"])
+        self.assertIn(f"civilizations-{version}.hnmod",
+                      (ROOT / "scripts" / "install-local.ps1").read_text())
 
 if __name__ == "__main__":
     unittest.main()

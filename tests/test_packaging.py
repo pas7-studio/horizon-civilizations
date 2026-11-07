@@ -26,7 +26,7 @@ class PackagingContracts(unittest.TestCase):
         manifest = tomllib.loads((ROOT / 'mixins/civilizations/horizon-mixin.toml').read_text())
         self.assertEqual(compat['horizon_revision'], manifest['compatibility']['horizon_revision'])
         self.assertEqual('civilizations', manifest['mod']['id'])
-        self.assertEqual('0.1.4', manifest['mod']['version'])
+        self.assertEqual('0.1.6', manifest['mod']['version'])
         self.assertEqual(6, len(manifest['injection']))
 
     def test_native_bundle_is_reproducible_and_source_only(self):
@@ -44,7 +44,7 @@ class PackagingContracts(unittest.TestCase):
             self.assertIn('mixins/civilizations/level_tick.rs', items)
             self.assertFalse(any(x.endswith(('.exe', '.dll', '.so', '.class', '.jar', '.png')) for x in items))
             index = json.loads(z.read('horizon-native.json'))
-            self.assertEqual('0.1.4', index['version'])
+            self.assertEqual('0.1.6', index['version'])
             self.assertEqual('civilizations', index['id'])
 
     def test_static_contracts(self):

@@ -16,13 +16,11 @@ use std::sync::{Mutex, MutexGuard};
 const MOD_ID: &str = "civilizations";
 const DIR: &str = "horizon-civilizations";
 const SAVE: &str = "world.json";
-const TICKS_PER_DAY: u64 = 24_000;
 
 struct ActiveWorld {
     path: PathBuf,
     world: Option<World>,
     problem: Option<String>,
-    server_ticks: u64,
     physical_ticks: u64,
 }
 
@@ -32,7 +30,7 @@ fn load(path: PathBuf) -> ActiveWorld {
     let file = path.join(SAVE);
     if path.join("world.json.swap").exists() {
         let message = "interrupted save detected (world.json.swap). Back up the folder, then restore the correct primary world.json manually".to_owned();
-        return ActiveWorld { path, world: None, problem: Some(message), server_ticks: 0, physical_ticks: 0 };
+        return ActiveWorld { path, world: None, problem: Some(message), physical_ticks: 0 };
     }
     let result = match fs::read_to_string(&file) {
         Ok(text) => serde_json::from_str::<World>(&text)
@@ -49,20 +47,37 @@ fn load(path: PathBuf) -> ActiveWorld {
             (None, Some(error))
         }
     };
-    ActiveWorld { path, world, problem, server_ticks: 0, physical_ticks: 0 }
+    ActiveWorld { path, world, problem, physical_ticks: 0 }
 }
 
 fn active(path: PathBuf) -> MutexGuard<'static, Option<ActiveWorld>> {
     let mut locked = ACTIVE.lock().unwrap_or_else(|poison| poison.into_inner());
-    if locked.as_ref().is_none_or(|x| x.path != path) {
-        if let Some(old) = locked.as_ref() {
-            if old.problem.is_none() {
-                if let Err(error) = save(old) {
-                    log::error!("[civilizations] outgoing world save: {error}");
-                }
-            }
+    match locked.as_ref() {
+        None => {
+            *locked = Some(load(path));
         }
-        *locked = Some(load(path));
+        Some(old) if old.path == path => {}
+        Some(old) if old.world.is_none() => {
+            // No in-memory state to lose; invalid on-disk world remains untouched.
+            *locked = Some(load(path));
+        }
+        Some(old) => {
+            // Retry saving even if a previous operation had failed. Never
+            // discard a valid mutated world unless persistence succeeds.
+            if let Err(error) = save(old) {
+                log::error!(
+                    "[civilizations] refusing world switch; outgoing save failed: {error}"
+                );
+                // All hooks for the requested new world stop on this problem.
+                if let Some(state) = locked.as_mut() {
+                    state.problem = Some(format!(
+                        "world switch prevented; outgoing save failed: {error}"
+                    ));
+                }
+                return locked;
+            }
+            *locked = Some(load(path));
+        }
     }
     locked
 }
@@ -73,6 +88,12 @@ fn save(active: &ActiveWorld) -> Result<(), String> {
     fs::create_dir_all(&active.path).map_err(|e| e.to_string())?;
     let output = serde_json::to_vec_pretty(world).map_err(|e| e.to_string())?;
     let dest = active.path.join(SAVE);
+    // A stale swap marks an interrupted save. Refuse it before touching
+    // either the previous backup or the next temporary file.
+    let swap = active.path.join("world.json.swap");
+    if swap.exists() {
+        return Err("pending world.json.swap from interrupted save; inspect and recover before continuing".into());
+    }
     let temp = active.path.join("world.json.tmp");
     let mut file = fs::File::create(&temp).map_err(|e| e.to_string())?;
     file.write_all(&output).map_err(|e| e.to_string())?;
@@ -85,8 +106,6 @@ fn save(active: &ActiveWorld) -> Result<(), String> {
     // Windows cannot rename a file over an existing destination. Keep a
     // recoverable swap file between the two renames; never overwrite a stale
     // swap left by a crash (that must be inspected manually).
-    let swap = active.path.join("world.json.swap");
-    if swap.exists() { return Err("pending world.json.swap from interrupted save; inspect and recover before continuing".into()); }
     if dest.exists() { fs::rename(&dest, &swap).map_err(|e| e.to_string())?; }
     if let Err(e) = fs::rename(&temp, &dest) {
         if swap.exists() { let _ = fs::rename(&swap, &dest); }
@@ -105,9 +124,17 @@ fn save(active: &ActiveWorld) -> Result<(), String> {
 pub fn closed() {
     let mut guard = ACTIVE.lock().unwrap_or_else(|poison| poison.into_inner());
     if let Some(state) = guard.as_ref() {
-        if state.problem.is_none() {
+        if state.world.is_some() {
+            // Keep in-memory data on write failure until the disk is fixed,
+            // instead of silently discarding it on close.
             if let Err(error) = save(state) {
-                log::error!("[civilizations] shutdown save failed: {error}");
+                log::error!(
+                    "[civilizations] shutdown save failed; retaining in-memory world: {error}"
+                );
+                if let Some(state) = guard.as_mut() {
+                    state.problem = Some(format!("shutdown save failed: {error}"));
+                }
+                return;
             }
         }
     }
@@ -119,6 +146,7 @@ pub fn register(commands: &mut Vec<NativeCommand>) {
         "civ", "civ help", "civ list", "civ info", "civ info <name:word>",
         "civ roster <name:word>",
         "civ construction <name:word>", "civ farming <name:word>",
+        "civ harvests <name:word>",
         "civ join <name:word>", "civ title", "civ promote", "civ history",
         "civ sell <good:word> <amount:integer>", "civ buy <good:word> <amount:integer>",
     ] {
@@ -480,7 +508,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
     let actor = format!("{:032x}", player.uuid);
     let action = args.next().unwrap_or("help");
     if action == "help" {
-        reply(game, "Civilizations: /civ list | info [name] | roster <name> | construction <name> | farming <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, day [days], construct <name>, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
+        reply(game, "Civilizations: /civ list | info [name] | roster <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, day [days], construct <name>, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
         return;
     }
     if action == "list" {
@@ -499,6 +527,26 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
         reply(game, format!("{} actors: {}/{} nearby and loaded | {}", s.name, linked.len(), s.population(), listing.join(", ")));
         return;
     }
+    if action == "harvests" {
+        let name = args.next().unwrap_or("");
+        let Some(village) = world.by_name(name) else {
+            error(game, "unknown settlement");
+            return;
+        };
+        let Some(farm) = &village.farm else {
+            reply(game, format!("{}: no physical farm", village.name));
+            return;
+        };
+        let details: Vec<String> = farm.harvest_receipts.iter().rev().take(5)
+            .map(|receipt| format!("#{} day {} ({} crops)",
+                receipt.sequence, receipt.world_day, receipt.crops)).collect();
+        reply(game, format!(
+            "{} visual harvest evidence: {} recorded harvests, {} kept in bounded log. {}. No physical stock has been credited.",
+            village.name, farm.harvest_sequence, farm.harvest_receipts.len(),
+            if details.is_empty() { "No harvest receipts".to_owned() } else { details.join(" | ") },
+        ));
+        return;
+    }
     if action == "farming" {
         let name = args.next().unwrap_or("");
         let Some(settlement) = world.by_name(name) else {
@@ -507,10 +555,10 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
         };
         let message = if let Some(farm) = &settlement.farm {
             format!(
-                "{} 3x3 crop field at {:?}: {:?}, {}/{} steps, blocked={}, completed visual cycles={}. No farm stock is minted.",
+                "{} 3x3 crop field at {:?}: {:?}, {}/{} steps, blocked={}, completed visual cycles={}, observed harvest batches={}. No farm stock is minted.",
                 settlement.name, farm.origin, farm.stage, farm.cursor,
                 if farm.stage == FarmStage::Preparing { farm_plan(farm.origin).len() } else { 8 },
-                farm.blocked, farm.completed_cycles,
+                farm.blocked, farm.completed_cycles, farm.harvest_sequence,
             )
         } else {
             format!("{} has no farm; OP: select empty 3x3 natural patch 12..80 blocks away, /civ farm {}", settlement.name, settlement.name)
@@ -848,13 +896,18 @@ pub fn tick(game: &mut Game<'_>) {
     let mut guard = active(dir.join(DIR));
     let state = guard.as_mut().expect("active initialized");
     if state.problem.is_some() || state.world.is_none() { return; }
-    state.server_ticks = state.server_ticks.saturating_add(1);
-    if state.server_ticks % TICKS_PER_DAY != 0 { return; }
+    // The authoritative host day persists across Horizon game reloads.
+    let host_day = game.world.day_time.div_euclid(24_000);
+    if state.world.as_ref().unwrap().last_host_day.is_some_and(|last| host_day <= last) {
+        return;
+    }
     let before = state.world.as_ref().unwrap().clone();
-    let result = state.world.as_mut().unwrap().advance(1).and_then(|_| save(state));
-    if let Err(e) = result {
+    let result = state.world.as_mut().unwrap()
+        .observe_host_day(host_day)
+        .and_then(|changed| if changed { save(state) } else { Ok(()) });
+    if let Err(error) = result {
         state.world = Some(before);
-        state.problem = Some(format!("automatic day halted after save failure: {e}"));
-        log::error!("[civilizations] disabled automatic simulation: {e}");
+        state.problem = Some(format!("host day synchronization halted: {error}"));
+        log::error!("[civilizations] authoritative day synchronization stopped: {error}");
     }
 }

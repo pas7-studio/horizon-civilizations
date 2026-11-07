@@ -75,3 +75,15 @@ Introduced the native `native_interact_entity` hook and UUID-only NPC dialogue, 
 ## Physical farming (0.1.4 feature branch)
 
 A persistently saved 3×3 irrigated wheat field now has a finite preparation phase and a repeatable visual farming cycle controlled by nearby **UUID-linked farmer** NPCs. Reads use authoritative loaded chunk state and crop age=7. Conditional server commands edit blocks one at a time; a later authoritative read commits the cursor. On any unexpected block the plot halts; on missed chunk saves it safely rewinds. The Minecraft world does not provide stock or item drops to the JSON economy, so **this does not close the physical economy transaction gap**. CI and real gameplay validation of this branch remain necessary.
+
+## v0.1.5 audit (feature branch)
+
+Full physical harvest observation now creates a persistent increasing receipt (sequence, world day, eight crops). Saves retain 32 recent receipts and reject invalid sequences on load; legacy v0.1.4 farms start with empty evidence. The command /civ harvests NAME reports this audit. This is not an economy transaction or gameplay E2E. No warehouse stock or item drops are granted by this feature.
+
+## Fail-closed world switch hardening (feature branch)
+
+The outgoing world must persist successfully before replacing the singleton with an incoming world. A failed save retains existing state in memory and reports a blocking problem. Shutdown write failure also keeps the state resident for retry while the process exists. Stale world.json.swap is examined before any backup/tmp mutation. This protects against an avoidable lost-state path; it cannot prevent data loss if the operating system/process terminates before disk errors are fixed. Native build/gameplay E2E still required.
+
+## Host day counter migration (v0.1.6 feature branch)
+
+Authoritative daily simulation now follows the persistent Horizon `day_time` clock. A saved `last_host_day` anchor protects against repeat application across reloads and backwards clock changes; old worlds initialize the anchor without backpay. Large clock jumps are limited to 30 simulation days to prevent runaway stock. Manual `/civ day` remains explicit. Native compile, real world time progression and sleep E2E pending.

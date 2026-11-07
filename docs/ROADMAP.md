@@ -85,3 +85,19 @@ and either authoritative mob UUID ownership or a well-scoped identity registry.
 - [x] No generated item drops or warehouse credits from physical harvest (prevents double accounting against abstract daily stock).
 - [ ] Gameplay evidence: irrigation, crop growth under vanilla random ticks, conditional harvest and replant, unloaded-chunk restart recovery, and client logs.
 - [ ] Durable physical-harvest-to-ledger credit journal and full economic coupling. **Do not claim this is implemented yet.**
+
+## Harvest audit milestone (v0.1.5)
+
+- [x] Save a bounded monotonic audit of eight-crop visual harvests, including observed world day.
+- [x] Keep receipt creation and harvest phase transition together in mod JSON, with legacy load defaults.
+- [x] Read-only /civ harvests NAME for tracking observed physical work.
+- [ ] Cross-store atomicity between Minecraft chunks and mod JSON; no economic stock credits until verified.
+- [ ] In-game evidence: confirmed crop removal, audit persistence after restart, corruption detection and rollback.
+
+## Host clock synchronization (v0.1.6)
+
+- [x] Use actual Horizon `game.world.day_time` for automatic economic day progression.
+- [x] Save and validate an optional last observed host day; legacy worlds bootstrap safely without historical output.
+- [x] No double processing across relog/restart or when host clock moves backwards.
+- [x] Bound large time jumps to 30 simulated days and skip the rest without repeated catch-up.
+- [ ] Real-world E2E of sleep/skip-night, /time set, per-dimension behavior and pause/server lifetime.

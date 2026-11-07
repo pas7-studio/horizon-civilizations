@@ -72,3 +72,25 @@
 - Pending GitHub Core/native checks and real-world E2E, including vanilla crop hydration/growth.
 
 - Added fail-closed operator `/civ recoverfarm NAME`, with world-block preflight before clearing a blocked farm; simple unblock without checks is forbidden.
+
+## 2026-11-07 — v0.1.5 harvest evidence
+
+- Created HarvestReceipt journal on FarmPlot: monotonic sequence, world day, eight crops; bounded 32 entries.
+- Receipt and Harvesting->Replanting transition mutate the same persisted JSON object.
+- Added /civ harvests NAME inspection and core tests for duplicate completion, bounded rollover, validation and legacy JSON.
+- No economy credits or player item drops from receipts; two-store recovery remains future work.
+
+## 2026-11-07 — fail-closed world lifecycle
+
+- Refused incoming world activation when outgoing world.json persistence fails; old state remains resident and commands/ticks halt with an error.
+- Shutdown now retains in-memory world on save failure instead of clearing the singleton.
+- Stale swap check moved before writes to backup/temp files.
+- Requires native CI and a disk-failure world-switch test with a disposable save; process crash cannot preserve volatile memory.
+
+## 2026-11-07 — world-authoritative time, v0.1.6
+
+- Removed artificial server_ticks % 24000 daily progression that reset each time the mod reloaded.
+- Observed Horizon's authoritative day_time and saved last_host_day for deterministic once-per-host-day economic progression.
+- First-time anchor yields no production, backwards clock cannot double pay, catch-up limited to 30 days on a huge forward jump.
+- Added four Rust tests for bootstrap/legacy saves, restarts, rewinds, bounded jumps and i64 extremes.
+- Pending pinned Horizon native compile and disposable-world time/sleep/relaunch E2E.

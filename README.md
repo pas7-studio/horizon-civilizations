@@ -183,3 +183,15 @@ This is experimental and has not passed a real Minecraft-world playtest. The nor
 ### Recovering an obstructed farm
 
 If `/civ farming Ashford` shows `blocked=true`, remove/restore the offending block **manually**, keep the field fully loaded, and as an OP run `/civ recoverfarm Ashford`. The mod re-inspects the physical plot and refuses recovery while any unexpected block or unloaded chunk remains. This does not roll back player edits or create stock.
+
+## Harvest receipts (v0.1.5)
+
+The new /civ harvests Ashford command displays an increasing harvest sequence and the five latest audit entries. Every entry records the world day and eight crops observed as harvested. The latest 32 receipts are saved; historical count remains monotonic. A phase transition and its receipt are written together to world.json, so a duplicate phase callback cannot create an extra receipt during normal execution.
+
+This is EVIDENCE ONLY. No player items, coins or settlement wheat are credited from visual harvesting. The native world/chunk store and mod JSON are not an atomic transaction; restored backups and rolled-back chunks need explicit reconciliation before stock credit can be enabled.
+
+## Host-authoritative civilization clock (v0.1.6)
+
+Automatic settlement day progression now observes Horizon's persistent world day counter, rather than counting 24,000 mod uptime ticks that restart when the game closes. The optional `last_host_day` field in `world.json` is backwards-compatible. When the mod first opens an older save, it records the current host day without manufacturing historical production; on later authentic host-day increases it advances the abstract economy exactly once per observed day. Backward time changes do not replay days.
+
+To avoid runaway stock/house generation after a command jumps the world clock forward, a single synchronization processes at most 30 days; any larger time gap is intentionally skipped. `/civ day N` remains a separate operator simulation tool and does not change the underlying Horizon clock. This does not yet simulate autonomous work while no world is open. Verify save/quit/relaunch, `/time` commands and multiplayer in a disposable world.
