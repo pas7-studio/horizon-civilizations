@@ -148,6 +148,7 @@ pub fn register(commands: &mut Vec<NativeCommand>) {
         "civ", "civ help", "civ list", "civ info", "civ info <name:word>",
         "civ roster <name:word>", "civ schedule <name:word>",
         "civ homes <name:word>", "civ survey <name:word>",
+        "civ council <name:word>", "civ forecast <name:word>",
         "civ construction <name:word>", "civ farming <name:word>",
         "civ harvests <name:word>",
         "civ join <name:word>", "civ title", "civ promote", "civ history",
@@ -550,7 +551,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
     let actor = format!("{:032x}", player.uuid);
     let action = args.next().unwrap_or("help");
     if action == "help" {
-        reply(game, "Civilizations: /civ list | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, day [days], construct <name>, approvehouse <name> <slot> <y>, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
+        reply(game, "Civilizations: /civ list | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, day [days], construct <name>, approvehouse <name> <slot> <y>, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
         return;
     }
     if action == "list" {
@@ -559,6 +560,52 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             items.push(format!("#{} {} [{}] pop={} houses={}", s.id, s.name, s.culture, s.population(), s.houses));
         }
         reply(game, if items.is_empty() { "No settlements yet. OP: /civ found Ashford".into() } else { items.join(" | ") });
+        return;
+    }
+    if action == "council" {
+        let name = args.next().unwrap_or("");
+        let Some(village) = world.by_name(name) else {
+            error(game, "unknown settlement: /civ council <name>");
+            return;
+        };
+        let priorities = village.council_priorities();
+        if priorities.is_empty() {
+            reply(game, format!(
+                "{} council, day {}: no urgent current needs under the abstract model. No decisions auto-executed.",
+                village.name, world.day
+            ));
+        } else {
+            let details: Vec<String> = priorities.iter().take(3).enumerate()
+                .map(|(i, priority)| format!(
+                    "#{} {} [{}/100]: {}. Next: {}",
+                    i + 1, priority.need.label(), priority.urgency,
+                    priority.reason, priority.next_step
+                ))
+                .collect();
+            reply(game, format!(
+                "{} council, day {}: {}. Read-only advice; no items, land claims, orders or block edits.",
+                village.name, world.day, details.join(" | ")
+            ));
+        }
+        return;
+    }
+    if action == "forecast" {
+        let name = args.next().unwrap_or("");
+        let Some(village) = world.by_name(name) else {
+            error(game, "unknown settlement: /civ forecast <name>");
+            return;
+        };
+        let output: Vec<String> = village.forecast_abstract_days(
+            crate::game::civilizations_core::COUNCIL_FORECAST_DAYS
+        ).iter().map(|day| format!(
+            "+{}d bread {} wheat {} morale {} hunger {} houses {} pending {}",
+            day.offset, day.bread, day.wheat, day.morale, day.starving_days,
+            day.houses, day.pending_visual_buildings
+        )).collect();
+        reply(game, format!(
+            "{} ABSTRACT forecast (not saved): {}. Excludes World war attrition, player trades, inventory, physical crops and real Minecraft time jumps.",
+            village.name, output.join(" | ")
+        ));
         return;
     }
     if action == "schedule" {
