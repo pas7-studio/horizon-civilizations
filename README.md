@@ -395,9 +395,10 @@ clear, run:
   the lot. No NPC construction is required.
 - If the player instead wants an NPC-built starter hut, stand on their
   *empty* parcel and use `/civ commission Ashford`. The job costs
-  **15 additional civic coins** and consumes **8 village wood + 6 stone**
-  from the existing abstract stock. The coin payments move into the
-  village's persisted civic treasury, not a phantom free balance.
+  **15 additional civic coins** paid into the village treasury. This
+  creates a queued order; **no abstract materials are charged**. When the
+  builder begins, exactly **20 real oak logs and 25 real cobblestone**
+  are reserved from the physical warehouse. Missing goods delay building.
 - Commissioned player huts stay **private**, never counted as available
   bedrooms for village NPCs. The player can inspect the project with
   `/civ construction Ashford`.
