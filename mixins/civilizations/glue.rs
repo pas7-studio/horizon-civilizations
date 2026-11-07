@@ -249,6 +249,16 @@ fn guide_actors(game: &mut Game<'_>, world: &World) {
             };
             let pos = if let Some(home) = home_target {
                 home
+            } else if phase.on_shift(resident.job)
+                && matches!(resident.job, Job::Lumberjack | Job::Miner)
+                && village.gather_job.as_ref().is_some_and(|job|
+                    (job.good == Good::Wood && resident.job == Job::Lumberjack)
+                    || (job.good == Good::Stone && resident.job == Job::Miner))
+            {
+                let target = village.gather_job.as_ref().expect("gather exists");
+                [f64::from(target.stand[0]) + 0.5,
+                 f64::from(target.stand[1]),
+                 f64::from(target.stand[2]) + 0.5]
             } else if phase.on_shift(resident.job) && resident.job == Job::Farmer {
                 if let Some(farm) = &village.farm {
                     [f64::from(farm.origin[0]) + 0.5,
@@ -1564,6 +1574,110 @@ fn refresh_hall_boards(game: &mut Game<'_>, world: &World) {
     }
 }
 
+/// Find reachable-looking air next to a candidate real resource. This is
+/// NOT a pathfinding guarantee: the native AI may refuse its route.
+fn gather_stand(game: &Game<'_>, dimension: &str, pos: [i32; 3]) -> Option<[i32; 3]> {
+    for dy in [0_i32, 1, -1] {
+        for (dx, dz) in [(1_i32, 0_i32), (-1, 0), (0, 1), (0, -1)] {
+            let (Some(x), Some(y), Some(z)) = (
+                pos[0].checked_add(dx), pos[1].checked_add(dy), pos[2].checked_add(dz)
+            ) else { continue; };
+            let Some(head) = y.checked_add(1) else { continue; };
+            let Some(floor) = y.checked_sub(1) else { continue; };
+            if world_block(game, dimension, [x, y, z]).as_deref() == Some("minecraft:air")
+                && world_block(game, dimension, [x, head, z]).as_deref() == Some("minecraft:air")
+                && world_block(game, dimension, [x, floor, z])
+                    .is_some_and(|block| is_ground(&block)) {
+                return Some([x, y, z]);
+            }
+        }
+    }
+    None
+}
+
+/// Local material source recognition. Naturalness is conservative but not
+/// provable from block state alone: player protection claims and the structure
+/// exclusion remain mandatory; no guaranteed anti-grief for other mods.
+fn seems_natural_resource(game: &Game<'_>, dimension: &str, point: [i32; 3], good: Good) -> bool {
+    match good {
+        Good::Wood => {
+            if world_block(game, dimension, point).as_deref() != Some("minecraft:oak_log") {
+                return false;
+            }
+            // A leaf-bearing oak tree, not a bare timber log in a wall.
+            for (dx, dy, dz) in [(0_i32, 1_i32, 0_i32), (1, 1, 0),
+                                 (-1, 1, 0), (0, 1, 1), (0, 1, -1)] {
+                let (Some(x), Some(y), Some(z)) = (
+                    point[0].checked_add(dx), point[1].checked_add(dy),
+                    point[2].checked_add(dz)
+                ) else { continue; };
+                if world_block(game, dimension, [x, y, z]).as_deref()
+                    == Some("minecraft:oak_leaves") {
+                    return true;
+                }
+            }
+            false
+        }
+        Good::Stone => world_block(game, dimension, point).as_deref() == Some("minecraft:stone"),
+        _ => false,
+    }
+}
+
+/// A resource may be credited ONLY after: (1) plan saved; (2) the conditional
+/// block command was dispatched; (3) its issued state saved; (4) a later tick
+/// observes the block as air. If a crash happens between steps 2 and 3,
+/// the resource is lost to the village, not counted twice.
+fn gather_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), String> {
+    if !DailyPhase::at(game.world.day_time).on_shift(Job::Miner) { return Ok(()); }
+    let dimension = game.dim.id().to_owned();
+    let target = state.world.as_ref().unwrap().settlements.values()
+        .filter(|v| v.dimension == dimension)
+        .filter_map(|v| v.gather_job.as_ref().map(|job| (v.id, job.clone())))
+        .find(|(_, job)| !job.blocked && game.world.loaded(job.position[0], job.position[2]));
+    let Some((id, job)) = target else { return Ok(()); };
+    let observed = world_block(game, &dimension, job.position);
+    let Some(name) = observed else { return Ok(()); };
+    let before = state.world.as_ref().unwrap().clone();
+    if job.issued {
+        if name == "minecraft:air" {
+            state.world.as_mut().unwrap().confirm_gather(id)?;
+        } else {
+            // Commands can be refused or a plot may be modified. Never
+            // issue twice: block and replan a different natural block.
+            state.world.as_mut().unwrap().block_gather(id)?;
+        }
+        return save_autonomous(state, before);
+    }
+    if name != job.source_block() {
+        state.world.as_mut().unwrap().block_gather(id)?;
+        return save_autonomous(state, before);
+    }
+    let world = state.world.as_ref().unwrap();
+    let v = &world.settlements[&id];
+    let profession = if job.good == Good::Wood { Job::Lumberjack } else { Job::Miner };
+    let actors = loaded_actors(game, world, id);
+    let near = v.residents.iter().filter(|r| r.alive && r.job == profession)
+        .any(|r| actors.iter().any(|(rid, mob)| {
+            *rid == r.id && game.native_mob(&dimension, *mob).is_some_and(|actor| {
+                let dx = actor.pos[0] - f64::from(job.position[0]);
+                let dz = actor.pos[2] - f64::from(job.position[2]);
+                dx * dx + dz * dz <= 6.0 * 6.0
+            })
+        }));
+    if !near { return Ok(()); }
+    let [x, y, z] = job.position;
+    let cmd = format!(
+        "execute in {dimension} if block {x} {y} {z} {} run setblock {x} {y} {z} minecraft:air replace",
+        job.source_block()
+    );
+    if !game.native_run_command(&cmd) {
+        state.world.as_mut().unwrap().block_gather(id)?;
+    } else {
+        state.world.as_mut().unwrap().mark_gather_issued(id)?;
+    }
+    save_autonomous(state, before)
+}
+
 /// Runs after an authoritative level tick: the selected dimension and its
 /// loaded chunks are guaranteed to be the ones inspected/modified here.
 pub fn level_tick(game: &mut Game<'_>, dimension: &str) {
@@ -1623,6 +1737,13 @@ pub fn level_tick(game: &mut Game<'_>, dimension: &str) {
         }
     }
     if state.physical_ticks % 8 == 0 {
+        if let Err(error) = gather_one_step(game, state) {
+            log::warn!("[civilizations] physical gathering paused: {error}");
+            if error.starts_with("persistence:") {
+                state.problem = Some(error);
+                return;
+            }
+        }
         if let Err(error) = farm_one_step(game, state) {
             if error.contains("unloaded") || error.contains("not loaded") {
                 return;
