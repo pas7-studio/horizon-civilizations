@@ -12,8 +12,8 @@ release until all preceding gates have evidence.
 - [x] Abstract war state and attrition (not a physical battle)
 - [x] Horizon hook definitions, server commands, named villager spawns
 - [x] Source-only `.hnmod` packaging and CI configuration
-- [ ] Cargo tests actually run on a Rust toolchain
-- [ ] Native mixin compiled against pinned Horizon commit
+- [x] Previous stable v0.1.6 cargo checks/tests passed on GitHub Actions (v0.1.8 source is untested)
+- [x] Previous stable v0.1.6 pinned Horizon native compile passed (v0.1.8 requires local rebuild)
 - [ ] Integration E2E on a real prepared Horizon world
 
 ## P1 - First true playable milestone
@@ -121,3 +121,28 @@ and either authoritative mob UUID ownership or a well-scoped identity registry.
 - [x] Show physical housing capacity and allocation with read-only `/civ homes NAME` and NPC dialogue.
 - [ ] Local Rust/Clippy/Python validation, pinned Horizon native compile and in-world pathfinding E2E.
 - [ ] Actual bed ownership/sleep, door opening, permanent household claims, and shelter effects on morale.
+
+## Next autonomous-settlement milestones (proposed order, do not mistake for implemented)
+
+1. **Safety/claims:** a physical plot-ownership registry and collision/obstruction
+   checks across every completed hut, farm and pending construction. Add a
+   deliberate operator approval boundary before any automatic site selection.
+2. **Community life:** persistent household ownership and real beds only after
+   Horizon indoor navigation is verified; then introduce daily resident needs
+   and morale effects without touching the item economy.
+3. **Profession E2E:** mine, lumberjack and baker jobs with real loaded-world
+   observations and bounded actions. Keep unobserved/offscreen production
+   separate from physical inventory transfers.
+4. **Crash-consistent economy:** durable cross-inventory/world action journal
+   before trade UI, courier item delivery or harvest-to-stock credits. Avoid
+   minting double resources after rollback/restart.
+5. **Civilization autonomy:** villages propose construction, negotiate prices,
+   build relationships, compete for land and form alliances. Player can join,
+   advise, veto or oppose decisions instead of micromanaging every task.
+6. **Politics and war:** territorial claims, succession and logistics first,
+   actual guard combat/raids only after consistent casualty and chunk-boundary
+   handling exists.
+
+**Development policy while GitHub Actions are disabled:** add isolated,
+reviewable source milestones with explicit local verification gaps. Do not call
+them playable until the local Horizon client E2E proves the actual world state.
