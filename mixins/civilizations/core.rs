@@ -701,7 +701,8 @@ impl Settlement {
         let mut hypothetical = self.clone();
         let mut report = Vec::new();
         for offset in 1..=days.min(MAX_COUNCIL_FORECAST_DAYS) {
-            hypothetical.day();
+            // Events belong to the hypothetical clone, not World.chronicle.
+            let _discarded_events = hypothetical.day();
             report.push(AbstractDayForecast {
                 offset,
                 wheat: hypothetical.quantity(Good::Wheat),
