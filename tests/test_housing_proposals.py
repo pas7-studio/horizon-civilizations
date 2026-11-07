@@ -28,6 +28,9 @@ class VillageHousingProposalContracts(unittest.TestCase):
         self.assertIn("distance(site, origin)", check)
         self.assertIn("distance(job.origin, origin)", check)
         self.assertIn("distance(farm.origin, origin)", check)
+        self.assertIn("i128::from(a[0]) - i128::from(b[0])", check)
+        self.assertIn("i128::from(a[2]) - i128::from(b[2])", check)
+        self.assertIn("12_i128 * 12..=80_i128 * 80", check)
 
     def test_manual_and_proposed_construction_share_same_safety_policy(self):
         proposal = CORE.split("pub fn proposed_hut(", 1)[1].split("\n    }", 1)[0]
