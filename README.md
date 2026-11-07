@@ -1,3 +1,14 @@
+## Native test gate: both Rust modules are mandatory
+
+The pinned Horizon native build now enumerates and runs **both**
+`civilizations_core::` and `civilizations_glue::` tests. Cargo can exit zero
+on a test selector matching zero cases, so the gate checks that each filter
+finds at least one real native test **before** claiming a passing build. The
+final JSON evidence includes `native_mod_tests` with matched counts; the
+first-play gate refuses empty or missing suites even when a binary exists.
+A mock Cargo-only Python regression suite covers zero-match, enumeration
+failure and valid coverage. This does **not** replace actual native compilation.
+
 ## Crash-safe first save: orphaned temporary files (Draft PR #34)
 
 An interrupted initial write can leave `world.json.tmp` **without** a
