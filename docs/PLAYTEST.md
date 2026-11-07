@@ -512,3 +512,29 @@ a separate 3D return can release one source-backed resource receipt.
 `/civ gathercheck Ashford` and `/civ diagnose Ashford` now report
 whether pickup was witnessed. See TEST_PLAN 234-244 and retain full
 world/actor/log evidence. No claimed visible carried ItemStack.
+
+## Latest native gather verification — crash-safe acknowledgement / fair queue
+
+Git branch: `fix/gather-crash-proof-fair-queue-v0115` (Draft stacked
+on PR #30; NOT merged, NOT playable-verified).
+
+```powershell
+git fetch origin
+git switch fix/gather-crash-proof-fair-queue-v0115
+.\scripts\validate-local.ps1 -Format
+.\scripts\validate-local.ps1 -BuildClient
+```
+
+`-Format` changes files locally: inspect that diff. Build with
+Rust 1.95 and Python 3.11+, using network access and official
+Horizon/Minecraft Java assets owned by the tester. GitHub Actions
+remain intentionally disabled. Only run on a disposable world.
+
+Use `/civ diagnose NAME`, OP `/civ gathercheck NAME`, actual
+`world.json`, and Minecraft block/barrel inspections to check:
+write-ahead Issued, successful native block edit and immediate air,
+durably confirmed native edit, source witness, then same NPC's
+physical return to hall. Crash immediately after issued/block edit
+but before native confirmation: ZERO auto-credit, OP quarantine.
+Run TEST_PLAN 245–254 with multiple settlements. Real item cargo
+models/animations and full playability still not claimed.

@@ -468,3 +468,33 @@
   older tests updated so they cannot skip witnessing.
 - Source-only inspections performed; no Rust compile, Python unittest,
   native Horizon build or Minecraft E2E. No change to main/Actions.
+
+## 2026-11-08 — fair multi-village gather and native-edit crash proof
+
+- Found that `gather_one_step` used `.find()` on ascending settlement
+  IDs and could stall all later village harvests whenever the first
+  settlement's NPC was blocked returning from a quarry or tree.
+  Introduced pure deterministic `gather_turn_index` and round-robin
+  selection of all loaded nonblocked village gathers once per
+  eight-tick native work opportunity; shift tracks actual job role.
+- Found that Issued+air+same UUID worker could still be misinterpreted
+  after a crash between Issued save and native command execution,
+  especially if someone else removed the source block meanwhile.
+  Added serde-default `GatherJob.native_edit_confirmed` false.
+- After Issue is persisted and ONLY after native command returns
+  success AND a freshly loaded read finds exact source air, the
+  adapter persists `native_edit_confirmed`. This must precede
+  `pickup_witnessed` and the final hall receipt. Issued without
+  native confirmation on restart is quarantined, not replayed,
+  witnessed or paid. Native command refusal/no-op is also blocked.
+- Preserved loadability for old PR #30 saves which may already
+  have pickup_witnessed=true with no new native_edit_confirmed.
+  They load but cannot get further credit; the adapter blocks the
+  ambiguous issued receipt until explicit OP decision.
+- Added 8 Rust regression cases and 10 Python structural tests.
+  Updated existing Rust successful gather cases to explicitly
+  mark native confirmation before pickup witness, while preserving
+  failure tests for ambiguous/legacy state. Adjusted old Python
+  exact-string source contracts for new saved journal fields.
+- Static inspection only (30/30); no Rust/Python runtime tests or
+  native Horizon compilation/gameplay evidence. Draft-only.

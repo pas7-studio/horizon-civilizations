@@ -4,7 +4,7 @@ use crate::game::{
     civilizations_core::{farm_plan, hut_plan, town_hall_plan, bakery_plan, hall_storage_positions,
         BarrelDirection, BarrelPhase, inspect_farm, inspect_hut, inspect_town_hall, inspect_bakery, is_ground,
         is_rooted_oak_harvest_origin, short_oak_stem_height, inspect_oak_stem,
-        native_worker_near, native_worker_reaches_block,
+        native_worker_near, native_worker_reaches_block, gather_turn_index,
         BuildInspection, DailyPhase, FarmBlock, FarmDecision, FarmStage, Good, HomeSlot, Job, VisualBuildJob,
         World, inspect_home, hall_board_positions, HOUSING_PLOT_OFFSETS, MAX_HOUSING_SURVEY_RESULTS,
         MAX_SIM_DAYS},
@@ -1149,17 +1149,18 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             "no explicit saved-state blocker; check natural plots, NPC routes and native game logs".to_owned()
         };
         let gather_state = if let Some(stem) = &v.oak_stem {
-            format!("oak log {}/{} at {:?}, issued={}, pickup={}, blocked={}",
+            format!("oak log {}/{} at {:?}, issued={}, native={}, pickup={}, blocked={}",
                 stem.cursor + 1, stem.height,
                 v.gather_job.as_ref().map(|job| (job.position, job.worker_id)),
                 v.gather_job.as_ref().is_some_and(|job| job.issued),
+                v.gather_job.as_ref().is_some_and(|job| job.native_edit_confirmed),
                 v.gather_job.as_ref().is_some_and(|job| job.pickup_witnessed),
                 v.gather_job.as_ref().is_some_and(|job| job.blocked))
         } else {
             v.gather_job.as_ref().map(|job| format!(
-                "{:?} at {:?}, worker={:?}, issued={}, pickup={}, blocked={}",
+                "{:?} at {:?}, worker={:?}, issued={}, native={}, pickup={}, blocked={}",
                 job.good, job.position, job.worker_id, job.issued,
-                job.pickup_witnessed, job.blocked
+                job.native_edit_confirmed, job.pickup_witnessed, job.blocked
             )).unwrap_or_else(|| "idle".to_owned())
         };
         reply(game, format!(
@@ -1197,9 +1198,10 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             stem.cursor + 1, stem.height, stem.root
         )).unwrap_or_default();
         reply(game, format!(
-            "{} gather audit: {:?} at {:?}, worker stand {:?}, assigned resident {:?}, planned native block {}, issued={}, source pickup witnessed={}, blocked={}, live native block {:?}.{} Blocked ISSUED receipts are quarantined. Inspect world save and original block before OP /civ discardgather {} intact|empty; abandonment provides ZERO materials.",
+            "{} gather audit: {:?} at {:?}, worker stand {:?}, assigned resident {:?}, planned native block {}, issued={}, native edit confirmed={}, source pickup witnessed={}, blocked={}, live native block {:?}.{} Blocked ISSUED receipts are quarantined. Inspect world save and original block before OP /civ discardgather {} intact|empty; abandonment provides ZERO materials.",
             v.name, job.good, job.position, job.stand, job.worker_id, job.source_block(),
-            job.issued, job.pickup_witnessed, job.blocked, observed, stem_progress, v.name
+            job.issued, job.native_edit_confirmed, job.pickup_witnessed,
+            job.blocked, observed, stem_progress, v.name
         ));
         return;
     }
@@ -2830,17 +2832,37 @@ fn seems_natural_resource(game: &Game<'_>, dimension: &str, point: [i32; 3], goo
 /// If the process crashes after Issued but before the actual edit, the
 /// resulting uncertainty is quarantined; no automatic native retry or credit.
 fn gather_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), String> {
-    if !DailyPhase::at(game.world.day_time).on_shift(Job::Miner) { return Ok(()); }
     let dimension = game.dim.id().to_owned();
-    let target = state.world.as_ref().unwrap().settlements.values()
+    // Rotate among all loaded nonblocked village jobs. Previously .find()
+    // always chose the lowest village ID: an assigned worker unable to
+    // reach the hall could starve EVERY later settlement indefinitely.
+    // The tick advances by eight between gather runs, making this a
+    // deterministic fair round-robin, with no new world/save fields.
+    let eligible: Vec<_> = state.world.as_ref().unwrap().settlements.values()
         .filter(|v| v.dimension == dimension)
         .filter_map(|v| v.gather_job.as_ref().map(|job| (v.id, job.clone())))
-        .find(|(_, job)| !job.blocked && game.world.loaded(job.position[0], job.position[2]));
-    let Some((id, job)) = target else { return Ok(()); };
+        .filter(|(_, job)| !job.blocked && game.world.loaded(job.position[0], job.position[2]))
+        .collect();
+    let Some(slot) = gather_turn_index(state.physical_ticks, eligible.len()) else {
+        return Ok(());
+    };
+    let (id, job) = eligible[slot].clone();
+    let role = if job.good == Good::Wood { Job::Lumberjack } else { Job::Miner };
+    if !DailyPhase::at(game.world.day_time).on_shift(role) {
+        return Ok(());
+    }
     let observed = world_block(game, &dimension, job.position);
     let Some(name) = observed else { return Ok(()); };
     let before = state.world.as_ref().unwrap().clone();
     if job.issued {
+        // If the server stopped after Issued was saved but before the
+        // command's native result AND fresh observed air were durably
+        // acknowledged, the block may have been removed by anyone.
+        // Quarantine even if it is now air; never credit such a crash.
+        if !job.native_edit_confirmed {
+            state.world.as_mut().unwrap().block_gather(id)?;
+            return save_autonomous(state, before);
+        }
         // Legacy journals lack a stable worker ID. Since any same-role NPC
         // might stand near the hall, such a receipt is NOT sufficient proof
         // of a physically returned courier. Quarantine, never mint goods.
@@ -2938,13 +2960,24 @@ fn gather_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
     // would be reissued. If persistence fails, no native command is sent.
     state.world.as_mut().unwrap().mark_gather_issued(id)?;
     save_autonomous(state, before)?;
-    if !game.native_run_command(&cmd) {
-        // Uncertain or refused native commands never auto-retry. Preserve
-        // Blocked in the durable journal for explicit no-credit discard.
-        let issued = state.world.as_ref().unwrap().clone();
+    // Native command success alone is not enough: a conditional command
+    // can be accepted without modifying the expected source. Re-read the
+    // exact block immediately while the current dimension/chunk is loaded.
+    let accepted = game.native_run_command(&cmd);
+    let now_air = world_block(game, &dimension, job.position).as_deref()
+        == Some("minecraft:air");
+    let issued = state.world.as_ref().unwrap().clone();
+    if accepted && now_air {
+        // If this save fails after a native edit, the durable journal stays
+        // Issued-but-unconfirmed. On restart it is quarantined, never
+        // mistakenly treated as a valid paid resource.
+        state.world.as_mut().unwrap().mark_gather_native_edit_confirmed(id)?;
+    } else {
+        // Refused, no-op or unloaded command is unsafe to retry.
+        // Keep the uncertainty for OP inspection with ZERO auto-credit.
         state.world.as_mut().unwrap().block_gather(id)?;
-        save_autonomous(state, issued)?;
     }
+    save_autonomous(state, issued)?;
     Ok(())
 }
 

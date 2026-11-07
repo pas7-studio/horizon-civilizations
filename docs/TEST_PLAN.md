@@ -783,3 +783,51 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
      recovery. Collect logs, source block/actor UUID checks and
      actual barrel item counts. This proves a receipt witness only,
      NOT a visually held Minecraft ItemStack.
+
+## Native edit crash-window + multi-village fairness acceptance (unreleased)
+
+245. Check out exact latest stacked branch in a Windows machine with
+     Rust 1.95, Python 3.11+, Git and network. Run rustfmt, cargo
+     check/test, Clippy, all Python tests and pinned native Horizon
+     compile+game client. Log exact commit SHA and all first failures.
+246. Create two valid settlements in the same dimension, each with
+     different active verified physical gathers and loaded UUID workers.
+     Stall the first village's worker far from its return hall. Confirm
+     the second village continues its own log/stone work within multiple
+     8-tick cycles instead of starving on the first job.
+247. Use 3 settlements and a mixture of Wood/Stone with one blocked
+     and one unloaded source; blocked/unloaded jobs must be skipped.
+     Check loadable candidates receive roughly even opportunities as
+     observed from server logs and saved receipts; no native mutations
+     in unloaded chunks or wrong dimensions.
+248. Plan, bind worker, persist Issued. Before command returns
+     deliberately interrupt process. Reload with original block
+     intact. The Issued but unconfirmed job is quarantined and cannot
+     retry automatically or credit even if worker arrives at the hall.
+249. Repeat interrupt immediately after native block edit but before
+     native_edit_confirmed persistence. Reload with native block
+     already air. No reissue and ZERO automatic material credit,
+     even after the assigned worker visits source and hall. Operator
+     sees uncertain receipt and can abandon after real inspection.
+250. After successful native conditional command, verify a new
+     authoritative read sees exactly air, then that
+     native_edit_confirmed=true is committed durably BEFORE pickup
+     witness. Stop/reload at this boundary and resume source witness,
+     then separate 3D hall return without a second block command.
+251. Induce native command refusal, conditional no-op (source changed
+     between preflight and edit) and unloaded result. Each must block
+     without granting item, must not blindly retry or treat command
+     acceptance alone as proof the original log was removed.
+252. Load an old PR #30 save with an Issued gather whose
+     pickup_witnessed=true but native_edit_confirmed is missing.
+     The whole settlement must LOAD, with zero new stock; the issued
+     job is quarantined automatically and requires manual OP audit.
+253. For a 3–4-log natural oak, verify every next saved segment resets
+     native_edit_confirmed=false and pickup_witnessed=false while
+     retaining the assigned resident ID. Each block independently
+     requires native success, live air, source witness and hall return.
+254. Repeat across world restart, different dimension, night shift,
+     other same-role workers at the hall, downloaded/unloaded chunk,
+     corrupted journal data, and warehouse maximum capacity.
+     Document native log, block entity count, actual worker UUID and
+     save contents. This is NOT proof of rendered carried ItemStacks.

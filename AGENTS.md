@@ -1,3 +1,25 @@
+# Current stacked source — fair gather queue + native proof 2026-11-08
+
+- Latest branch `fix/gather-crash-proof-fair-queue-v0115`, stacked
+  after PR #30. No GitHub Actions, no merge to main, no claim of a
+  playable/modded Horizon binary before exact native compile + E2E.
+- `gather_turn_index` alternates loaded eligible settlements
+  on eight-tick gather opportunities; do NOT regress to first
+  `.find()` work-item selection.
+- `GatherJob.native_edit_confirmed` is serde-default false. Required
+  safe order: save Assigned → save Issued → execute native conditional
+  edit → freshly confirm air and command accepted → save native_edit_
+  confirmed → source pickup witness by same UUID worker → separate
+  hall return → one material credit.
+- Issued but unconfirmed means a potential crash AFTER native edit;
+  quarantine even if source air. Never automatically retry command,
+  infer approval from an air block, or credit the source. Old pickup
+  witnesses without native confirmation must LOAD but be quarantined.
+- Tests in `tests/test_gather_crash_fair_queue.py` plus 8 Rust cases;
+  TEST_PLAN 245–254. Actual Rust/Python/native/game verification NOT RUN.
+
+---
+
 # Latest worktree — source pickup witness gate (2026-11-08)
 
 - `feat/source-pickup-witness-v0115` stacks after PR #29. Keep all

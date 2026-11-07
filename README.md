@@ -9,7 +9,13 @@ Millenaire code or Minecraft assets. Original project code is MIT-licensed.
 > Status: **source prototype, not gameplay-verified**. See [verification status](docs/STATUS.md).
 
 > **Newest stacked Draft, not a release (2026-11-08):**
-> `feat/source-pickup-witness-v0115` adds identity-bound wood/stone
+> This source additionally rotates between loaded village resource
+> jobs and requires a saved **native command success + observed air**
+> receipt BEFORE any same-worker pickup witness or hall payment.
+> An uncertain Issued operation after restart is quarantined, never
+> replayed or paid, while legacy witnessed saves still load.
+>
+> `fix/gather-crash-proof-fair-queue-v0115` adds identity-bound wood/stone
 > harvesting with a persisted worker observation at the removed block,
 > followed by a separate worker return to the native hall. It includes
 > all prior experimental physical hall, bakery, native-barrel and
@@ -21,7 +27,7 @@ Millenaire code or Minecraft assets. Original project code is MIT-licensed.
 >
 > To validate this exact branch on a networked Windows machine with
 > Rust 1.95 and Python 3.11+:
-> `git switch feat/source-pickup-witness-v0115`, then
+> `git switch fix/gather-crash-proof-fair-queue-v0115`, then
 > `.\scripts\validate-local.ps1 -Format` and
 > `.\scripts\validate-local.ps1 -BuildClient`.
 > These are local build checks, **not a gameplay pass**.
