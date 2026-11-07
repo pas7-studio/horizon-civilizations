@@ -261,14 +261,16 @@ fn guide_actors(game: &mut Game<'_>, world: &World) {
             } else if phase.on_shift(resident.job)
                 && matches!(resident.job, Job::Lumberjack | Job::Miner)
                 && village.gather_job.as_ref().is_some_and(|job|
-                    job.worker_id.is_none_or(|assigned| assigned == resident_id)
+                    !job.blocked
+                        && job.worker_id.is_none_or(|assigned| assigned == resident_id)
                         && ((job.good == Good::Wood && resident.job == Job::Lumberjack)
                             || (job.good == Good::Stone && resident.job == Job::Miner)))
             {
                 let target = village.gather_job.as_ref().expect("gather exists");
-                if target.issued {
-                    // A log or stone is not credited until its worker
-                    // visibly returns to the town hall's receiving area.
+                if target.issued && target.pickup_witnessed {
+                    // The same assigned citizen stays at the real worksite
+                    // until pickup has been witnessed and durably saved.
+                    // Only then route them to the hall for delivery.
                     [f64::from(village.center[0]) + 0.5,
                      f64::from(village.center[1]),
                      f64::from(village.center[2] - 3) + 0.5]
@@ -1147,15 +1149,17 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             "no explicit saved-state blocker; check natural plots, NPC routes and native game logs".to_owned()
         };
         let gather_state = if let Some(stem) = &v.oak_stem {
-            format!("oak log {}/{} at {:?}, issued={}, blocked={}",
+            format!("oak log {}/{} at {:?}, issued={}, pickup={}, blocked={}",
                 stem.cursor + 1, stem.height,
                 v.gather_job.as_ref().map(|job| (job.position, job.worker_id)),
                 v.gather_job.as_ref().is_some_and(|job| job.issued),
+                v.gather_job.as_ref().is_some_and(|job| job.pickup_witnessed),
                 v.gather_job.as_ref().is_some_and(|job| job.blocked))
         } else {
             v.gather_job.as_ref().map(|job| format!(
-                "{:?} at {:?}, worker={:?}, issued={}, blocked={}",
-                job.good, job.position, job.worker_id, job.issued, job.blocked
+                "{:?} at {:?}, worker={:?}, issued={}, pickup={}, blocked={}",
+                job.good, job.position, job.worker_id, job.issued,
+                job.pickup_witnessed, job.blocked
             )).unwrap_or_else(|| "idle".to_owned())
         };
         reply(game, format!(
@@ -1193,9 +1197,9 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             stem.cursor + 1, stem.height, stem.root
         )).unwrap_or_default();
         reply(game, format!(
-            "{} gather audit: {:?} at {:?}, worker stand {:?}, assigned resident {:?}, planned native block {}, issued={}, blocked={}, live native block {:?}.{} Blocked ISSUED receipts are quarantined. Inspect world save and original block before OP /civ discardgather {} intact|empty; abandonment provides ZERO materials.",
+            "{} gather audit: {:?} at {:?}, worker stand {:?}, assigned resident {:?}, planned native block {}, issued={}, source pickup witnessed={}, blocked={}, live native block {:?}.{} Blocked ISSUED receipts are quarantined. Inspect world save and original block before OP /civ discardgather {} intact|empty; abandonment provides ZERO materials.",
             v.name, job.good, job.position, job.stand, job.worker_id, job.source_block(),
-            job.issued, job.blocked, observed, stem_progress, v.name
+            job.issued, job.pickup_witnessed, job.blocked, observed, stem_progress, v.name
         ));
         return;
     }
@@ -2849,6 +2853,21 @@ fn gather_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
             let v = &world.settlements[&id];
             let role = if job.good == Good::Wood { Job::Lumberjack } else { Job::Miner };
             let linked = loaded_actors(game, world, id);
+            if !job.pickup_witnessed {
+                // Seeing air alone is not proof of resource custody. Check
+                // that the EXACT assigned UUID-bound worker is still at the
+                // loaded source stand, in actual 3D reach, after the edit.
+                // Save this witness before navigation sends them home.
+                let witnessed = v.residents.iter()
+                    .filter(|r| r.alive && r.job == role && r.id == assigned)
+                    .any(|r| linked.iter().any(|(known, mob)| *known == r.id
+                        && game.native_mob(&dimension, *mob).is_some_and(|actor|
+                            native_worker_near(actor.pos, job.stand, 2.5, 2.0)
+                                && native_worker_reaches_block(actor.pos, job.position, 4.5))));
+                if !witnessed { return Ok(()); }
+                state.world.as_mut().unwrap().witness_gather_pickup(id, assigned)?;
+                return save_autonomous(state, before);
+            }
             let delivered = v.residents.iter()
                 .filter(|r| r.alive && r.job == role && r.id == assigned)
                 .any(|r| linked.iter().any(|(known, mob)| *known == r.id
