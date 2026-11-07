@@ -115,8 +115,8 @@ ownership are claimed; no Actions workflows are used.
 
 ## Offline-first local compile (stacked v0.1.14, no GitHub Actions)
 
-PR #21 is stacked on #20 → #19 → #18 → #17 → #16 → #15. Check out
-`feat/physical-bakery-economy-v0114` when testing **all seven
+PR #22 is stacked on #21 → #20 → #19 → #18 → #17 → #16 → #15. Check out
+`feat/physical-bakery-economy-v0114` when testing **all eight
 features together**, not `main` or an older GitHub Windows artifact.
 
 From PowerShell in the local repository with Rust 1.95.0, Git, Python 3.11+
