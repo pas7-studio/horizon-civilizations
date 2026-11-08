@@ -63,6 +63,20 @@
 - A packaged `.hnmod` snapshots the WHOLE tree, so a build may contain another
   session's unfinished work; check `build.log` errors before blaming your change.
 
+# Module tree (2026-11-08, after main was modularized)
+
+- `main` now holds `mixins/civilizations/core/` + `glue/`; the old single
+  `core.rs` / `glue.rs` are gone. `feat/hall-information-boards-v0115` is the
+  superseded single-file branch: do not merge it, port from it instead.
+- Ported into modules: `glue/build.rs` (dig_natural, two-wide/two-high
+  quarry_one_step with step repair and explicit stall logs),
+  `core/world/gather.rs` (plan_quarry_gather, gather_claim_ok),
+  `glue/gather.rs` (executor uses gather_claim_ok), `glue/economy.rs`
+  (a new pit must not overlap an existing plot).
+- `main` is at b50c330 and pushed. Gates on main: cargo test 197/197, clippy
+  clean, package + verify_static PASS, Python exactly the declared 22-failure
+  baseline (249 passing).
+
 # Latest worktree — quarry pit + wider plot search (2026-11-08)
 
 - `Settlement.quarry_step: u8` (serde default 0), `MAX_QUARRY_STEPS = 24`,

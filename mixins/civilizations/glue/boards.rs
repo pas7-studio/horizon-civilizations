@@ -263,8 +263,8 @@ pub(super) fn refresh_post_boards(game: &mut Game<'_>, world: &World) {
                 .collect();
             let [x, y, z] = post.origin;
             // The camp cell itself stays air for the worker; the sign stands
-            // one block beside it when that cell is clear.
-            let [sx, sy, sz] = [x + 1, y, z];
+            // two blocks aside so it can never block the pit's walkable lane.
+            let [sx, sy, sz] = [x + 1, y, z + 2];
             let free = world_block(game, &dimension, [sx, sy, sz])
                 .is_some_and(|block| block == "minecraft:air");
             if free {
