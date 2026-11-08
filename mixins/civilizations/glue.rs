@@ -165,7 +165,7 @@ pub fn register(commands: &mut Vec<NativeCommand>) {
         "civ homes <name:word>", "civ survey <name:word>",
         "civ council <name:word>", "civ forecast <name:word>",
         "civ plots <name:word>", "civ development <name:word>",
-        "civ hall <name:word>", "civ warehouse <name:word>", "civ meals <name:word>", "civ bakery <name:word>",
+        "civ hall <name:word>", "civ warehouse <name:word>", "civ requests <name:word>", "civ meals <name:word>", "civ bakery <name:word>",
         "civ posts <name:word>",
         "civ roles <name:word>",
         "civ status <name:word>",
@@ -178,6 +178,7 @@ pub fn register(commands: &mut Vec<NativeCommand>) {
         "civ talk <name:word> <resident:integer> <page:word>",
         "civ talk <name:word> <resident:integer> <page:word> <a:word>",
         "civ talk <name:word> <resident:integer> <page:word> <a:word> <b:word>",
+        "civ talk <name:word> <resident:integer> <page:word> <a:word> <b:word> <c:word>",
         "civ sell <good:word> <amount:integer>", "civ buy <good:word> <amount:integer>",
     ] {
         commands.push(NativeCommand::new(usage));
@@ -1003,16 +1004,28 @@ fn read_talk(game: &mut Game<'_>, uuid: u128, village_id: u64, resident_id: u64)
             .and_then(|p| p.settlement) == Some(village_id);
         (village, resident, member)
     };
-    let stored = physical_barrel_stock(game, &village.dimension, village.center);
-    let (wood_missing, stone_missing) = stored.as_ref().map_or((0, 0), |stock| {
-        crate::game::civilizations_core::physical_construction_shortfall(&village, stock)
+    // An unfinished hall has no barrels. The saved inbound warehouse
+    // provides its physical startup demand. Finished halls require a
+    // fresh two-barrel snapshot and a reconciled external journal.
+    let stored = if village.hall_complete {
+        physical_barrel_stock(game, &village.dimension, village.center)
+    } else { None };
+    let requests = crate::game::civilizations_core::physical_supply_requests(
+        &village, stored.as_deref()
+    );
+    let (wood_missing, stone_missing) = requests.as_ref().map_or((0, 0), |needs| {
+        let amount = |good| needs.iter().find(|need| need.good == good)
+            .map_or(0, |need| need.amount);
+        (amount(Good::Wood), amount(Good::Stone))
     });
-    let wants = resident_wants(&village, resident.job, wood_missing, stone_missing);
-    let carried = [Good::Wood, Good::Stone, Good::Wheat].iter()
+    let wants = requests.as_ref().map_or_else(Vec::new, |needs| {
+        crate::game::civilizations_core::resident_wants_for_requests(resident.job, needs)
+    });
+    let carried = [Good::Wood, Good::Stone, Good::Bread, Good::Wheat].iter()
         .map(|good| (*good, game.native_count_items(good.item())))
         .collect();
     Some(Talk {
-        village, resident, is_member, wants, stock_known: stored.is_some(),
+        village, resident, is_member, wants, stock_known: requests.is_some(),
         wood_missing, stone_missing, carried,
     })
 }
@@ -1142,16 +1155,40 @@ fn talk_command(game: &mut Game<'_>, player: &NativeServerPlayer, mut args: std:
             .filter(|state| state.problem.is_none())
             .and_then(|state| state.world.as_ref())
             .and_then(|world| world.by_name(village_name))
-            .map(|village| (village.id, village.dimension.clone(), village.center))
+            .and_then(|village| {
+                let resident_uuid = village.residents.iter()
+                    .find(|resident| resident.alive && resident.id == resident_id)?
+                    .entity_uuid?;
+                Some((village.id, village.dimension.clone(), village.center, resident_uuid))
+            })
     };
-    let Some((village_id, dimension, center)) = found else {
+    let Some((village_id, dimension, center, resident_uuid)) = found else {
         error(game, "unknown settlement");
         return;
     };
     let dx = player.position[0] - f64::from(center[0]);
     let dz = player.position[2] - f64::from(center[2]);
-    if player.dimension != dimension || !(dx * dx + dz * dz <= 64.0 * 64.0) {
+    if player.dimension != dimension || !player.position.iter().all(|v| v.is_finite())
+        || !(dx * dx + dz * dz <= 64.0 * 64.0) {
         error(game, "you are too far from this village to talk to its people");
+        return;
+    }
+    // Dialogue buttons are ordinary commands and can be replayed without
+    // a right-click. Reverify the original UUID and live proximity for
+    // every action, especially a physical inventory sale.
+    let close_to_real_resident = game.native_entity_by_uuid(resident_uuid)
+        .is_some_and(|(mob_dimension, mob_id, kind)| {
+            mob_dimension == dimension && kind == "minecraft:villager"
+                && game.native_mob(&mob_dimension, mob_id).is_some_and(|mob| {
+                    let delta_x = player.position[0] - mob.pos[0];
+                    let delta_y = player.position[1] - mob.pos[1];
+                    let delta_z = player.position[2] - mob.pos[2];
+                    delta_x * delta_x + delta_z * delta_z <= 6.0 * 6.0
+                        && delta_y.abs() <= 4.0
+                })
+        });
+    if !close_to_real_resident {
+        error(game, "stand within 6 blocks of this loaded resident to talk or trade");
         return;
     }
     let (page, notice) = match page_word {
@@ -1381,7 +1418,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
     let actor = format!("{:032x}", player.uuid);
     let action = args.next().unwrap_or("help");
     if action == "help" {
-        reply(game, "Civilizations: /civ list | nearby | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | hall <name> | warehouse <name> | meals <name> | posts <name> | roles <name> | status <name> | chunks <name> | diagnose <name> | buyplot <name> | buyhouse <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, recoveractor <name> <resident-id> attempt, barrelcheck <name>, resolvebarrel <name> confirm|cancel <observed_count>, gathercheck <name>, discardgather <name> intact|empty, day [days], construct <name>, post <name> lumber|quarry|sand|dirt, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
+        reply(game, "Civilizations: /civ list | nearby | requests <name> | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | hall <name> | warehouse <name> | meals <name> | posts <name> | roles <name> | status <name> | chunks <name> | diagnose <name> | buyplot <name> | buyhouse <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, recoveractor <name> <resident-id> attempt, barrelcheck <name>, resolvebarrel <name> confirm|cancel <observed_count>, gathercheck <name>, discardgather <name> intact|empty, day [days], construct <name>, post <name> lumber|quarry|sand|dirt, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
         return;
     }
     if action == "list" {
@@ -1428,6 +1465,44 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
                 villages.len(), shown.join(" | ")
             )
         });
+        return;
+    }
+    if action == "requests" {
+        let name = args.next().unwrap_or("");
+        let Some(village) = world.by_name(name) else {
+            error(game, "unknown settlement: /civ requests <name>");
+            return;
+        };
+        // Public read-only notices never load chunks or inspect a foreign
+        // dimension. An unavailable native stock view is UNKNOWN, not zero.
+        let stored = if village.hall_complete && village.dimension == player.dimension {
+            physical_barrel_stock(game, &village.dimension, village.center)
+        } else { None };
+        let requests = crate::game::civilizations_core::physical_supply_requests(
+            village, stored.as_deref()
+        );
+        let Some(requests) = requests else {
+            reply(game, format!(
+                "{} supply requests unavailable: native barrels are unloaded, or a native inventory journal needs reconciliation. Visit the hall and inspect /civ warehouse {}.",
+                village.name, village.name
+            ));
+            return;
+        };
+        if requests.is_empty() {
+            reply(game, format!(
+                "{} has no current physical supply shortfall. This is a live snapshot, not a reserved order.",
+                village.name
+            ));
+            return;
+        }
+        let notices = requests.iter().map(|request| format!(
+            "{} x{} ({}; {} coins/item at existing market rate)",
+            request.good.as_str(), request.amount, request.purpose, request.good.price()
+        )).collect::<Vec<_>>();
+        reply(game, format!(
+            "{} asks for {}. Join and speak in person with the mayor (or a baker for wheat) to deliver items. Amounts are read-only estimates, not reserved contracts; inventory and demand are checked again on trade.",
+            village.name, notices.join(" | ")
+        ));
         return;
     }
     if action == "meals" {
