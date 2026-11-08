@@ -44,7 +44,7 @@ class NaturalForestryAndGatherJournalContracts(unittest.TestCase):
         self.assertIn("inspect_oak_stem(stem, |pos| world_block(", runner)
         self.assertIn("seems_natural_resource(game, &dimension, job.position, job.good)", runner)
         self.assertIn("|| !valid_resource", runner)
-        self.assertIn("!state.world.as_ref().unwrap().gather_site_unclaimed(id, job.position, job.stand)", runner)
+        self.assertIn("!state.world.as_ref().unwrap().gather_claim_ok(id, job.good, job.position, job.stand)", runner)
         self.assertLess(runner.index("|| !valid_resource"),
                         runner.index("mark_gather_issued(id)?"))
 

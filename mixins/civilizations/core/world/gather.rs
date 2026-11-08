@@ -65,6 +65,63 @@ impl World {
         Ok(())
     }
 
+    /// The claim rule for an existing plan, identical to the planner's: a
+    /// quarry's own pit is exempt from the plot-proximity half of the rule
+    /// (its camp stands there by design), everything else is not.
+    pub fn gather_claim_ok(
+        &self, village_id: u64, good: Good, position: [i32; 3], stand: [i32; 3],
+    ) -> bool {
+        if self.gather_site_unclaimed(village_id, position, stand) { return true; }
+        if good != Good::Stone { return false; }
+        let Some(v) = self.settlements.get(&village_id) else { return false; };
+        v.posts.iter().any(|post| post.kind == PostKind::Quarry
+            && (i64::from(position[0]) - i64::from(post.origin[0])).abs()
+                <= i64::from(POST_RADIUS)
+            && (i64::from(position[2]) - i64::from(post.origin[2])).abs()
+                <= i64::from(POST_RADIUS))
+    }
+
+    /// Plan one stone block inside a village's own quarry yard. A pit is dug
+    /// where the camp stands, so the ordinary claim check (which protects the
+    /// village's own plots) would refuse its own excavation. Only the
+    /// yard-radius check replaces it; every other validation is identical.
+    pub fn plan_quarry_gather(
+        &mut self, village_id: u64, position: [i32; 3], stand: [i32; 3]
+    ) -> Result<(), String> {
+        let v = self.settlements.get(&village_id).ok_or("unknown settlement")?;
+        let quarry = v.posts.iter().find(|post| post.kind == PostKind::Quarry)
+            .ok_or("this village has no quarry")?;
+        if (i64::from(position[0]) - i64::from(quarry.origin[0])).abs() > i64::from(POST_RADIUS)
+            || (i64::from(position[2]) - i64::from(quarry.origin[2])).abs() > i64::from(POST_RADIUS)
+        {
+            return Err("stone is outside the quarry yard".into());
+        }
+        if v.gather_job.is_some() { return Err("another physical gather is pending".into()); }
+        if !v.autonomy_enabled { return Err("village autonomy paused".into()); }
+        if v.count(Job::Miner) == 0 { return Err("no qualified living worker".into()); }
+        if i64::from(position[0]).abs() > 29_999_988
+            || i64::from(position[2]).abs() > 29_999_988
+            || !(-2046..=2046).contains(&position[1]) {
+            return Err("gather point outside safe world bounds".into());
+        }
+        let wx = i128::from(stand[0]) - i128::from(position[0]);
+        let wy = i128::from(stand[1]) - i128::from(position[1]);
+        let wz = i128::from(stand[2]) - i128::from(position[2]);
+        if wx * wx + wy * wy + wz * wz > 16 {
+            return Err("worker stand is not reachable from resource within 4 blocks".into());
+        }
+        let dx = i128::from(position[0]) - i128::from(v.center[0]);
+        let dz = i128::from(position[2]) - i128::from(v.center[2]);
+        if !(12_i128 * 12..=80_i128 * 80).contains(&(dx * dx + dz * dz)) {
+            return Err("gather only in the village outer work area".into());
+        }
+        self.settlements.get_mut(&village_id).unwrap().gather_job = Some(GatherJob {
+            position, stand, good: Good::Stone, worker_id: None, issued: false,
+            native_edit_confirmed: false, pickup_witnessed: false, blocked: false,
+        });
+        Ok(())
+    }
+
     /// Start a whole SHORT tree only after the adapter observed all native
     /// trunk and crown blocks. No wood is credited until individual segments
     /// have actually disappeared and the bound lumberjack returns to hall.

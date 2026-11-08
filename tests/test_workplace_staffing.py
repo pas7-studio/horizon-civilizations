@@ -111,12 +111,14 @@ class WorkplaceStaffingContracts(unittest.TestCase):
         self.assertIn("pub const MAX_QUARRY_STEPS: u8 = 24;", CORE)
         self.assertIn("pub fn advance_quarry(", CORE)
         self.assertIn("pub quarry_step: u8,", CORE)
+        self.assertIn("pub fn plan_quarry_gather(", CORE)
+        self.assertIn("pub fn gather_claim_ok(", CORE)
         pit = GLUE.split("fn quarry_one_step(", 1)[1].split("\n}", 1)[0]
         self.assertIn('name == "minecraft:stone"', pit)
-        self.assertIn("plan_gather(id, Good::Stone, position, stand)", pit)
+        self.assertIn("plan_quarry_gather(id, position, stand)", pit)
         self.assertIn("advance_quarry(id)?", pit)
-        self.assertIn("native_run_command", pit)
-        self.assertIn("native_worker_near(actor.pos, position, 4.0, 3.0)", pit)
+        self.assertIn("dig_natural(", pit)
+        self.assertIn("native_worker_near(actor.pos, position, 4.5, 5.0)", pit)
         start = GLUE.split("fn quarry_start(", 1)[1].split("\n}", 1)[0]
         self.assertIn("is_ground", start)
         self.assertNotIn("native_run_command", start)

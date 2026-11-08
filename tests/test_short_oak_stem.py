@@ -68,7 +68,7 @@ class ShortOakStemContracts(unittest.TestCase):
         runner = section(GLUE, "fn gather_one_step(", "\n}")
         self.assertIn("inspect_oak_stem(stem, |pos| world_block(game, &dimension, pos))", runner)
         self.assertIn("|| !valid_resource", runner)
-        self.assertIn("gather_site_unclaimed(id, job.position, job.stand)", runner)
+        self.assertIn("gather_claim_ok(id, job.good, job.position, job.stand)", runner)
         self.assertLess(runner.index("|| !valid_resource"),
                         runner.index("mark_gather_issued(id)?"))
         self.assertLess(runner.index("mark_gather_issued(id)?"),

@@ -146,7 +146,7 @@ pub(super) fn gather_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> R
     if name != job.source_block()
         || !valid_resource
         || !gather_stand_still_clear(game, &dimension, job.stand)
-        || !state.world.as_ref().unwrap().gather_site_unclaimed(id, job.position, job.stand) {
+        || !state.world.as_ref().unwrap().gather_claim_ok(id, job.good, job.position, job.stand) {
         // Physical resource or land ownership may change after a saved plan.
         // Recheck tree/stone provenance and every registered parcel/worksite
         // immediately before authorizing a Minecraft world mutation.

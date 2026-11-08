@@ -448,54 +448,127 @@ pub(super) fn quarry_start(game: &Game<'_>, dimension: &str, center: [i32; 3]) -
 /// An open-pit quarry: the bound miner walks a staircase down through real
 /// ground until it reaches stone. Soil is excavation (no credit, no receipt);
 /// a stone block goes through the normal receipt journal, so one cobble is
+/// Remove one natural block (soil or growth) for a quarry pit. Never a player
+/// block, water or a container: a pit only ever opens natural ground.
+pub(super) fn dig_natural(game: &mut Game<'_>, dimension: &str, position: [i32; 3]) -> bool {
+    let Some(block) = world_block(game, dimension, position) else { return false; };
+    if block == "minecraft:air" { return false; }
+    if !(is_ground(&block) || is_clearable_growth(&block)) { return false; }
+    let [x, y, z] = position;
+    game.native_run_command(&format!(
+        "execute in {dimension} run setblock {x} {y} {z} minecraft:air replace"
+    ))
+}
+
 /// credited only after that same worker returns to the hall.
 pub(super) fn quarry_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), String> {
     if !DailyPhase::at(game.world.day_time).on_shift(Job::Miner) { return Ok(()); }
     let dimension = game.dim.id().to_owned();
     let target = state.world.as_ref().unwrap().settlements.values()
-        .filter(|v| v.dimension == dimension && v.gather_job.is_none())
+        .filter(|v| v.dimension == dimension)
         .find_map(|v| v.posts.iter().find(|post| post.kind == PostKind::Quarry)
             .map(|post| (v.id, post.origin, v.quarry_step, post.worker_id)));
-    let Some((id, origin, step, Some(worker))) = target else { return Ok(()); };
+    let Some((id, origin, step, bound)) = target else { return Ok(()); };
     if step >= MAX_QUARRY_STEPS { return Ok(()); }
     let depth = i32::from(step);
+    // Repair every opened step to two blocks of headroom and two wide: a
+    // one-wide, one-high tunnel is something the villager AI will not walk
+    // into, so the stone below it could never be reached.
+    if state.physical_ticks % 40 == 0 {
+        for k in 0..=depth {
+            for dz in 0..=1 {
+                dig_natural(game, &dimension, [origin[0] + k, origin[1] - k + 1, origin[2] + dz]);
+            }
+        }
+    }
+    // A planned stone receipt owns the pit until it is settled.
+    if state.world.as_ref().unwrap().settlements[&id].gather_job.is_some() {
+        return Ok(());
+    }
     let position = [origin[0] + depth, origin[1] - depth, origin[2]];
     let Some(name) = world_block(game, &dimension, position) else { return Ok(()); };
-    // Only the bound miner digs this pit, and only while standing at it.
+    // A fresh pit has no bound digger yet: the village's own miner opens it.
     let world = state.world.as_ref().unwrap();
     let village = &world.settlements[&id];
     let village_name = village.name.clone();
+    let Some(worker) = bound.or_else(|| village.residents.iter()
+        .filter(|r| r.alive && r.job == Job::Miner).map(|r| r.id).min())
+    else { return Ok(()); };
+    // Only the bound miner digs this pit, and only while standing at it.
     let linked = loaded_actors(game, world, id);
     let near = village.residents.iter()
         .filter(|r| r.alive && r.id == worker && r.job == Job::Miner)
         .any(|r| linked.iter().any(|(known, mob)| *known == r.id
             && game.native_mob(&dimension, *mob).is_some_and(|actor|
-                native_worker_near(actor.pos, position, 4.0, 3.0))));
-    if !near { return Ok(()); }
+                native_worker_near(actor.pos, position, 4.5, 5.0))));
+    if !near {
+        if state.physical_ticks % 600 == 0 {
+            log::info!(
+                "[civilizations] {village_name} quarry waits for miner #{worker} at {position:?}"
+            );
+        }
+        return Ok(());
+    }
     let before = state.world.as_ref().unwrap().clone();
+    if bound.is_none() {
+        // Bind the digger once: the pit and its stone receipts then always
+        // belong to this resident.
+        if state.world.as_mut().unwrap()
+            .set_post_worker(id, PostKind::Quarry, worker).is_ok()
+        {
+            save_autonomous(state, before.clone())?;
+            log::info!("[civilizations] {village_name} bound its miner to the quarry pit");
+        }
+    }
     if name == "minecraft:air" {
         state.world.as_mut().unwrap().advance_quarry(id)?;
         return save_autonomous(state, before);
     }
     if name == "minecraft:stone" {
-        let Some(stand) = gather_stand(game, &dimension, position) else { return Ok(()); };
-        if state.world.as_mut().unwrap()
-            .plan_gather(id, Good::Stone, position, stand).is_ok()
+        let Some(stand) = gather_stand(game, &dimension, position) else {
+            // No room to stand behind the stone yet: open the headroom of the
+            // step behind it and let the next tick find the stand.
+            let back = depth.saturating_sub(1).max(1);
+            let prev = [origin[0] + back, origin[1] - back, origin[2]];
+            if let Some(head) = prev[1].checked_add(1) {
+                dig_natural(game, &dimension, [prev[0], head, prev[2]]);
+                dig_natural(game, &dimension, [prev[0], head, prev[2] + 1]);
+            }
+            if state.physical_ticks % 600 == 0 {
+                log::info!(
+                    "[civilizations] {village_name} quarry reached stone at {position:?} but has no safe stand"
+                );
+            }
+            return Ok(());
+        };
+        match state.world.as_mut().unwrap()
+            .plan_quarry_gather(id, position, stand)
         {
-            save_autonomous(state, before)?;
-            log::info!("[civilizations] {village_name} quarry reached stone at {position:?}");
+            Ok(()) => {
+                save_autonomous(state, before)?;
+                log::info!("[civilizations] {village_name} quarry reached stone at {position:?}");
+            }
+            Err(error) => {
+                if state.physical_ticks % 600 == 0 {
+                    log::info!(
+                        "[civilizations] {village_name} quarry stone at {position:?} refused: {error}"
+                    );
+                }
+            }
         }
         return Ok(());
     }
     if is_ground(&name) || is_clearable_growth(&name) {
         let [x, y, z] = position;
-        if game.native_run_command(&format!(
-            "execute in {dimension} run setblock {x} {y} {z} minecraft:air replace"
-        )) {
-            state.world.as_mut().unwrap().advance_quarry(id)?;
-            return save_autonomous(state, before);
+        // A two-wide, two-high stair the villager can actually walk down.
+        dig_natural(game, &dimension, [x, y, z]);
+        if let Some(head) = y.checked_add(1) {
+            dig_natural(game, &dimension, [x, head, z]);
+            dig_natural(game, &dimension, [x, head, z + 1]);
         }
-        return Ok(());
+        dig_natural(game, &dimension, [x, y, z + 1]);
+        state.world.as_mut().unwrap().advance_quarry(id)?;
+        return save_autonomous(state, before);
     }
     // A player block or water stops the pit: never dig through it.
     Ok(())

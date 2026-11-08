@@ -114,6 +114,27 @@
     }
 
     #[test]
+    fn a_quarry_plans_its_own_pit_but_not_the_countryside() {
+        let (mut world, id) = village();
+        world.add_post(id, PostKind::Quarry, [-24, 70, 0]).unwrap();
+        // Inside the yard and in the outer work area.
+        world.plan_quarry_gather(id, [-24, 70, 0], [-23, 70, 0]).unwrap();
+        assert_eq!(world.settlements[&id].gather_job.as_ref().unwrap().good, Good::Stone);
+        assert!(world.gather_claim_ok(id, Good::Stone, [-24, 70, 0], [-23, 70, 0]));
+        world.settlements.get_mut(&id).unwrap().gather_job = None;
+        // Far outside the yard is refused even though the area is natural.
+        assert!(world.plan_quarry_gather(id, [40, 70, 0], [41, 70, 0]).is_err());
+        assert!(!world.gather_claim_ok(id, Good::Wood, [0, 70, 0], [1, 70, 0]));
+        // Another gather may not be pending.
+        world.plan_quarry_gather(id, [-24, 70, 0], [-23, 70, 0]).unwrap();
+        assert!(world.plan_quarry_gather(id, [-24, 70, 1], [-23, 70, 1]).is_err());
+        world.validate().unwrap();
+        // Without a quarry the pit path does not exist.
+        let (mut other, second) = village();
+        assert!(other.plan_quarry_gather(second, [20, 70, 0], [21, 70, 0]).is_err());
+    }
+
+    #[test]
     fn staffing_is_stable_and_a_camp_keeps_its_worker() {        let (mut world, id) = village();
         world.settlements.get_mut(&id).unwrap().staff_workplaces();
         let lumberjack = world.settlements[&id].residents.iter()

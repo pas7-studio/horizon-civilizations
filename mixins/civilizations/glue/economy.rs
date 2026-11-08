@@ -69,8 +69,11 @@ pub(super) fn autonomous_village_step(game: &mut Game<'_>, state: &mut ActiveWor
         // when cobble is short and the village has none yet.
         if stone_needed > 0 && village.posts.iter().all(|post| post.kind != PostKind::Quarry) {
             if let Some(spot) = quarry_start(game, &dimension, village.center) {
+                // Never open a pit on top of an existing plot or claim.
+                let free = state.world.as_ref().unwrap()
+                    .gather_site_unclaimed(id, spot, spot);
                 let before = state.world.as_ref().unwrap().clone();
-                if state.world.as_mut().unwrap()
+                if free && state.world.as_mut().unwrap()
                     .add_post(id, PostKind::Quarry, spot).is_ok()
                 {
                     save_autonomous(state, before)?;
