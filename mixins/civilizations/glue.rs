@@ -164,6 +164,7 @@ pub fn register(commands: &mut Vec<NativeCommand>) {
         "civ roster <name:word>", "civ schedule <name:word>",
         "civ homes <name:word>", "civ survey <name:word>",
         "civ council <name:word>", "civ forecast <name:word>",
+        "civ service <name:word>", "civ logistics <name:word>",
         "civ plots <name:word>", "civ development <name:word>",
         "civ hall <name:word>", "civ warehouse <name:word>", "civ requests <name:word>", "civ meals <name:word>", "civ bakery <name:word>",
         "civ posts <name:word>",
@@ -1418,7 +1419,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
     let actor = format!("{:032x}", player.uuid);
     let action = args.next().unwrap_or("help");
     if action == "help" {
-        reply(game, "Civilizations: /civ list | nearby | requests <name> | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | hall <name> | warehouse <name> | meals <name> | posts <name> | roles <name> | status <name> | chunks <name> | diagnose <name> | buyplot <name> | buyhouse <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, recoveractor <name> <resident-id> attempt, barrelcheck <name>, resolvebarrel <name> confirm|cancel <observed_count>, gathercheck <name>, discardgather <name> intact|empty, day [days], construct <name>, post <name> lumber|quarry|sand|dirt, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
+        reply(game, "Civilizations: /civ list | nearby | requests <name> | service <name> | logistics <name> | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | hall <name> | warehouse <name> | meals <name> | posts <name> | roles <name> | status <name> | chunks <name> | diagnose <name> | buyplot <name> | buyhouse <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, recoveractor <name> <resident-id> attempt, barrelcheck <name>, resolvebarrel <name> confirm|cancel <observed_count>, gathercheck <name>, discardgather <name> intact|empty, day [days], construct <name>, post <name> lumber|quarry|sand|dirt, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
         return;
     }
     if action == "list" {
@@ -1465,6 +1466,85 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
                 villages.len(), shown.join(" | ")
             )
         });
+        return;
+    }
+    if action == "service" {
+        let name = args.next().unwrap_or("");
+        let Some(village) = world.by_name(name) else {
+            error(game, "unknown settlement: /civ service <name>");
+            return;
+        };
+        // A personal, authoritative saved record: cannot inspect other
+        // players' supplier standing or create credits by reading this.
+        let contributed = world.players.get(&actor)
+            .and_then(|p| p.civic_deliveries.get(&village.id));
+        let total = world.players.get(&actor)
+            .map_or(0, |p| p.civic_delivery_total(village.id));
+        let tier = crate::game::civilizations_core::civic_service_tier(total);
+        let next = tier.next_at()
+            .map(|required| format!("next title at {required} items ({} more)",
+                required.saturating_sub(total)))
+            .unwrap_or_else(|| "highest supplier title earned".to_owned());
+        let goods = contributed.map(|counts| counts.iter()
+            .filter(|(_, count)| **count > 0)
+            .map(|(good, count)| format!("{} {}", good.as_str(), count))
+            .collect::<Vec<_>>().join(", "))
+            .filter(|details| !details.is_empty())
+            .unwrap_or_else(|| "no saved deliveries".to_owned());
+        reply(game, format!(
+            "Your service to {}: {} delivered physical items, {} standing, {}. Contributions: [{}]. Credits follow the existing real-item sale receipt; you must be at the actual NPC to trade.",
+            village.name, total, tier.label(), next, goods
+        ));
+        return;
+    }
+    if action == "logistics" {
+        let name = args.next().unwrap_or("");
+        let Some(v) = world.by_name(name) else {
+            error(game, "unknown settlement: /civ logistics <name>");
+            return;
+        };
+        let gather = v.gather_job.as_ref().map(|job| {
+            let stage = if job.blocked { "BLOCKED: manual review" }
+                else if !job.issued { "planned: worker/safe source required" }
+                else if !job.native_edit_confirmed { "issued: native edit uncertain" }
+                else if !job.pickup_witnessed { "awaiting source pickup witness" }
+                else { "carried: waiting for same worker at the hall" };
+            let worker = job.worker_id.and_then(|resident_id|
+                v.residents.iter().find(|r| r.id == resident_id && r.alive)
+                    .map(|r| format!("{}#{}", r.name, resident_id)))
+                .unwrap_or_else(|| "no verified living courier".to_owned());
+            format!("{} at {:?}: {stage}, worker {worker}",
+                job.good.as_str(), job.position)
+        }).unwrap_or_else(|| "no extraction scheduled".to_owned());
+        let real_transfers = if let Some(t) = &v.barrel_transfer {
+            format!("{:?} {} x{} phase {:?}; never reissue Issued or Blocked",
+                t.direction, t.good.as_str(), t.count, t.phase)
+        } else if let Some(purchase) = &v.market_purchase {
+            format!("player {} bought {} x{}, phase {:?}; requires reconciliation",
+                purchase.buyer, purchase.good.as_str(), purchase.count, purchase.phase)
+        } else { "clear".to_owned() };
+        let waiting = [Good::Wheat, Good::Bread, Good::Wood, Good::Stone,
+                       Good::Iron, Good::Sand, Good::Dirt].iter()
+            .filter_map(|good| {
+                let count = v.warehouse_quantity(*good);
+                (count > 0).then_some(format!("{} x{}", good.as_str(), count))
+            }).collect::<Vec<_>>();
+        let actual_storage = if v.hall_complete && v.dimension == player.dimension {
+            physical_barrel_stock(game, &v.dimension, v.center).map(|stored| {
+                stored.iter().filter(|(_, count)| *count > 0)
+                    .map(|(good, count)| format!("{} x{}", good.as_str(), count))
+                    .collect::<Vec<_>>().join(", ")
+            }).unwrap_or_else(|| "unavailable/unloaded".to_owned())
+        } else if !v.hall_complete {
+            "not constructed (incoming goods fund first hall)".to_owned()
+        } else { "other dimension (not observed)".to_owned() };
+        let bakery_carry = v.bakery.as_ref().map_or(0, |b| b.bread_in_transit);
+        reply(game, format!(
+            "{} PHYSICAL logistics: source [{}]; farmer carries {} wheat, baker carries {} bread; awaiting steward [{}]; live barrels [{}]; native journal [{}]. These are saved receipts and loaded-world observations, NOT rendered NPC inventories.",
+            v.name, gather, v.wheat_in_transit, bakery_carry,
+            if waiting.is_empty() { "none".to_owned() } else { waiting.join(", ") },
+            actual_storage, real_transfers
+        ));
         return;
     }
     if action == "requests" {
