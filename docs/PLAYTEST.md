@@ -1,3 +1,33 @@
+## Player-delivered town supplies (Draft PR #35, source-only)
+
+After YOUR local Rust/native build succeeds, use a disposable world.
+This source milestone was not built or run in this chat.
+
+1. Locate a naturally founded village, run /civ nearby and then
+   /civ requests NAME. Before the civic hall exists, it should ask
+   for the missing real logs/cobblestone, not virtual stock.
+2. Find the UUID-linked village Merchant (mayor/steward). Join and
+   trade physical oak logs or cobble by right-clicking the NPC. Check
+   that the existing sale rate, real player inventory and committed
+   incoming warehouse goods agree exactly.
+3. Check /civ requests again, then save/reload. The funded bill
+   should not reappear after hall construction starts.
+4. Once the hall stands, compare /civ requests with its TWO real
+   barrels. With no bread, the village should request actual bread.
+   Test baker wheat requests only after a completed real bakery.
+5. Open a trade menu, walk 20+ blocks away and click Sell: it must
+   refuse, even if still in village territory. Repeat using a wrong
+   resident ID, an unloaded NPC and an overwritten UUID.
+6. Put an outstanding barrel journal into Issued/Blocked or unload
+   a warehouse chunk: request quantities must become unavailable
+   rather than being guessed. No speculative inventory credit.
+7. Confirm all non-mutating query calls leave the saved world and
+   native inventory unchanged; compare before/after snapshots.
+
+The numeric contract cases are 353-365 in TEST_PLAN.md. No carried
+item animations, escrow-backed bounties or UI contract board are
+claimed as part of this milestone.
+
 ## Native build after quarry-main rebase (Draft PR #35)
 
 PR #35 was rebased onto quarry-enabled main. If your local
