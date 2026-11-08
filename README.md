@@ -1,3 +1,32 @@
+## Physical village supply requests (Draft PR #35 — source only)
+
+Villages now have a **read-only physical request list**, available through
+`/civ requests NAME`, instead of relying only on abstract daily supply.
+Before the first town hall exists, requests show its actual unfunded oak
+log/cobblestone cost, less the persisted incoming warehouse materials.
+An already-started, funded civic hall does not request its bill twice.
+
+Once the hall is complete, requests come from a freshly observed snapshot
+of both real vanilla storage barrels plus confirmed incoming deliveries,
+construction escrows and baker output. They may ask for logs, cobblestone,
+physical bread and, when a real bakery exists, ingredients for up to four
+bread recipes. Missing chunks/barrels or an unresolved native inventory
+journal show an **unavailable** status, never invented zero stock.
+Virtual simulated items cannot satisfy these physical requests.
+
+The saved Merchant role is staffed before the first hall: players can
+join and deliver startup materials using the existing NPC sales and
+normal civic coin rates. The Merchant buys real construction goods and
+bread; the Baker buys needed wheat. Dialog command submissions now
+re-check the original living resident's native UUID, loaded villager
+identity and the player's actual proximity, instead of trusting a
+replayed menu command from anywhere near the town. Trade operations
+retain the existing item and save handling, not a new escrow/bounty.
+
+Five Rust and twelve Python regressions are **authored, not executed**.
+There has been **no new Rust/Horizon build or Minecraft gameplay E2E**.
+This is not yet a working native release. See TEST_PLAN 353–365.
+
 ## Real bread meals for villagers (Draft PR #35 — native E2E pending)
 
 The village's ten residents now have a **physical meal service** after
