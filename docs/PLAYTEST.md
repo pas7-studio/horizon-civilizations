@@ -1,3 +1,34 @@
+## Supplier standing and courier ledger — later manual acceptance
+
+Source-only milestone. The mod is NOT compiled, tested, or declared
+game-ready by these changes. After the user performs their own native
+Horizon build, use a disposable test world for:
+
+1. Join a naturally founded town. Sell 31 genuinely carried oak logs
+   to the loaded UUID-bound Merchant at close range. Confirm exact
+   inventory subtraction, civic coin payment and /civ service NAME.
+2. Sell one more real log. Verify Helper unlocks at 32 with its
+   one-time additional 4 reputation. Reopen the world and verify no
+   repeated threshold reward or double-credit.
+3. Repeat across wood/stone/bread/wheat to reach Supplier at 128
+   and Benefactor at 512. The records remain local to the exact
+   authenticated player and settlement, not global to other towns.
+4. Observe an actual lumberjack, miner, digger and farmer. Compare
+   /civ logistics NAME with each durable gather/transport step;
+   inspect real vanilla barrel items separately from outstanding
+   supply receipts.
+5. Force a blocked native transaction on a throwaway world and
+   ensure the logistics report never retries it. Unload a hall
+   barrel or visit another dimension: native storage must be
+   explicitly unavailable, not silently zero.
+6. Confirm that /civ service and /civ logistics change neither
+   world.json nor actual inventory, and do not create chunks or
+   native entities. Check server tick overhead when using commands.
+
+Source-only tests and acceptance cases: TEST_PLAN 366-378. For
+all actual build/install instructions use the earlier first-play
+gate section, and do not use a valuable Minecraft save.
+
 ## Player-delivered town supplies (Draft PR #35, source-only)
 
 After YOUR local Rust/native build succeeds, use a disposable world.
