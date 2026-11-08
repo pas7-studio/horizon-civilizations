@@ -1929,6 +1929,11 @@ pub fn physical_supply_requests(
 ) -> Option<Vec<CivicSupplyRequest>> {
     let mut requests = Vec::new();
     if !village.hall_complete {
+        // An in-progress civic hall ALREADY withdrew its full material bill
+        // into the construction job. Do not ask players to fund it twice.
+        if village.hall_job.is_some() {
+            return Some(requests);
+        }
         let (wood, stone) = village.hall_materials_missing();
         for (good, amount) in [(Good::Wood, wood), (Good::Stone, stone)] {
             if amount > 0 {
@@ -8417,6 +8422,11 @@ mod physical_civic_supply_requests_tests {
         let after = physical_supply_requests(&w.settlements[&id], None).unwrap();
         assert_eq!(after[0].amount, HALL_WOOD_LOGS - 9);
         assert!(!after.iter().any(|r| r.good == Good::Bread));
+        // An already-funded, in-progress hall cannot solicit the bill again.
+        w.settlements.get_mut(&id).unwrap().hall_job = Some(VisualBuildJob {
+            origin: [0, 70, 0], cursor: 0, blocked: false,
+        });
+        assert!(physical_supply_requests(&w.settlements[&id], None).unwrap().is_empty());
         w.validate().unwrap();
     }
 
