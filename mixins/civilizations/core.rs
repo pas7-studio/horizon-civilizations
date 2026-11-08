@@ -8428,6 +8428,106 @@ mod autonomous_frontier_tests {
 }
 
 #[cfg(test)]
+mod physical_civic_service_tests {
+    use super::*;
+
+    fn town() -> (World, u64) {
+        let mut world = World::default();
+        let id = world.found("SupplyTown", "minecraft:overworld",
+            [0, 70, 0], "owner").unwrap();
+        world.join("supplier", id).unwrap();
+        (world, id)
+    }
+
+    #[test]
+    fn legacy_player_saves_default_to_zero_real_deliveries() {
+        let (world, id) = town();
+        let mut value = serde_json::to_value(&world).unwrap();
+        value.get_mut("players").unwrap().get_mut("supplier").unwrap()
+            .as_object_mut().unwrap().remove("civic_deliveries");
+        let old: World = serde_json::from_value(value).unwrap();
+        old.validate().unwrap();
+        assert_eq!(old.players["supplier"].civic_delivery_total(id), 0);
+        assert_eq!(civic_service_tier(0), CivicServiceTier::Newcomer);
+        assert_eq!(civic_service_tier(31), CivicServiceTier::Newcomer);
+        assert_eq!(civic_service_tier(32), CivicServiceTier::Helper);
+        assert_eq!(civic_service_tier(128), CivicServiceTier::Supplier);
+        assert_eq!(civic_service_tier(512), CivicServiceTier::Benefactor);
+        assert_eq!(CivicServiceTier::Supplier.next_at(), Some(512));
+        assert_eq!(CivicServiceTier::Benefactor.next_at(), None);
+    }
+
+    #[test]
+    fn physically_paid_sale_credits_exact_volume_and_one_tier_bonus() {
+        let (mut world, id) = town();
+        let initial_rep = world.players["supplier"].reputation[&id];
+        assert_eq!(world.sell("supplier", id, Good::Wood, 31), Ok(93));
+        assert_eq!(world.players["supplier"].civic_delivery_total(id), 31);
+        assert_eq!(world.players["supplier"].reputation[&id], initial_rep + 1);
+        assert_eq!(world.sell("supplier", id, Good::Wood, 1), Ok(3));
+        assert_eq!(world.players["supplier"].civic_delivery_total(id), 32);
+        assert_eq!(world.players["supplier"].reputation[&id], initial_rep + 6);
+        assert_eq!(world.settlements[&id].warehouse_quantity(Good::Wood), 32);
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn service_milestone_does_not_reaward_on_purchase_or_restart() {
+        let (mut world, id) = town();
+        world.sell("supplier", id, Good::Wood, 32).unwrap();
+        let earned = world.players["supplier"].reputation[&id];
+        let saved = serde_json::to_string(&world).unwrap();
+        let mut restored: World = serde_json::from_str(&saved).unwrap();
+        restored.validate().unwrap();
+        assert_eq!(restored.players["supplier"].reputation[&id], earned);
+        assert_eq!(restored.players["supplier"].civic_delivery_total(id), 32);
+        restored.buy("supplier", id, Good::Wood, 1).unwrap();
+        assert_eq!(restored.players["supplier"].civic_delivery_total(id), 32);
+        restored.sell("supplier", id, Good::Bread, 1).unwrap();
+        assert_eq!(restored.players["supplier"].civic_delivery_total(id), 33);
+        assert_eq!(restored.players["supplier"].reputation[&id], earned + 1);
+        restored.validate().unwrap();
+    }
+
+    #[test]
+    fn supply_records_belong_only_to_authenticated_player_and_village() {
+        let (mut world, id) = town();
+        world.join("other", id).unwrap();
+        world.sell("supplier", id, Good::Stone, 20).unwrap();
+        assert_eq!(world.players["other"].civic_delivery_total(id), 0);
+        assert_eq!(world.players["supplier"].civic_delivery_total(id), 20);
+        assert!(world.sell("unknown", id, Good::Stone, 1).is_err());
+        assert!(world.sell("supplier", 999, Good::Stone, 1).is_err());
+        assert_eq!(world.players["supplier"].civic_delivery_total(id), 20);
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn malformed_saved_service_counts_fail_closed_and_counts_are_bounded() {
+        let (mut world, id) = town();
+        world.players.get_mut("supplier").unwrap().civic_deliveries.insert(
+            999, BTreeMap::from([(Good::Wheat, 1)])
+        );
+        assert!(world.validate().is_err());
+        world.players.get_mut("supplier").unwrap().civic_deliveries.clear();
+        world.players.get_mut("supplier").unwrap().civic_deliveries.insert(
+            id, BTreeMap::from([(Good::Wheat, 0)])
+        );
+        assert!(world.validate().is_err());
+        world.players.get_mut("supplier").unwrap().civic_deliveries.insert(
+            id, BTreeMap::from([(Good::Wood, MAX_CIVIC_DELIVERIES_PER_GOOD)])
+        );
+        world.validate().unwrap();
+        let previous = world.players["supplier"].reputation[&id];
+        world.sell("supplier", id, Good::Wood, 1).unwrap();
+        assert_eq!(world.players["supplier"].civic_delivery_total(id),
+            MAX_CIVIC_DELIVERIES_PER_GOOD);
+        assert_eq!(world.players["supplier"].reputation[&id], previous + 1);
+        world.validate().unwrap();
+    }
+}
+
+#[cfg(test)]
 mod physical_civic_supply_requests_tests {
     use super::*;
 
