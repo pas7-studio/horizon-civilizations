@@ -1907,6 +1907,108 @@ impl CivicNeed {
     }
 }
 
+/// A *read-only* request for already-defined physical village goods.
+/// This is not a quest ledger, a reserved purchase, or a second inventory.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct CivicSupplyRequest {
+    pub good: Good,
+    pub amount: u32,
+    pub purpose: &'static str,
+}
+
+/// Compute actionable village requests from one authoritative stock view.
+/// An unfinished hall has no barrels: its actual incoming material ledger
+/// finances the first build. After completion, BOTH native barrels must be
+/// observed; when unreadable or journalled, do not claim that stock is zero.
+///
+/// Every number is a capped deficit, not abstract daily simulated stock.
+/// Callers must check membership, actual inventory and the sale again when
+/// a player commits it; showing a request never reserves or mints goods.
+pub fn physical_supply_requests(
+    village: &Settlement, stored: Option<&[(Good, u32)]>,
+) -> Option<Vec<CivicSupplyRequest>> {
+    let mut requests = Vec::new();
+    if !village.hall_complete {
+        let (wood, stone) = village.hall_materials_missing();
+        for (good, amount) in [(Good::Wood, wood), (Good::Stone, stone)] {
+            if amount > 0 {
+                requests.push(CivicSupplyRequest {
+                    good, amount: amount.min(MAX_HAND_SALE), purpose: "first town hall",
+                });
+            }
+        }
+        return Some(requests);
+    }
+
+    // A pending external edit may already have changed vanilla inventory.
+    // We cannot derive fresh demand until its receipt is reconciled.
+    if village.barrel_transfer.is_some() || village.market_purchase.is_some() {
+        return None;
+    }
+    let stored = stored?;
+    let have = |good: Good| stored.iter()
+        .find(|(g, _)| *g == good).map(|(_, n)| *n).unwrap_or(0);
+    let (wood, stone) = physical_construction_shortfall(village, stored);
+    for (good, amount) in [(Good::Wood, wood), (Good::Stone, stone)] {
+        if amount > 0 {
+            requests.push(CivicSupplyRequest {
+                good, amount: amount.min(MAX_HAND_SALE), purpose: "real construction",
+            });
+        }
+    }
+
+    if village.population() > 0 {
+        let bread_available = have(Good::Bread)
+            .saturating_add(village.warehouse_quantity(Good::Bread))
+            .saturating_add(village.bakery.as_ref()
+                .map_or(0, |bakery| bakery.bread_in_transit));
+        let bread_missing = physical_bread_target(village)
+            .saturating_sub(bread_available);
+        if bread_missing > 0 {
+            requests.push(CivicSupplyRequest {
+                good: Good::Bread, amount: bread_missing.min(MAX_HAND_SALE),
+                purpose: "feed living residents",
+            });
+            // Only a completed real bakery can use wheat. Request no more
+            // than four real recipes, subtracting physically observed,
+            // already-collected and confirmed-incoming ingredients.
+            if let Some(bakery) = village.bakery.as_ref().filter(|b| b.complete) {
+                let target_wheat = bread_missing.min(4)
+                    .saturating_mul(BREAD_WHEAT_RECIPE);
+                let available_wheat = have(Good::Wheat)
+                    .saturating_add(village.warehouse_quantity(Good::Wheat))
+                    .saturating_add(village.wheat_in_transit)
+                    .saturating_add(bakery.wheat_escrow);
+                let wheat_missing = target_wheat.saturating_sub(available_wheat);
+                if wheat_missing > 0 {
+                    requests.push(CivicSupplyRequest {
+                        good: Good::Wheat, amount: wheat_missing.min(MAX_HAND_SALE),
+                        purpose: "bake physical bread",
+                    });
+                }
+            }
+        }
+    }
+    Some(requests)
+}
+
+/// Map active requests to the *existing* NPC trading stalls. The merchant
+/// buys hall materials and bread; the baker buys real wheat for their oven.
+/// This advertises a sale at Good::price, not a new bounty or free payout.
+pub fn resident_wants_for_requests(
+    job: Job, requests: &[CivicSupplyRequest],
+) -> Vec<(Good, u32)> {
+    requests.iter()
+        .filter(|request| match job {
+            Job::Merchant => matches!(request.good, Good::Wood | Good::Stone | Good::Bread),
+            Job::Baker => request.good == Good::Wheat,
+            _ => false,
+        })
+        .filter(|request| request.amount > 0)
+        .map(|request| (request.good, request.amount.min(MAX_HAND_SALE)))
+        .collect()
+}
+
 /// A council recommendation, never a ledger transaction or executable order.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct CivicPriority {
@@ -2179,9 +2281,9 @@ impl Settlement {
         };
         want(Job::Guard, 1);
         want(Job::Builder, 1);
-        if self.hall_complete || self.hall_job.is_some() {
-            want(Job::Merchant, 1);
-        }
+        // The first village steward is needed BEFORE the hall stands: a
+        // player must be able to hand over the physical startup materials.
+        want(Job::Merchant, 1);
         if self.bakery.is_some() {
             want(Job::Baker, 1);
         }
@@ -8289,6 +8391,98 @@ mod autonomous_frontier_tests {
         assert_eq!(decoded.settlements[&1].founder, NPC_FOUNDER);
         assert!(decoded.players.is_empty());
         assert_eq!(decoded.settlements[&1].residents.len(), 10);
+    }
+}
+
+#[cfg(test)]
+mod physical_civic_supply_requests_tests {
+    use super::*;
+
+    fn village() -> (World, u64) {
+        let mut w = World::default();
+        let id = w.found("RequestTown", "minecraft:overworld", [0, 70, 0], "owner").unwrap();
+        (w, id)
+    }
+
+    #[test]
+    fn first_town_hall_requests_real_missing_materials_without_barrels() {
+        let (mut w, id) = village();
+        let v = &w.settlements[&id];
+        assert_eq!(v.workplace_demand().get(&Job::Merchant), Some(&1));
+        let initial = physical_supply_requests(v, None).unwrap();
+        assert_eq!(initial.iter().map(|r| (r.good, r.amount)).collect::<Vec<_>>(),
+            vec![(Good::Wood, HALL_WOOD_LOGS), (Good::Stone, HALL_COBBLESTONE)]);
+        assert!(initial.iter().all(|r| r.purpose == "first town hall"));
+        w.settlements.get_mut(&id).unwrap().warehouse_credit(Good::Wood, 9).unwrap();
+        let after = physical_supply_requests(&w.settlements[&id], None).unwrap();
+        assert_eq!(after[0].amount, HALL_WOOD_LOGS - 9);
+        assert!(!after.iter().any(|r| r.good == Good::Bread));
+        w.validate().unwrap();
+    }
+
+    #[test]
+    fn completed_hall_never_forges_zero_stock_when_unloaded_or_journalled() {
+        let (mut w, id) = village();
+        w.settlements.get_mut(&id).unwrap().hall_complete = true;
+        let v = &w.settlements[&id];
+        assert!(physical_supply_requests(v, None).is_none());
+        let observed = [(Good::Wood, 3), (Good::Stone, 8), (Good::Bread, 0),
+            (Good::Wheat, 0)];
+        assert!(physical_supply_requests(v, Some(&observed)).is_some());
+        let barrel = hall_storage_positions(v.center)[0];
+        // The request display cannot race a pending native inventory action.
+        w.plan_barrel_transfer(id, barrel, Good::Wood, BarrelDirection::ToBarrel,
+            3, 1, None).unwrap();
+        assert!(physical_supply_requests(&w.settlements[&id], Some(&observed)).is_none());
+        w.validate().unwrap();
+    }
+
+    #[test]
+    fn bread_is_based_on_real_stock_and_inflight_not_abstract_goods() {
+        let (mut w, id) = village();
+        let v = w.settlements.get_mut(&id).unwrap();
+        v.hall_complete = true;
+        let target = physical_bread_target(v);
+        let empty = [(Good::Wood, 0), (Good::Stone, 0), (Good::Bread, 0),
+            (Good::Wheat, 0)];
+        assert_eq!(physical_supply_requests(v, Some(&empty)).unwrap()
+            .iter().find(|r| r.good == Good::Bread).unwrap().amount, target);
+        v.warehouse_credit(Good::Bread, 4).unwrap();
+        let stock = [(Good::Bread, target - 4)];
+        assert!(!physical_supply_requests(v, Some(&stock)).unwrap()
+            .iter().any(|r| r.good == Good::Bread));
+        assert_eq!(v.quantity(Good::Bread), 12); // virtual founding bread is ignored
+    }
+
+    #[test]
+    fn wheat_demand_appears_only_with_a_completed_physical_bakery() {
+        let (mut w, id) = village();
+        let v = w.settlements.get_mut(&id).unwrap();
+        v.hall_complete = true;
+        let empty = [(Good::Bread, 0), (Good::Wheat, 0)];
+        assert!(!physical_supply_requests(v, Some(&empty)).unwrap()
+            .iter().any(|r| r.good == Good::Wheat));
+        v.bakery = Some(BakeryWorkshop {
+            origin: [20, 70, 20], building: None, complete: true,
+            supplies_reserved: true, construction_escrow: Default::default(),
+            wheat_escrow: 2, bread_in_transit: 0, batches: 0,
+        });
+        let wheat = physical_supply_requests(v, Some(&empty)).unwrap();
+        assert_eq!(wheat.iter().find(|r| r.good == Good::Wheat).unwrap().amount, 10);
+        v.warehouse_credit(Good::Wheat, 10).unwrap();
+        assert!(!physical_supply_requests(v, Some(&empty)).unwrap()
+            .iter().any(|r| r.good == Good::Wheat));
+    }
+
+    #[test]
+    fn mayor_and_baker_take_only_their_requests_at_existing_prices() {
+        let (w, id) = village();
+        let requests = physical_supply_requests(&w.settlements[&id], None).unwrap();
+        assert_eq!(resident_wants_for_requests(Job::Merchant, &requests),
+            vec![(Good::Wood, HALL_WOOD_LOGS), (Good::Stone, HALL_COBBLESTONE)]);
+        assert!(resident_wants_for_requests(Job::Baker, &requests).is_empty());
+        assert!(resident_wants_for_requests(Job::Farmer, &requests).is_empty());
+        assert_eq!(Good::Bread.price(), 5);
     }
 }
 
