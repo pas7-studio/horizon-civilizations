@@ -506,12 +506,69 @@ impl Rank {
     }
 }
 
+/// Lifetime *confirmed sale intents* recorded with the existing player
+/// payment and warehouse receipt. An actual native item withdrawal and
+/// world save must still succeed at the adapter boundary.
+pub const MAX_CIVIC_DELIVERIES_PER_GOOD: u64 = 10_000_000;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CivicServiceTier {
+    Newcomer,
+    Helper,
+    Supplier,
+    Benefactor,
+}
+
+impl CivicServiceTier {
+    pub fn label(self) -> &'static str {
+        match self {
+            Self::Newcomer => "newcomer",
+            Self::Helper => "helper",
+            Self::Supplier => "supplier",
+            Self::Benefactor => "benefactor",
+        }
+    }
+
+    /// Exact number of *real sold items* needed to reach the next tier.
+    pub fn next_at(self) -> Option<u64> {
+        match self {
+            Self::Newcomer => Some(32),
+            Self::Helper => Some(128),
+            Self::Supplier => Some(512),
+            Self::Benefactor => None,
+        }
+    }
+
+    fn ordinal(self) -> i32 {
+        match self {
+            Self::Newcomer => 0,
+            Self::Helper => 1,
+            Self::Supplier => 2,
+            Self::Benefactor => 3,
+        }
+    }
+}
+
+pub fn civic_service_tier(total: u64) -> CivicServiceTier {
+    match total {
+        0..=31 => CivicServiceTier::Newcomer,
+        32..=127 => CivicServiceTier::Helper,
+        128..=511 => CivicServiceTier::Supplier,
+        _ => CivicServiceTier::Benefactor,
+    }
+}
+
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Player {
     pub settlement: Option<u64>,
     pub rank: Rank,
     pub coins: u64,
     pub reputation: BTreeMap<u64, i32>,
+    /// Credited only along the already-existing real-item sale path; the
+    /// village's abstract day simulation NEVER increments this record.
+    /// A bound per good keeps old/synthetic saves from growing indefinitely.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub civic_deliveries: BTreeMap<u64, BTreeMap<Good, u64>>,
 }
 
 impl Default for Player {
@@ -521,7 +578,16 @@ impl Default for Player {
             rank: Rank::Visitor,
             coins: 0,
             reputation: BTreeMap::new(),
+            civic_deliveries: BTreeMap::new(),
         }
+    }
+}
+
+impl Player {
+    pub fn civic_delivery_total(&self, village_id: u64) -> u64 {
+        self.civic_deliveries.get(&village_id)
+            .map_or(0, |goods| goods.values()
+                .fold(0_u64, |total, count| total.saturating_add(*count)))
     }
 }
 
@@ -2985,6 +3051,12 @@ impl World {
             if p.reputation.keys().any(|id| !self.settlements.contains_key(id)) {
                 return Err("reputation references missing settlement".into());
             }
+            if p.civic_deliveries.iter().any(|(village_id, totals)|
+                !self.settlements.contains_key(village_id)
+                    || totals.values().any(|&count| count == 0
+                        || count > MAX_CIVIC_DELIVERIES_PER_GOOD)) {
+                return Err("invalid saved physical civic contribution ledger".into());
+            }
         }
         Ok(())
     }
@@ -4491,9 +4563,22 @@ impl World {
         // as both a Minecraft-derived resource and virtual daily production.
         s.warehouse_credit(good, count)?;
         let p = self.players.get_mut(player_id).ok_or("no player")?;
+        // One contributed item may count only after the existing domain
+        // warehouse receipt is valid. The adapter rolls back this entire
+        // world mutation when native player withdrawal / save fails.
+        let previous_tier = civic_service_tier(p.civic_delivery_total(village_id));
+        let per_village = p.civic_deliveries.entry(village_id).or_default();
+        let contributed = per_village.entry(good).or_default();
+        *contributed = contributed.saturating_add(u64::from(count))
+            .min(MAX_CIVIC_DELIVERIES_PER_GOOD);
+        let next_tier = civic_service_tier(p.civic_delivery_total(village_id));
+        // Rank progression rewards the VOLUME of actual contributions,
+        // not one rep per tiny item. Thresholds can never be farmed again
+        // by reloading an already committed contribution ledger.
+        let tier_bonus = (next_tier.ordinal() - previous_tier.ordinal()).max(0) * 4;
         p.coins += payout;
         let rep = p.reputation.entry(village_id).or_default();
-        *rep = rep.saturating_add(1).min(100);
+        *rep = rep.saturating_add(1 + tier_bonus).min(100);
         Ok(payout)
     }
 
