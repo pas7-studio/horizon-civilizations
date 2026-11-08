@@ -22,7 +22,8 @@ def routine(source, marker):
 class CivicServiceAndLogisticsContracts(unittest.TestCase):
     def test_no_duplicate_top_level_settlement_definition(self):
         self.assertEqual(CORE.count("pub struct Settlement {"), 1)
-        self.assertEqual(len(re.findall(r"^    pub houses: u32,$", CORE, re.M)), 1)
+        settlement = CORE.split("pub struct Settlement {", 1)[1].split("\n}", 1)[0]
+        self.assertEqual(len(re.findall(r"^    pub houses: u32,$", settlement, re.M)), 1)
 
     def test_persistent_player_delivery_map_is_backward_compatible(self):
         player = CORE.split("pub struct Player {", 1)[1].split("\n}", 1)[0]
