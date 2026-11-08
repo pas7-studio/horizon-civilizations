@@ -2090,63 +2090,6 @@ pub struct Settlement {
     pub houses: u32,
     pub building_progress: u32,
     pub starving_days: u32,
-    pub houses: u32,
-    pub pending_visual_buildings: u32,
-}
-
-#[derive(Clone, Debug, Serialize, Deserialize)]
-pub struct Settlement {
-    pub id: u64,
-    pub name: String,
-    pub culture: String,
-    pub dimension: String,
-    pub center: [i32; 3],
-    pub founder: String,
-    pub residents: Vec<Resident>,
-    pub stock: BTreeMap<Good, u32>,
-    /// Actual player deliveries and confirmed native harvests pending
-    /// placement in the visible hall barrels. NOT virtual daily stock and
-    /// NOT duplicated by a successful barrel deposit.
-    #[serde(default)]
-    pub warehouse: BTreeMap<Good, u32>,
-    /// Goods already physically removed from a barrel for the current
-    /// construction request. No native items remain in the container.
-    #[serde(default)]
-    pub build_escrow: BTreeMap<Good, u32>,
-    /// Single journalled native barrel operation. Write-ahead state prevents
-    /// repeated external insertion/extraction on crash or reload.
-    #[serde(default)]
-    pub barrel_transfer: Option<BarrelTransfer>,
-    /// One direct native-barrel player purchase, precharged in world.json.
-    #[serde(default)]
-    pub market_purchase: Option<MarketPurchase>,
-    /// Confirmed physical wheat harvested but still being carried by
-    /// UUID-linked farmers toward the central village receiving area.
-    #[serde(default)]
-    pub wheat_in_transit: u32,
-    /// One physical bakery, built and operated by actual NPC workers.
-    #[serde(default)]
-    pub bakery: Option<BakeryWorkshop>,
-    /// Active physical civic hall construction; never inferred from a JSON
-    /// house counter, and can resume after restarting with observed blocks.
-    #[serde(default)]
-    pub hall_job: Option<VisualBuildJob>,
-    /// The civic center is proven complete only after all plan blocks read.
-    #[serde(default)]
-    pub hall_complete: bool,
-    /// Pending actual tree/stone harvest; reconciled against native blocks.
-    #[serde(default)]
-    pub gather_job: Option<GatherJob>,
-    /// Optional continuation for a proven short native oak trunk.
-    /// Each log is still a separate issued gather and delivered receipt.
-    #[serde(default)]
-    pub oak_stem: Option<OakStem>,
-    /// Player civic coin payments are transferred here, not silently burned.
-    #[serde(default)]
-    pub treasury_coins: u64,
-    pub houses: u32,
-    pub building_progress: u32,
-    pub starving_days: u32,
     /// Physical NPC meals are not the simulated abstract bread economy.
     /// Each real, UUID-bound living resident may consume at most ONE
     /// observed native loaf per host day. Legacy saves start with no day.
