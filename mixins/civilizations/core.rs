@@ -8431,6 +8431,7 @@ mod physical_civic_supply_requests_tests {
         assert!(physical_supply_requests(v, Some(&observed)).is_some());
         let barrel = hall_storage_positions(v.center)[0];
         // The request display cannot race a pending native inventory action.
+        w.settlements.get_mut(&id).unwrap().warehouse_credit(Good::Wood, 1).unwrap();
         w.plan_barrel_transfer(id, barrel, Good::Wood, BarrelDirection::ToBarrel,
             3, 1, None).unwrap();
         assert!(physical_supply_requests(&w.settlements[&id], Some(&observed)).is_none());
