@@ -1231,3 +1231,50 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
 365. Repeat read-only /civ requests and verify no save changes, no item
      mutations and no chunk generation. These are manual acceptance criteria,
      NOT test execution evidence from this source-only iteration.
+
+
+## Physical civic service and courier evidence (Draft PR #35 — source only)
+
+366. Load an older save with existing players but without civic_deliveries.
+     It must load with no recorded civic service and preserve all existing
+     coins, ranks, warehouse entries and reputation.
+367. Join an NPC town and sell 31 actual logs through the nearby Mayor.
+     Supplier total becomes 31, rank is newcomer and normal coin payout
+     is unchanged. One more real item crosses 32 for Helper, giving one
+     extra four-reputation milestone bonus plus the existing sale reward.
+368. Cross 128 physical delivered items for Supplier and 512 for
+     Benefactor. Every level is awarded at most once, even after a
+     save/restart; selling one item at max title gives no new tier bonus.
+369. Deliver several different real goods; verify service counts
+     combine across goods and use the exact delivered native counts.
+     A village's virtual daily stock, farming simulations, or NPC
+     courier receipts MUST NOT be counted as player deliveries.
+370. A /civ buy purchase cannot subtract or add service contributions.
+     Credits do not increase for failed inventory removal or failed
+     world save; compare native player inventory and world.json after
+     rollback/fault tests.
+371. Player A delivers items and Player B runs /civ service NAME:
+     B must see their own contribution only. Unknown visitors report
+     zero. No private supplier ledger is publicly enumerated.
+372. Join another village after contributing to the first. /civ service
+     for each town must show separate totals; forged village IDs, zero
+     contributions or values beyond saved limits must fail validation.
+373. Set up a real lumberjack or digger gather. /civ logistics NAME
+     must report Planned, Issued, Native-edit-confirmed and
+     Pickup-witnessed statuses from the durable journal, and the
+     correct assigned living worker without crediting extra items.
+374. With a farmer carrying harvest wheat, a baker carrying bread and
+     a merchant transfer awaiting confirmation, /civ logistics must
+     distinguish these three existing supplies from live barrel items.
+375. Unload the actual hall barrels or visit another dimension.
+     Logistics must report that native contents are unavailable,
+     not infer that the chest or barrel is empty.
+376. Pause a gather in the uncertain Issued state or Blocked status.
+     The UI must expose the blocker without issuing another native
+     extraction or creating a duplicate warehouse credit.
+377. Repeated /civ service and /civ logistics commands may read loaded
+     native storage but MUST NOT mutate state, create chunks, summon
+     NPCs, perform item exchanges or write another save.
+378. Build, native performance, physical navigation and item transfer
+     acceptance remains delegated to the later user-run local gate.
+     The current PR contains only authored source/test contracts.
