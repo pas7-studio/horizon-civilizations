@@ -1193,3 +1193,41 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
 352. Test BOTH sand and dirt across restart, compare actual native
      barrels and the journal, and record FPS/server tick latency.
      These checks remain unverified until native compile and live E2E.
+
+
+## Physical community supply requests and NPC trade proximity (Draft PR #35)
+
+353. Discover a town without a completed hall. /civ requests NAME must show
+     unmet 24 logs / 25 cobble starter bill (minus confirmed incoming goods),
+     not simulated stock or invented native barrel inventory.
+354. Meet the UUID-linked Merchant before the hall exists. Right-click,
+     join if necessary, and sell a few real oak logs. Confirm player item
+     removal, the existing-rate civic coin payout and saved warehouse credit.
+355. Recheck /civ requests after that sale. Wood demand must fall by the
+     actually received amount. Restart with no extra items or payment.
+356. After the town hall reserves its full construction bill, it must not
+     request a second bill while the paid build is underway.
+357. Once the hall is complete, hide/unload either native barrel. The
+     request display must say unavailable, never invent zero inventory.
+358. With an unresolved external barrel transfer or market purchase, do
+     not publish quantitative requests until the receipt is reconciled.
+359. Fund physical bakery or hut construction and confirm deficits subtract
+     verified native goods, saved inbound receipts and project escrows,
+     but never virtual daily simulated stock.
+360. Empty the finished hall bread stock; verify request for real bread.
+     Sell real bread to the UUID-bound Merchant, deliver to native barrel,
+     and confirm request shrinks. No virtual loaf may satisfy a meal.
+361. A completed physical bakery may request wheat for up to four recipes,
+     subtracting real stored wheat, incoming farmer receipts and baker
+     ingredient escrow. No completed bakery means no wheat baking request.
+362. Test simultaneous mayor demand for wood, stone and bread. The third
+     trade slider/argument must work; each item cap is at most 64,
+     with native inventory and current demand rechecked on sale.
+363. Replay a previously opened NPC dialogue command from 20+ blocks away.
+     Sale, join and navigation must refuse. Also refuse wrong resident ID,
+     missing/unloaded NPC, changed UUID and a different dimension.
+364. Within 6 blocks of the exact loaded UUID-bound resident, normal
+     trade still succeeds; another nearby villager cannot impersonate it.
+365. Repeat read-only /civ requests and verify no save changes, no item
+     mutations and no chunk generation. These are manual acceptance criteria,
+     NOT test execution evidence from this source-only iteration.
