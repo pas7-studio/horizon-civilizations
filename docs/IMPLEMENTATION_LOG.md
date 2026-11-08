@@ -820,3 +820,33 @@ native menu is deliberately not claimed. Native compilation/E2E pending.
   not yet executed; actual pathfinding, physical item movement,
   loaded-world correctness and Minecraft gameplay remain unproven.
 - Work remained on Draft PR #35. main and GitHub Actions unchanged.
+
+
+## 2026-11-08 — first-hall provisioning and physical public requests (PR #35)
+
+- Implemented a zero-persistence CivicSupplyRequest read model based on the
+  ACTUAL unfunded first-hall material ledger, or on fresh native two-barrel
+  snapshots after the hall is complete. No new currency or item mechanism.
+- Pending Issued/Blocked external inventory changes make the request status
+  UNKNOWN, not falsely empty; an already-funded hall job has no second bill.
+- Completed hall requests include real bread buffering (physical stock,
+  inbound delivery and baker in-transit), and wheat for up to four recipes
+  only after a real bakery exists. No abstract simulated stock is used.
+- The Merchant is now a permanent starter workplace, so player deliveries
+  of real logs/cobblestone can fund the first hall before any barrel exists.
+  A finished hall also accepts bread. The Baker accepts physical wheat.
+  All use the pre-existing price, joined-player inventory removal and save.
+- Added public read-only /civ requests NAME and wired native conversation
+  wants to the same pure request calculation. A third dialogue sale
+  argument is registered for wood+stone+bread at once.
+- Replay of a villager dialogue command must revalidate a living saved
+  resident UUID, loaded native villager type/dimension and <=6-block
+  live horizontal / <=4-block vertical proximity before join/trade.
+  The near-hall radius alone is no longer enough for such commands.
+- Authored five Rust domain regressions and twelve Python source-contract
+  cases. Expanded TEST_PLAN to 353-365 for the eventual local build/E2E.
+- This is source-only development per the user's explicit request.
+  No Cargo, Python unittest, native Horizon build, Windows launch or
+  Minecraft gameplay E2E was executed. Existing async world JSON / native
+  inventory crash-atomicity limitations remain; no release claim.
+- Draft PR #35 updated, main untouched, GitHub Actions not enabled.
