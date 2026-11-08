@@ -1,3 +1,26 @@
+## PR #35 source milestone — physical civic supply requests
+
+- [x] A resident Merchant exists before the town hall is built, making
+  real player delivery of initial logs/stone possible.
+- [x] /civ requests NAME shows physical shortages without side effects:
+  unfunded hall bill or fresh native storage/escrow-based deficits.
+- [x] No double funding of an already-started hall; missing/unloaded
+  barrels and unresolved journals are explicitly unknown.
+- [x] Real bread demand honors native barrel stock, confirmed incoming
+  deliveries and baker-carried loaves; an intact completed bakery can
+  request missing physical wheat for up to four recipes.
+- [x] Mayor/baker trade offerings are limited to the actionable
+  quantities; three-item dialogue sales can advertise wood/stone/bread.
+- [x] Every /civ talk command verifies the ORIGINAL living resident UUID,
+  the loaded native villager type and immediate 6-block player proximity.
+- [x] Authored five Rust domain regressions and twelve Python contracts;
+  added acceptance scenarios 353-365.
+- [ ] User-run native compilation and disposable-world tests for initial
+  hall funding, inventory accounting, meals, multiplayer and restarts.
+- [ ] Real inventory-backed quest/bounty escrow, delivery animations and
+  native graphical noticeboard; source requests are live, read-only
+  suggestions using the EXISTING trade price, not independent contracts.
+
 ## v0.1.15 source milestone — real daily resident meals
 
 - [x] Durable, old-save-compatible per-settlement native meal-day ledger:
