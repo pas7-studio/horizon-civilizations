@@ -1,3 +1,31 @@
+## Civic supplier progression and physical logistics (Draft PR #35)
+
+Contributing **real Minecraft items** to a town is now tracked per
+player and per settlement, through the existing authenticated NPC
+sale/warehouse flow. The titles are Helper at 32 delivered items,
+Supplier at 128, and Benefactor at 512. The player receives a one-time
++4 reputation bonus when reaching each tier. Existing item prices,
+trade payout and rank rules remain unchanged; virtual simulation and
+NPC farm receipts never count as a player's deliveries.
+
+Use `/civ service NAME` to see your own supplier record and next
+milestone. Use `/civ logistics NAME` to inspect the saved physical
+courier job (planned, issued, pickup witnessed, waiting at hall or
+blocked), assigned worker, farmer wheat, baker bread, pending warehouse
+deliveries and outstanding native barrel journal. Only actually loaded
+official hall barrels are shown as observed native stock; missing
+chunks/dimensions show an explicit unavailable state.
+
+There is no rendered item in NPC hands yet, no caravan/cart and no
+additional native inventory. Existing guarded transaction boundaries
+remain, including non-atomic Minecraft/world-JSON crash windows.
+
+The source branch also removes a malformed duplicate `Settlement`
+definition. Five Rust unit regressions and twelve Python source
+contracts were authored for the new milestone. **No build, test run,
+Minecraft launch, or real gameplay E2E was performed in this turn**.
+See TEST_PLAN 366-378.
+
 ## Physical village supply requests (Draft PR #35 — source only)
 
 Villages now have a **read-only physical request list**, available through
