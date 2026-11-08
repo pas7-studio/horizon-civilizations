@@ -850,3 +850,38 @@ native menu is deliberately not claimed. Native compilation/E2E pending.
   Minecraft gameplay E2E was executed. Existing async world JSON / native
   inventory crash-atomicity limitations remain; no release claim.
 - Draft PR #35 updated, main untouched, GitHub Actions not enabled.
+
+
+## 2026-11-08 — supplier standing and honest courier visibility (PR #35)
+
+- Before writing new features, inspected the head of PR #35 and found
+  TWO top-level Settlement definitions in core.rs; the first was
+  truncated and even declared houses twice. Removed only this malformed
+  duplicate in commit 1c9b92d and kept the complete save structure.
+  Source inspection now finds exactly one top-level Settlement.
+- Added backward-compatible Player.civic_deliveries, keyed by village
+  and Good. Each accepted existing World::sell entry records physical
+  sold item volume in the SAME JSON transaction as warehouse credit,
+  civic coin payout and reputation update.
+- Contribution total grants a bounded progression: 32 sold items =
+  Helper, 128 = Supplier, 512 = Benefactor. Each newly crossed tier
+  grants +4 reputation once using old/new cumulative totals; no new
+  goods or coins are minted by milestones. Existing normal payment
+  stays at Good::price. Every count is capped and validated on load.
+- Command /civ service NAME shows only the authenticated player's
+  service record in that town, tier, next milestone and saved per-good
+  counts. Command /civ logistics NAME exposes existing gather receipt
+  phases, assigned worker identity, returned farmer wheat, baker bread,
+  warehouse-awaiting supplies, native transfer conflicts and either
+  real loaded barrel contents or explicit unavailable status.
+- Neither command manipulates blocks, reissues a receipt, mutates
+  accounts or creates native inventory. No claim of actual held-item
+  render, mule/cart storage or physical courier NPC equipment.
+- Five Rust domain regression cases and twelve Python source contracts
+  authored. Acceptance scenarios 366-378 describe later gameplay
+  and save/crash validation. All code remains source-only with zero
+  builds or executable test runs per user request.
+- Existing native inventory and JSON world saves are not guaranteed
+  one atomic transaction; this milestone reuses the current guarded
+  sale path rather than falsely claiming that limitation is solved.
+- Draft PR #35 remains unmerged; main and GitHub Actions unchanged.
