@@ -1,3 +1,27 @@
+## PR #35 source milestone — civic supplier standing and delivery visibility
+
+- [x] Remove malformed duplicate Settlement struct so branch has
+  exactly one domain save schema definition.
+- [x] Backward-compatible per-player, per-village, per-good real
+  contribution totals, updated through the existing warehouse sale.
+- [x] Supplier titles driven by real delivered item counts:
+  32 Helper, 128 Supplier, 512 Benefactor. One-time +4
+  reputation on each title promotion; no free goods or coins.
+- [x] /civ service NAME reads only the acting player's own
+  deliveries, next milestone and contribution breakdown.
+- [x] /civ logistics NAME reads the exact existing gathered-item
+  journal phases, assigned living worker, pending farmer wheat
+  and baker bread, steward queue and loaded barrel observations.
+- [x] Unknown/unloaded native storage is not shown as zero;
+  blocked/issued native work is never retried by read-only commands.
+- [x] Five new Rust regression cases and twelve static Python
+  contracts authored, including duplicate-struct prevention.
+- [ ] User-run Rust compilation, unit tests, native Horizon
+  build and disposable-world first-play E2E.
+- [ ] True rendered NPC cargo/equipment, pack animals, actual
+  road construction, courier queues with multiple concurrent jobs,
+  and escrow-backed municipal contracts require separate mechanics.
+
 ## PR #35 source milestone — physical civic supply requests
 
 - [x] A resident Merchant exists before the town hall is built, making
