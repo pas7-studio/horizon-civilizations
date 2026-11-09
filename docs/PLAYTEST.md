@@ -1,3 +1,41 @@
+## Physical courier waypoints across native terrain
+
+This milestone was committed in source only, without a
+Rust compile, Python run or Horizon client build.
+
+After the user's local build, in a disposable loaded world:
+
+1. Put a physical mined/harvested item receipt on a real
+   UUID-linked NPC roughly 30 blocks from a completed hall.
+   Verify /civ routes NAME reports loaded checkpoints on
+   actual ground rather than a direct route through walls.
+2. Place a straight solid two-block-high wall and leave a
+   genuine gap around one edge. Observe the courier walking
+   through native waypoints around the gap; confirm the
+   original worker remains the sole warehouse recipient.
+3. Repeat on a one-block ascent/descent, obstructed doorway
+   and player-modified terrain. The planner must refuse
+   unsupported climbs, ceilings and unsafe standing sites.
+4. Unload an intermediate native chunk: unknown terrain
+   must not produce a fictitious route. The original
+   in-transit receipt remains saved and uncredited.
+5. Restart mid-way. Volatile waypoints may be recomputed
+   from the actual loaded entity location after restart;
+   its saved identity/cargo stays unchanged.
+6. Observe moving NPCs crossing successive checkpoints,
+   never jumping diagonally through a corner. Watch native
+   entity behavior; loaded-cell A* is not a proof that
+   the Horizon navigator itself can physically complete it.
+7. Stress several villages simultaneously; no more than two
+   full source-route surveys per 20-tick navigation pass.
+   Use the in-game read-only /civ routes command to inspect
+   planned checkpoint indexes and unknown paths.
+8. Complete the actual arrival/warehouse/barrel E2E and
+   restart at multiple points to check no duplication.
+
+See TEST_PLAN 431–446. Do not equate source contracts
+with executed Rust, native inventory or world validation.
+
 ## Courier stall detection and manual route recovery
 
 Run this only after a real local Rust/native Horizon build on a
