@@ -8595,6 +8595,9 @@ mod same_uuid_courier_custody_tests {
         let mut w = World::default();
         let id = w.found("CarrierTown", "minecraft:overworld", [0, 70, 0], "owner").unwrap();
         let v = w.settlements.get_mut(&id).unwrap();
+        // A native UUID is valid only after the settlement has reserved
+        // its actor batch; otherwise World::validate rightly rejects it.
+        v.actors_spawned = true;
         let farmer_ids: Vec<_> = v.residents.iter()
             .filter(|r| r.job == Job::Farmer).map(|r| r.id).take(2).collect();
         let baker_ids: Vec<_> = v.residents.iter()
