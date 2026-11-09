@@ -1,3 +1,37 @@
+## Courier stall detection and manual route recovery
+
+Run this only after a real local Rust/native Horizon build on a
+disposable Minecraft world. No such executable gate ran here.
+
+1. Watch a UUID-bound worker after a real witnessed gather pickup,
+   with a loaded physical hall as target. Verify the native
+   path is not reissued every 20 ticks and no resource is
+   credited until the actual bound worker returns.
+2. Place a temporary obstruction. A motionless courier should
+   retry with a cooldown and alternate safe approaches. Watch
+   the *native actor* and compare /civ routes NAME counters.
+3. Allow four alternate tries to fail. /civ routes NAME should
+   mark STALLED. Leave the server running: no phantom credits,
+   abandoned goods or unlimited path command spam are allowed.
+4. As OP, inspect and physically clear the blockage, stand
+   within 32 blocks of the correct village hall and run
+   /civ retryroute NAME RESIDENT_ID confirm. The exact saved
+   actor resumes a fresh navigation attempt. Other players,
+   unloaded actors or unbound cargo must be rejected.
+5. Repeat while a worker takes a long, legitimate sideways
+   path. Net movement at least 3m counts as progress even
+   when the hall distance temporarily increases; tiny
+   back-and-forth wobble does not.
+6. Unload the receiving area and the courier entity, then
+   restart the world. The in-memory monitor may restart, but
+   the original world.json courier identity and amounts must
+   survive and never be credited again without arrival.
+7. Verify no OP command mutated stored cargo, barrel slots,
+   resource receipt or player inventory. A clear goal block
+   is still not proof of a complete navigable path.
+
+See TEST_PLAN 418-430. Source contracts are not runtime proof.
+
 ## Nighttime courier route and arrival E2E — after local build
 
 Source-only milestone. Do NOT assume the branch compiles or the game
