@@ -986,3 +986,43 @@ native menu is deliberately not claimed. Native compilation/E2E pending.
 - This change is SOURCE-ONLY; **Rust/Cargo, Python tests, Horizon
   native builds and physical Minecraft E2E were NOT run**, following
   user's instruction. PR #35 remains Draft and main untouched.
+
+
+## 2026-11-09 — bounded native courier stall recovery (PR #35)
+
+- Audited actual source-only native navigation: game.native_mob_navigate
+  was previously called every 20 ticks for a distant villager. There
+  was no evidence of progress, no retry budget and no stuck status.
+- Added a pure `CourierRouteMonitor` with server-tick cooldown,
+  real observed 3D movement, distance-to-hall improvement and
+  bounded alternate approach retries. Current parameters: 400
+  ticks without genuine movement before recovery, 100-tick
+  navigation request refresh, 120-tick retry cooldown, four
+  alternative attempts. Real sideways detours >=3m count as
+  movement; submeter jitter does not.
+- ActiveWorld now holds volatile BTreeMap keyed by the *actual saved
+  resident UUID*. Only the original loaded UUID actor with a
+  currently verified, unblocked saved delivery receipt can enter
+  the monitor; it is cleared on unload, delivery, dimension/world
+  switch or restart. No world.json schema migration was needed.
+- Bounded alternative native receiving approaches must each still
+  be a loaded, clear, two-high, stable-ground position. No route
+  is started when even the default bounded search finds none.
+  After repeated failures, the monitor returns NeedsHelp and
+  stops new navigation requests until observed movement resumes
+  or an OP explicitly resets the transient route.
+- /civ routes NAME now shows movement age, alternative attempt
+  count and STALLED / native path unknown status. This is not
+  native pathfinder success telemetry or a promise of full
+  obstacle avoidance.
+- Added OP-only /civ retryroute NAME RESIDENT_ID confirm. Requires
+  correct dimension, OP near the hall, and loaded original
+  UUID-linked resident holding verified goods. Only volatile
+  route state is cleared: no save, new resource credit, teleport,
+  UUID reassign, inventory grant or native block mutation.
+- Five Rust route-monitor regression cases and twelve Python
+  source integration contracts were authored. Earlier route
+  signature contract updated. TEST_PLAN scenarios 418-430.
+- User explicitly requests SOURCE-ONLY: no Rust/Python test
+  execution, no Horizon build, no native gameplay E2E. PR #35
+  remains Draft; main and Actions untouched.
