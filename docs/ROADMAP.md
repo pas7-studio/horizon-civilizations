@@ -1,3 +1,23 @@
+## PR #35 — measured courier stalls and bounded recovery
+
+- [x] Track real source-verified loaded UUID couriers in volatile
+  runtime only; preserve world.json and exact resource receipts.
+- [x] Suppress per-20-tick navigation spam with bounded refresh.
+- [x] Distinguish meaningful progress / sideways detours from
+  minor wobble; detect long stalls in authoritative server ticks.
+- [x] Retry up to four rotating, loaded, safe civic hall approaches.
+- [x] Exhaust to "needs help" without delivering or deleting cargo.
+- [x] Expose movement age/retry budget in read-only /civ routes.
+- [x] Allow guarded OP-only /civ retryroute NAME ID confirm
+  to start a new temporary navigation attempt after inspection.
+- [x] Five authored Rust and twelve Python source contracts,
+  TEST_PLAN 418-430.
+- [ ] Native Rust compilation and actual world movement/obstacle
+  E2E in the user's local Horizon build.
+- [ ] Engine-native pathfinding result callbacks, intermediate
+  waypoints and genuine carrying equipment; current implementation
+  has observation + bounded reroutes, not guaranteed path reachability.
+
 ## PR #35 — deliveries across meals and night (source-only)
 
 - [x] Give durable, witnessed cargo precedence over meal/home routes;
