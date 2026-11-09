@@ -316,8 +316,9 @@ fn guide_actors(game: &mut Game<'_>, world: &World) {
                      f64::from(target.stand[2]) + 0.5]
                 }
             } else if phase.on_shift(resident.job) && resident.job == Job::Farmer {
-                if village.wheat_delivery_pending() > 0 {
-                    // Confirmed mature wheat travels home with the actual
+                if village.wheat_delivery_pending() > 0
+                    && village.wheat_carrier_id == Some(resident_id) {
+                    // Confirmed mature wheat travels home with the exact
                     // loaded farmer before it becomes village inventory.
                     [f64::from(village.center[0]) + 0.5,
                      f64::from(village.center[1]),
@@ -334,9 +335,15 @@ fn guide_actors(game: &mut Game<'_>, world: &World) {
             } else if phase.on_shift(resident.job) && resident.job == Job::Baker {
                 if let Some(bakery) = &village.bakery {
                     if bakery.complete {
-                        if bakery.bread_in_transit > 0 || bakery.wheat_escrow < crate::game::civilizations_core::BREAD_WHEAT_RECIPE {
-                            // Baker returns to the hall to deliver bread or
-                            // receive exactly three physical wheat items.
+                        let hall_shift = if bakery.bread_in_transit > 0 {
+                            // A different baker cannot carry the receipt.
+                            village.bread_carrier_id == Some(resident_id)
+                        } else {
+                            bakery.wheat_escrow < crate::game::civilizations_core::BREAD_WHEAT_RECIPE
+                        };
+                        if hall_shift {
+                            // The bound baker returns to the hall with bread;
+                            // otherwise a baker collects real wheat.
                             [f64::from(village.center[0]) + 0.5,
                              f64::from(village.center[1]),
                              f64::from(village.center[2] - 3) + 0.5]
@@ -799,15 +806,16 @@ fn farm_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), Str
     let Some((village_id, farm)) = selected else { return Ok(()); };
     let world = state.world.as_ref().expect("active civilization world");
     let linked = loaded_actors(game, world, village_id);
-    let farmers: Vec<_> = world.settlements[&village_id].residents.iter()
-        .filter(|resident| resident.alive && resident.job == Job::Farmer)
-        .filter_map(|resident| linked.iter()
-            .find(|(id, _)| *id == resident.id).map(|(_, mob)| *mob))
-        .collect();
-    let near = farmers.iter().any(|&id| game.native_mob(&dim, id).is_some_and(|mob| {
-        native_worker_near(mob.pos, farm.origin, 8.0, 4.0)
-    }));
-    if !near { return Ok(()); }
+    let farmer = world.settlements[&village_id].residents.iter()
+        .filter(|resident| resident.alive && resident.job == Job::Farmer
+            && resident.entity_uuid.is_some())
+        .find_map(|resident| linked.iter().find_map(|(id, mob)| {
+            if *id != resident.id { return None; }
+            game.native_mob(&dim, *mob).and_then(|actor|
+                native_worker_near(actor.pos, farm.origin, 8.0, 4.0)
+                    .then_some(resident.id))
+        }));
+    let Some(farmer_id) = farmer else { return Ok(()); };
 
     let decision = inspect_farm(&farm, |pos| world_farm_block(game, &dim, pos));
     match &decision {
@@ -826,7 +834,8 @@ fn farm_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), Str
             Ok(())
         }
         _ => {
-            let changed = state.world.as_mut().unwrap().advance_farm(village_id, decision.clone())?;
+            let changed = state.world.as_mut().unwrap()
+                .advance_farm_with_carrier(village_id, decision.clone(), farmer_id)?;
             if changed {
                 save(state).map_err(|e| format!("persistence: {e}"))?;
             }
@@ -3446,14 +3455,20 @@ fn farmer_delivery_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Res
         let world = state.world.as_ref().unwrap();
         let v = &world.settlements[&id];
         let loaded = loaded_actors(game, world, id);
-        let returned = v.residents.iter().filter(|r| r.alive && r.job == Job::Farmer)
+        let Some(carrier) = v.wheat_carrier_id else {
+            // Old receipt with no witness: leave it quarantined, never
+            // let an arbitrary farmer claim and deliver the grain.
+            continue;
+        };
+        let returned = v.residents.iter().filter(|r| r.alive
+            && r.job == Job::Farmer && r.id == carrier)
             .any(|r| loaded.iter().any(|(known, mob)| *known == r.id
                 && game.native_mob(&dim, *mob).is_some_and(|actor| {
                     native_worker_near(actor.pos, v.center, 8.0, 4.0)
                 })));
         if !returned { continue; }
         let before = state.world.as_ref().unwrap().clone();
-        if state.world.as_mut().unwrap().deliver_farm_wheat(id)? {
+        if state.world.as_mut().unwrap().deliver_farm_wheat_from(id, carrier)? {
             save_autonomous(state, before)?;
         }
         return Ok(());
@@ -3476,9 +3491,19 @@ fn baker_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), St
         let village = &world.settlements[&id];
         let b = village.bakery.as_ref().unwrap();
         if b.bread_in_transit > 0 {
-            if !storage_worker_near(game, world, id, Job::Baker) { continue; }
+            let Some(carrier) = village.bread_carrier_id else {
+                // Legacy/unbound output cannot be adopted by another baker.
+                continue;
+            };
+            let linked = loaded_actors(game, world, id);
+            let returned = village.residents.iter().filter(|r| r.alive
+                && r.id == carrier && r.job == Job::Baker)
+                .any(|r| linked.iter().any(|(known, mob)| *known == r.id
+                    && game.native_mob(&dimension, *mob).is_some_and(|actor|
+                        native_worker_near(actor.pos, village.center, 8.0, 4.0))));
+            if !returned { continue; }
             let old = state.world.as_ref().unwrap().clone();
-            if state.world.as_mut().unwrap().deliver_bakery_bread(id)? {
+            if state.world.as_mut().unwrap().deliver_bakery_bread_from(id, carrier)? {
                 save_autonomous(state, old)?;
             }
             return Ok(());
@@ -3503,14 +3528,16 @@ fn baker_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), St
             world_block(game, &dimension, step.pos).as_deref() == Some(step.block));
         if !intact { continue; }
         let actors = loaded_actors(game, world, id);
-        let working = village.residents.iter().filter(|r| r.alive && r.job == Job::Baker)
-            .any(|r| actors.iter().any(|(known,mob)| *known == r.id
-                && game.native_mob(&dimension, *mob).is_some_and(|actor| {
-                    native_worker_near(actor.pos, b.origin, 6.0, 4.0)
-                })));
-        if !working { continue; }
+        let working = village.residents.iter().filter(|r| r.alive
+            && r.job == Job::Baker && r.entity_uuid.is_some())
+            .find_map(|r| actors.iter().find_map(|(known,mob)| {
+                if *known != r.id { return None; }
+                game.native_mob(&dimension, *mob).and_then(|actor|
+                    native_worker_near(actor.pos, b.origin, 6.0, 4.0).then_some(r.id))
+            }));
+        let Some(baker_id) = working else { continue; };
         let before = state.world.as_ref().unwrap().clone();
-        if state.world.as_mut().unwrap().craft_bread(id)? {
+        if state.world.as_mut().unwrap().craft_bread_with_carrier(id, baker_id)? {
             save_autonomous(state, before)?;
         }
         return Ok(());
@@ -3720,10 +3747,12 @@ fn autonomous_village_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Resu
         for pit in [PostKind::Sand, PostKind::Dirt] {
             if !village.posts.iter().any(|post| post.kind == pit) { continue; }
             let stored = if village.hall_complete {
-                physical_barrel_stock(game, &dimension, village.center)
-                    .and_then(|stock| stock.iter()
-                        .find(|(good, _)| *good == pit.good())
-                        .map(|(_, count)| *count)).unwrap_or(0)
+                // An unloaded/missing barrel must not look like an empty
+                // sand/dirt bin, or pits dig indefinitely offscreen.
+                let Some(stock) = physical_barrel_stock(game, &dimension, village.center)
+                else { return Ok(()); };
+                stock.iter().find(|(good, _)| *good == pit.good())
+                    .map(|(_, count)| *count).unwrap_or(0)
             } else { 0 };
             let have = village.warehouse_quantity(pit.good()).saturating_add(stored);
             if have < PIT_TARGET {
