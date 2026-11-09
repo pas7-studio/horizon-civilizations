@@ -132,5 +132,39 @@ class LoadedCourierWaypointContracts(unittest.TestCase):
             self.assertIn(name, cases)
 
 
+    def test_cargo_receipt_requires_actual_loaded_entry_not_center_radius_only(self):
+        receiving = section(GLUE, "fn native_courier_at_receiving(", "/// Native UUID actor may stand")
+        self.assertIn("native_worker_near(actor, center, 8.0, 4.0)", receiving)
+        self.assertIn("loaded_civic_receiving_goal(game, dimension, center, alternative)", receiving)
+        self.assertIn("(0_u8..10).any(", receiving)
+        self.assertIn("native_worker_near(actor, landing, 1.25, 1.25)", receiving)
+        self.assertNotIn("native_run_command(", receiving)
+        self.assertNotIn("warehouse_credit(", receiving)
+
+    def test_gather_farmer_and_baker_reconcile_only_at_real_entry(self):
+        farmer = section(GLUE, "fn farmer_delivery_one_step(", "fn baker_one_step(")
+        baker = section(GLUE, "fn baker_one_step(", "/// Natural frontier founding")
+        gather = section(GLUE, "fn gather_one_step(", "/// Runs after an authoritative level tick")
+        self.assertIn("native_courier_at_receiving(game, &dim, v.center, actor.pos)", farmer)
+        self.assertIn("deliver_farm_wheat_from(id, carrier)", farmer)
+        self.assertIn("native_courier_at_receiving(game, &dimension, village.center, actor.pos)", baker)
+        self.assertIn("deliver_bakery_bread_from(id, carrier)", baker)
+        self.assertIn("native_courier_at_receiving(game, &dimension, v.center, actor.pos)", gather)
+        self.assertIn("confirm_gather(id)?", gather)
+
+    def test_receiving_bypass_cannot_stop_route_early_behind_wall(self):
+        guide = section(GLUE, "fn guide_actors(", "/// Reads only loaded blocks")
+        cargo = section(guide, "let pos = if delivery_due {", "} else if meal_due {")
+        self.assertIn("native_courier_at_receiving(game, &current_dim, village.center, mob.pos)", cargo)
+        self.assertNotIn("native_worker_near(mob.pos, village.center, 8.0, 4.0)", cargo)
+
+    def test_route_status_uses_same_strict_entry_as_delivery(self):
+        route = section(GLUE, 'if action == "routes" {', 'if action == "logistics" {')
+        self.assertIn("native_courier_at_receiving(game, &village.dimension, village.center, actor.pos)", route)
+        self.assertIn("at verified loaded hall entry", route)
+        self.assertNotIn("at hall receiving radius", route)
+
+
+
 if __name__ == "__main__":
     unittest.main()
