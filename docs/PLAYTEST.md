@@ -1,3 +1,17 @@
+## Blocked-wall warehouse arrival gate
+
+After the user's local native build, use a disposable world
+with a known farmer/baker/miner exact-UUID cargo receipt.
+Place the original loaded worker 6–8 blocks from hall center
+**behind** an intact wall. The warehouse must remain unchanged,
+even after multiple native receiving ticks. Have the same
+worker approach an intact, actually loaded civic front entry:
+only now may its receipt enter the legitimate warehouse queue,
+exactly once. Repeat with a blocked primary entrance and an
+open alternative. The /civ routes report must agree with the
+executor's arrival status. Neither a bystander nor an unloaded
+courier/chunk may credit goods. See TEST_PLAN 447–451.
+
 ## Physical courier waypoints across native terrain
 
 This milestone was committed in source only, without a
