@@ -1384,6 +1384,37 @@ fn back_button(input: &DialogueInput<'_>) -> DlgButton {
     }
 }
 
+/// A *display-only* copy of an existing verified source receipt. This is
+/// intentionally not a native villager inventory or a claim that the engine
+/// has equipped a physical stack. Only a living, UUID-bound worker with
+/// durable custody may advertise goods in their in-game dialog.
+pub fn resident_verified_cargo(
+    village: &Settlement, resident: &Resident,
+) -> Option<(Good, u32)> {
+    if !resident.alive || resident.entity_uuid.is_none() {
+        return None;
+    }
+    if let Some(job) = &village.gather_job {
+        if job.worker_id == Some(resident.id)
+            && job.good.job() == Some(resident.job)
+            && job.issued && job.native_edit_confirmed
+            && job.pickup_witnessed && !job.blocked {
+            return Some((job.good, 1));
+        }
+    }
+    if resident.job == Job::Farmer && village.wheat_carrier_id == Some(resident.id)
+        && village.wheat_in_transit > 0 {
+        return Some((Good::Wheat, village.wheat_in_transit));
+    }
+    if resident.job == Job::Baker && village.bread_carrier_id == Some(resident.id) {
+        let count = village.bakery.as_ref().map_or(0, |b| b.bread_in_transit);
+        if count > 0 {
+            return Some((Good::Bread, count));
+        }
+    }
+    None
+}
+
 /// Build one conversation page.
 pub fn build_dialog(page: TalkPage, input: &DialogueInput<'_>) -> Dialog {
     let village = input.village;
@@ -1396,6 +1427,15 @@ pub fn build_dialog(page: TalkPage, input: &DialogueInput<'_>) -> Dialog {
     let mut paragraphs: Vec<(String, &'static str)> = Vec::new();
     if let Some(notice) = &input.notice {
         paragraphs.push((dialog_text(notice), "gold"));
+    }
+    let cargo = resident_verified_cargo(village, resident);
+    if let Some((good, count)) = cargo {
+        // Native dialog renders a real Minecraft item ICON, but its stack
+        // exists only as a confirmed receipt, not as equipped mob loot.
+        paragraphs.push((
+            dialog_text(format!("Verified delivery record: {count} {} en route to the town hall.", good_label(good))),
+            "aqua",
+        ));
     }
     let mut sliders = Vec::new();
     let mut buttons = Vec::new();
@@ -1517,8 +1557,12 @@ pub fn build_dialog(page: TalkPage, input: &DialogueInput<'_>) -> Dialog {
     };
     Dialog {
         title: dialog_text(title),
-        portrait: job_icon(resident.job),
-        portrait_caption: dialog_text(format!("{} - {}", resident.name, role)),
+        portrait: cargo.map_or(job_icon(resident.job), |(good, _)| good.item()),
+        portrait_caption: dialog_text(match cargo {
+            Some((good, count)) => format!("{} - {} (receipt {} x{})",
+                resident.name, role, good.as_str(), count),
+            None => format!("{} - {}", resident.name, role),
+        }),
         paragraphs,
         sliders,
         buttons,
@@ -2272,8 +2316,11 @@ pub fn physical_bread_target(village: &Settlement) -> u32 {
 /// an empty container. This pure function never credits abstract stock.
 pub fn needs_real_bread(village: &Settlement, observed_barrel_bread: u32) -> bool {
     let pending = village.warehouse_quantity(Good::Bread)
-        .saturating_add(village.bakery.as_ref()
-            .map(|b| b.bread_in_transit).unwrap_or(0));
+        // A historic loaf without its baker's UUID cannot be delivered:
+        // never let its unverified transit hide a real food shortage.
+        .saturating_add(if village.bread_carrier_id.is_some() {
+            village.bakery.as_ref().map_or(0, |b| b.bread_in_transit)
+        } else { 0 });
     observed_barrel_bread.saturating_add(pending) < physical_bread_target(village)
 }
 
