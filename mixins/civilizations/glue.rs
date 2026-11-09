@@ -261,6 +261,36 @@ fn loaded_home_target(game: &Game<'_>, dimension: &str, home: HomeSlot) -> Optio
     Some([f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5])
 }
 
+/// One loaded, actually standable receiving point outside the town hall.
+/// The original north entrance can be obstructed by modified terrain or
+/// a board. Check a bounded set of alternative approaches; never cut blocks,
+/// teleport NPCs or load a foreign chunk to invent a traversable target.
+/// This verifies only the LANDING, not that a full native route exists.
+fn loaded_civic_receiving_goal(
+    game: &Game<'_>, dimension: &str, center: [i32; 3],
+) -> Option<[f64; 3]> {
+    let y = center[1];
+    let (Some(head), Some(floor)) = (y.checked_add(1), y.checked_sub(1))
+    else { return None };
+    for (dx, dz) in [
+        (0_i32, -3_i32), (-1, -3), (1, -3),
+        (-2, -3), (2, -3), (0, -4), (-1, -4), (1, -4),
+        (-3, -3), (3, -3),
+    ] {
+        let (Some(x), Some(z)) = (center[0].checked_add(dx), center[2].checked_add(dz))
+        else { continue };
+        let ground = world_block(game, dimension, [x, floor, z]);
+        let stable = ground.as_deref().is_some_and(|block|
+            is_ground(block) || matches!(block, "minecraft:oak_planks" | "minecraft:cobblestone"));
+        if stable
+            && world_block(game, dimension, [x, y, z]).as_deref() == Some("minecraft:air")
+            && world_block(game, dimension, [x, head, z]).as_deref() == Some("minecraft:air") {
+            return Some([f64::from(x) + 0.5, f64::from(y), f64::from(z) + 0.5]);
+        }
+    }
+    None
+}
+
 /// Profession-aware day/night routing, limited to loaded UUID-bound actors.
 /// This does not implement actual sleeping or independent resource generation.
 fn guide_actors(game: &mut Game<'_>, world: &World) {
@@ -297,9 +327,13 @@ fn guide_actors(game: &mut Game<'_>, world: &World) {
                 village, resident,
             ).is_some();
             let pos = if delivery_due {
-                [f64::from(village.center[0]) + 0.5,
-                 f64::from(village.center[1]),
-                 f64::from(village.center[2] - 3) + 0.5]
+                // A recorded cargo never gets a blind "walk into the
+                // wall" target: pick a clear, grounded, loaded entrance,
+                // otherwise leave its source receipt untouched for review.
+                let Some(goal) = loaded_civic_receiving_goal(
+                    game, &current_dim, village.center,
+                ) else { continue };
+                goal
             } else if meal_due {
                 // Citizens actually walk to the public dining/warehouse
                 // entrance before one real loaf can be taken for them.
