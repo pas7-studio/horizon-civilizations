@@ -1,3 +1,16 @@
+## PR #35 — physical receiving gate hardening
+
+- [x] Replace the false eight-block town-center "delivered"
+  shortcut for real goods with a verified loaded, clear official
+  hall entry and the same UUID-bound native worker.
+- [x] Reuse that strict arrival check in gather/farmer/baker
+  domain receipts, route-stop logic and diagnostic output.
+- [x] Keep food-service attendance as a separate civic action.
+- [x] Add 4 further authored source contracts and exact
+  arrival E2E scenarios #447–451.
+- [ ] Run later: blocked-hall-wall and alternative-entrance
+  gameplay E2E to validate actual collision/actor positioning.
+
 ## PR #35 — loaded-world walking route checkpoints (source only)
 
 - [x] Pure budgeted A* plans actual cardinal, loaded, 2-high
