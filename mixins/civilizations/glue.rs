@@ -164,7 +164,7 @@ pub fn register(commands: &mut Vec<NativeCommand>) {
         "civ roster <name:word>", "civ schedule <name:word>",
         "civ homes <name:word>", "civ survey <name:word>",
         "civ council <name:word>", "civ forecast <name:word>",
-        "civ service <name:word>", "civ logistics <name:word>",
+        "civ service <name:word>", "civ logistics <name:word>", "civ routes <name:word>",
         "civ plots <name:word>", "civ development <name:word>",
         "civ hall <name:word>", "civ warehouse <name:word>", "civ requests <name:word>", "civ meals <name:word>", "civ bakery <name:word>",
         "civ posts <name:word>",
@@ -1484,7 +1484,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
     let actor = format!("{:032x}", player.uuid);
     let action = args.next().unwrap_or("help");
     if action == "help" {
-        reply(game, "Civilizations: /civ list | nearby | requests <name> | service <name> | logistics <name> | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | hall <name> | warehouse <name> | meals <name> | posts <name> | roles <name> | status <name> | chunks <name> | diagnose <name> | buyplot <name> | buyhouse <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, recoveractor <name> <resident-id> attempt, barrelcheck <name>, resolvebarrel <name> confirm|cancel <observed_count>, gathercheck <name>, discardgather <name> intact|empty, day [days], construct <name>, post <name> lumber|quarry|sand|dirt, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>, retirecargo <name> wheat|bread confirm. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
+        reply(game, "Civilizations: /civ list | nearby | requests <name> | service <name> | logistics <name> | routes <name> | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | hall <name> | warehouse <name> | meals <name> | posts <name> | roles <name> | status <name> | chunks <name> | diagnose <name> | buyplot <name> | buyhouse <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, recoveractor <name> <resident-id> attempt, barrelcheck <name>, resolvebarrel <name> confirm|cancel <observed_count>, gathercheck <name>, discardgather <name> intact|empty, day [days], construct <name>, post <name> lumber|quarry|sand|dirt, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>, retirecargo <name> wheat|bread confirm. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
         return;
     }
     if action == "list" {
@@ -1560,6 +1560,69 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             "Your service to {}: {} delivered physical items, {} standing, {}. Contributions: [{}]. Credits follow the existing real-item sale receipt; you must be at the actual NPC to trade.",
             village.name, total, tier.label(), next, goods
         ));
+        return;
+    }
+    if action == "routes" {
+        let name = args.next().unwrap_or("");
+        let Some(village) = world.by_name(name) else {
+            error(game, "unknown settlement: /civ routes <name>");
+            return;
+        };
+        if village.dimension != player.dimension {
+            reply(game, format!(
+                "{} courier routes unavailable in another dimension. No chunks were loaded.",
+                village.name,
+            ));
+            return;
+        }
+        // Compare only durably bound goods with exact currently loaded
+        // actor UUIDs. Proximity is NOT evidence that a native path exists
+        // and this command never creates or retries a delivery.
+        let linked = loaded_actors(game, world, village.id);
+        let goal = loaded_civic_receiving_goal(game, &village.dimension, village.center);
+        let mut routes = Vec::new();
+        for resident in village.residents.iter().filter(|r| r.alive) {
+            let Some((good, count)) =
+                crate::game::civilizations_core::resident_verified_cargo(village, resident)
+            else { continue };
+            let report = match linked.iter().find(|(known, _)| *known == resident.id) {
+                None => "UNLOADED actor: custody saved, no automatic delivery".to_owned(),
+                Some((_, mob_id)) => match game.native_mob(&village.dimension, *mob_id) {
+                    None => "UUID actor unavailable in selected dimension".to_owned(),
+                    Some(actor) if !actor.pos.iter().all(|n| n.is_finite()) =>
+                        "invalid native coordinates; route not trusted".to_owned(),
+                    Some(actor) => {
+                        if native_worker_near(actor.pos, village.center, 8.0, 4.0) {
+                            "at hall receiving radius; awaiting native receipt tick".to_owned()
+                        } else if let Some(destination) = goal {
+                            let dx = actor.pos[0] - destination[0];
+                            let dy = actor.pos[1] - destination[1];
+                            let dz = actor.pos[2] - destination[2];
+                            let distance = (dx * dx + dy * dy + dz * dz).sqrt();
+                            format!(
+                                "moving toward clear loaded hall approach ({distance:.1}m direct distance); native path success unknown"
+                            )
+                        } else {
+                            "no clear LOADED receiving approach; inspect terrain/chunks, never credit cargo by timer".to_owned()
+                        }
+                    }
+                },
+            };
+            routes.push(format!(
+                "{}#{} {} x{}: {}", resident.name, resident.id, good.as_str(), count, report
+            ));
+        }
+        reply(game, if routes.is_empty() {
+            format!(
+                "{}: no verified, living UUID-bound couriers with goods en route. Check /civ logistics {} for planned, unbound or blocked jobs.",
+                village.name, village.name
+            )
+        } else {
+            format!(
+                "{} verified courier routes: {}. Position is only an observation; no movement timeout, pathfinding success or item transfer is inferred.",
+                village.name, routes.join(" | ")
+            )
+        });
         return;
     }
     if action == "logistics" {
