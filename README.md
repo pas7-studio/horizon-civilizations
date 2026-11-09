@@ -1,3 +1,18 @@
+## Exact receiving entrance — no behind-wall cargo credit
+
+A loaded villager passing within eight blocks of the hall center
+must **not** automatically credit gathered goods, wheat or bread.
+The carrier must be the originally recorded UUID-linked worker
+and must now also physically approach a clear, supported,
+already-loaded official entrance (within 1.25 blocks). The
+route navigator and /civ routes read-only diagnostic use the
+same strict test. Dining attendance remains independent.
+
+This closes an important premature-delivery shortcut; it does
+not change native mob equipment or imply any item duplication.
+Tests have been authored only, with later gameplay acceptance
+in TEST_PLAN 447–451.
+
 ## Courier roads: loaded terrain checkpoints (Draft PR #35)
 
 Verified couriers now use a bounded **real loaded-block walking
