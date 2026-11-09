@@ -60,7 +60,7 @@ class OffShiftCourierRouteContracts(unittest.TestCase):
         self.assertIn("v.wheat_carrier_id", executor)
         self.assertIn("r.id == carrier", executor)
         self.assertIn("deliver_farm_wheat_from(id, carrier)", executor)
-        self.assertIn("native_worker_near(actor.pos, v.center, 8.0, 4.0)", executor)
+        self.assertIn("native_courier_at_receiving(game, &dim, v.center, actor.pos)", executor)
 
     def test_baker_return_precedes_shift_gate_without_night_production(self):
         executor = body("baker_one_step")
@@ -117,7 +117,7 @@ class OffShiftCourierRouteContracts(unittest.TestCase):
             'if action == "logistics" {', 1
         )[0]
         self.assertIn("village.dimension != player.dimension", cmd)
-        self.assertIn("native_worker_near(actor.pos, village.center, 8.0, 4.0)", cmd)
+        self.assertIn("native_courier_at_receiving(game, &village.dimension, village.center, actor.pos)", cmd)
         self.assertIn("actor.pos.iter().all(|n| n.is_finite())", cmd)
         self.assertIn("loaded_civic_receiving_goal(game, &village.dimension, village.center, 0)", cmd)
 
