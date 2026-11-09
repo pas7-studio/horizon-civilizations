@@ -1,3 +1,30 @@
+## Courier delivery across shifts (Draft PR #35)
+
+A worker carrying an **already verified** oak/stone/sand/dirt pickup,
+farm wheat or baked bread now prioritizes returning to the civic
+warehouse over dining or sleeping, including after the work shift
+ends. Only the exact saved native UUID-linked resident can complete
+the receiving receipt; no new resource extraction or bread crafting
+takes place simply because night-time delivery is permitted.
+
+The native route chooses a loaded, clear, solid-ground entrance near
+the town hall and can fall back to nearby safe landing positions.
+It never teleports actors, edits blocks to clear a route or forces
+unloaded chunks. An unobstructed destination does **not** prove that
+the native pathfinder can reach it.
+
+Use `/civ routes NAME` for a read-only courier health check. It
+shows saved verified cargo, currently loaded original NPC actors,
+whether the worker is already within the actual receiving radius,
+straight-line distance to the safe entrance, and missing/unloaded
+actor or destination cases. There is no automatic timeout that
+credits or deletes resources, and the output does not assert
+pathfinding success.
+
+This is authored source, not a tested gameplay feature. Existing
+Rust custody/receipt tests and new Python source contracts have not
+been executed here. Full local gate scenarios are TEST_PLAN 405-417.
+
 ## Live NPC delivery indicator — in-game dialog (Draft PR #35)
 
 Talking to an actual UUID-bound village worker now shows a Minecraft
