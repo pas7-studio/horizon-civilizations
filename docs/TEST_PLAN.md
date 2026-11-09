@@ -1278,3 +1278,52 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
 378. Build, native performance, physical navigation and item transfer
      acceptance remains delegated to the later user-run local gate.
      The current PR contains only authored source/test contracts.
+
+
+## Same-UUID farmer/baker courier custody (Draft PR #35, source only)
+
+379. With two alive UUID-bound farmers working the same village, finish
+     the final observed eight-crop physical harvest with Farmer A present.
+     The persisted wheat receipt must include Farmer A's stable resident ID.
+380. While wheat is in transit, place Farmer B near the town hall and keep
+     Farmer A at the farm. No warehouse wheat may be credited merely from
+     Farmer B's return; the same UUID-linked Farmer A must reach the hall.
+381. Restart after physical harvest completion but before the assigned
+     farmer returns. The saved carrier ID, eight-crop receipt and loaded
+     native identity must survive without an extra crop batch/warehouse
+     credit. Farmer A's subsequent return delivers exactly once.
+382. With two real bakers at the completed workshop, have Baker A craft a
+     bread from exactly three previously extracted native wheat items.
+     The saved loaf in transit must belong to Baker A, not arbitrary Baker B.
+383. Move Baker B to the hall while Baker A stays at the real bakery:
+     the native receiving queue must remain unchanged. Baker A's real
+     loaded-UUID return confirms only their one bread receipt.
+384. Verify work staffing preserves a saved live courier's Farmer/Baker
+     role even if another profession has greater immediate demand.
+     Dead or unloaded couriers must NOT be implicitly replaced.
+385. Simulate an old valid world.json with wheat_in_transit or bakery
+     bread_in_transit but no courier ID. The save remains loadable;
+     any unrelated living farmer/baker at the hall must NOT credit it.
+386. OP must stand within 16 blocks of the appropriate village and use
+     /civ retirecargo NAME wheat confirm (or bread confirm) to write
+     off the ambiguous old transit with ZERO new stock. Command requires
+     actual authorization, correct dimension and no pending native
+     inventory transaction. This is a loss decision, not reconciliation.
+387. The retirement command MUST refuse a verified/assigned courier's
+     goods; those receipts remain tracked even when the worker is dead,
+     unloaded or temporarily unreachable.
+388. After retiring unbound legacy cargo, run /civ logistics NAME to
+     confirm transit is empty and the event is recorded. Next genuine
+     crop/craft cycle must establish a new worker ID.
+389. /civ requests NAME must not count inaccessible unbound old
+     in-transit bread/wheat as actually available goods; physical
+     barrel items and genuinely bound inbound receipts remain valid.
+390. Unload either official native barrel during autonomous sand/dirt pit
+     management. No further pit extraction may be scheduled on an
+     invented assumption of zero stock.
+391. Repeated restart, role reassignment and read-only /civ logistics
+     checks must not mint items, issue native block edits or mark
+     source/warehouse witnesses without real loaded UUID actors.
+392. Run native client build, actual plot movement, inventory accounting,
+     tests and full gameplay E2E separately on a disposable world.
+     This source milestone does NOT claim these checks have run.
