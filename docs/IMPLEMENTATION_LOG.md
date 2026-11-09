@@ -952,3 +952,37 @@ native menu is deliberately not claimed. Native compilation/E2E pending.
 - Future genuine in-world equipped cargo needs a validated Horizon
   entity-equipment interface, item-loss/restart reconciliation and
   no-drop/no-duplication design before enabling it.
+
+
+## 2026-11-09 — off-shift delivery and loaded navigation targets (PR #35)
+
+- Found an actual scheduler deadlock: even with a verified resource
+  pickup, Dawn/Evening meal routing preempted the return route.
+  At Night, the gather and Farmer/Baker delivery executors were also
+  gated by the work-shift test, leaving carried receipts stranded.
+- In `guide_actors`, an actor with an existing, valid, UUID-bound
+  `resident_verified_cargo` gets the receiving-area route BEFORE
+  meal/home/work targets. Ordinary farming, mining, gathering and
+  bread production still follow their work shift.
+- Gather reconciliation/return of an ALREADY Issued saved block
+  receipt now runs at any phase; its shift gate was moved to the
+  creation of NEW native block edits. Returning wheat and crafted
+  bread are similarly processed off-shift by the original saved
+  Farmer/Baker identity. No time-based resource credit or teleport.
+- `loaded_civic_receiving_goal` checks a bounded collection of
+  alternative native approaches near the hall, read-only. Each
+  destination needs loaded coordinates, stable native ground and
+  two air blocks. If all are obstructed/unloaded the route is not
+  issued. It cannot prove an entire path is traversable.
+- Added a separate read-only `/civ routes NAME` command showing
+  verified in-transit goods, exact UUID-bound loaded worker status,
+  observed receipt proximity, approximate direct-line distance and
+  missing/obstructed hall approaches. No movement timeout, save
+  mutation, forced chunk load, route success assertion or inventory
+  changes.
+- Updated existing pit/meal source contract for the new courier
+  priority and authored twelve additional Python static contracts;
+  TEST_PLAN now runs through 417.
+- This change is SOURCE-ONLY; **Rust/Cargo, Python tests, Horizon
+  native builds and physical Minecraft E2E were NOT run**, following
+  user's instruction. PR #35 remains Draft and main untouched.
