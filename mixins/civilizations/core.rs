@@ -7326,6 +7326,12 @@ mod physical_bakery_stock_control_tests {
             wheat_escrow: 0, bread_in_transit: 2, batches: 2,
         });
         let target = physical_bread_target(village);
+        // With no authenticated baker ID the old output receipt cannot
+        // reach the real barrel and must not mask the restock shortfall.
+        assert!(needs_real_bread(village, target - 2));
+        let baker = village.residents.iter()
+            .find(|r| r.job == Job::Baker && r.alive).unwrap().id;
+        village.bread_carrier_id = Some(baker);
         assert!(!needs_real_bread(village, target - 2));
         assert!(needs_real_bread(village, target - 3));
     }
