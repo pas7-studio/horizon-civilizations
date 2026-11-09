@@ -55,7 +55,8 @@ class SafeCourierStuckRecoveryContracts(unittest.TestCase):
         self.assertIn("pub const COURIER_STALL_TICKS: u64 = 400", CORE)
         self.assertIn("pub const COURIER_RETRY_COOLDOWN_TICKS: u64 = 120", CORE)
         self.assertIn("self.reroutes >= COURIER_MAX_REROUTES", CORE)
-        self.assertIn("CourierNavAction::Navigate { alternative: self.reroutes }", CORE)
+        self.assertIn("let alternative = self.route_alternative", CORE)
+        self.assertIn("return CourierNavAction::Navigate { alternative };", CORE)
 
     def test_refreshed_native_navigation_is_not_spammed_per_20_tick(self):
         self.assertIn("pub const COURIER_REPATH_TICKS: u64 = 100", CORE)
