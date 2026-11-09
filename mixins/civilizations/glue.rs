@@ -307,6 +307,26 @@ fn loaded_civic_receiving_goal(
     None
 }
 
+/// An eight-block center radius is NOT a receiving witness: workers can
+/// stand behind a wall, inside a private lot, or outside an obstructed hall.
+/// Only a loaded, grounded, two-air-high civic entry can receive cargo.
+/// The original same-UUID domain receipt remains separately mandatory.
+fn native_courier_at_receiving(
+    game: &Game<'_>, dimension: &str, center: [i32; 3], actor: [f64; 3],
+) -> bool {
+    if !native_worker_near(actor, center, 8.0, 4.0) { return false; }
+    (0_u8..10).any(|alternative| {
+        loaded_civic_receiving_goal(game, dimension, center, alternative)
+            .is_some_and(|goal| {
+                let landing = [
+                    goal[0].floor() as i32, goal[1].floor() as i32,
+                    goal[2].floor() as i32,
+                ];
+                native_worker_near(actor, landing, 1.25, 1.25)
+            })
+    })
+}
+
 /// Native UUID actor may stand on a ledge/plot which is not a full-solid
 /// waypoint cell (e.g. farmland). Survey only the actor's currently loaded
 /// feet cell and immediate neighbors, with strict 3D proximity. This is a
@@ -385,7 +405,7 @@ fn guide_actors(
                 if loaded_civic_receiving_goal(
                     game, &current_dim, village.center, 0,
                 ).is_none() { continue; }
-                if native_worker_near(mob.pos, village.center, 8.0, 4.0) {
+                if native_courier_at_receiving(game, &current_dim, village.center, mob.pos) {
                     // The existing exact-UUID receiving executor now owns
                     // credit; stop trying to move an already-arrived worker.
                     continue;
@@ -1802,8 +1822,8 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
                     Some(actor) if !actor.pos.iter().all(|n| n.is_finite()) =>
                         "invalid native coordinates; route not trusted".to_owned(),
                     Some(actor) => {
-                        if native_worker_near(actor.pos, village.center, 8.0, 4.0) {
-                            "at hall receiving radius; awaiting native receipt tick".to_owned()
+                        if native_courier_at_receiving(game, &village.dimension, village.center, actor.pos) {
+                            "at verified loaded hall entry; awaiting exact UUID receipt tick".to_owned()
                         } else if let Some(destination) = goal {
                             let dx = actor.pos[0] - destination[0];
                             let dy = actor.pos[1] - destination[1];
@@ -3838,7 +3858,7 @@ fn farmer_delivery_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Res
             && r.job == Job::Farmer && r.id == carrier)
             .any(|r| loaded.iter().any(|(known, mob)| *known == r.id
                 && game.native_mob(&dim, *mob).is_some_and(|actor| {
-                    native_worker_near(actor.pos, v.center, 8.0, 4.0)
+                    native_courier_at_receiving(game, &dim, v.center, actor.pos)
                 })));
         if !returned { continue; }
         let before = state.world.as_ref().unwrap().clone();
@@ -3875,7 +3895,7 @@ fn baker_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), St
                 && r.id == carrier && r.job == Job::Baker)
                 .any(|r| linked.iter().any(|(known, mob)| *known == r.id
                     && game.native_mob(&dimension, *mob).is_some_and(|actor|
-                        native_worker_near(actor.pos, village.center, 8.0, 4.0))));
+                        native_courier_at_receiving(game, &dimension, village.center, actor.pos))));
             if !returned { continue; }
             let old = state.world.as_ref().unwrap().clone();
             if state.world.as_mut().unwrap().deliver_bakery_bread_from(id, carrier)? {
@@ -4796,7 +4816,7 @@ fn gather_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
                 .filter(|r| r.alive && r.job == role && r.id == assigned)
                 .any(|r| linked.iter().any(|(known, mob)| *known == r.id
                     && game.native_mob(&dimension, *mob).is_some_and(|actor| {
-                        native_worker_near(actor.pos, v.center, 8.0, 4.0)
+                        native_courier_at_receiving(game, &dimension, v.center, actor.pos)
                     })));
             if !delivered {
                 // No resource is credited simply because a log disappeared:
