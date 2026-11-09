@@ -8910,6 +8910,139 @@ mod autonomous_frontier_tests {
 }
 
 #[cfg(test)]
+mod loaded_courier_waypoint_tests {
+    use super::*;
+
+    // A synthetic native-world chunk probe, NOT an abstract inventory.
+    // Every returned block is a deliberately "loaded" observed sample.
+    fn flat(p: [i32; 3]) -> Option<String> {
+        if p[0].abs() > 120 || p[2].abs() > 120 { return None; }
+        match p[1] {
+            69 => Some("minecraft:grass_block".into()),
+            70 | 71 | 72 => Some("minecraft:air".into()),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn loaded_flat_native_corridor_reaches_hall_with_sparse_checkpoints() {
+        let path = plan_loaded_courier_path([0,70,0], [35,70,0], flat).unwrap();
+        assert_eq!(path.first(), Some(&[0,70,0]));
+        assert_eq!(path.last(), Some(&[35,70,0]));
+        assert_eq!(path.len(), 36);
+        let checkpoints = courier_route_checkpoints(&path);
+        assert_eq!(checkpoints, vec![
+            [6,70,0], [12,70,0], [18,70,0], [24,70,0], [30,70,0], [35,70,0],
+        ]);
+        assert!(checkpoints.windows(2).all(|pair|
+            pair[0][0].abs_diff(pair[1][0]) <= COURIER_ROUTE_WAYPOINT_SPACING as u32));
+    }
+
+    #[test]
+    fn solid_wall_forces_a_real_loaded_cardinal_detour_not_a_ghost_crossing() {
+        let blocks = |p: [i32; 3]| {
+            if p[0] == 0 && (-3..=3).contains(&p[2]) && [70,71].contains(&p[1]) {
+                Some("minecraft:stone".into())
+            } else {
+                flat(p)
+            }
+        };
+        let full = plan_loaded_courier_path([-7,70,0], [7,70,0], blocks).unwrap();
+        assert!(full.iter().any(|p| p[2].abs() > 3));
+        assert!(full.iter().all(|p| blocks(*p).as_deref() == Some("minecraft:air")));
+        assert!(full.windows(2).all(|pair|
+            pair[0][0].abs_diff(pair[1][0])
+                + pair[0][2].abs_diff(pair[1][2]) == 1
+            && pair[0][1].abs_diff(pair[1][1]) <= 1));
+        let checkpoints = courier_route_checkpoints(&full);
+        assert_eq!(checkpoints.last(), Some(&[7,70,0]));
+        assert!(checkpoints.len() > 3);
+    }
+
+    #[test]
+    fn one_block_stair_is_allowed_only_with_observed_head_clearance() {
+        let step_world = |p: [i32; 3]| -> Option<String> {
+            match p {
+                [0,69,0] => Some("minecraft:grass_block".into()),
+                [1,70,0] => Some("minecraft:stone".into()),
+                [0,70,0] | [0,71,0] | [0,72,0]
+                | [1,71,0] | [1,72,0] => Some("minecraft:air".into()),
+                _ => None,
+            }
+        };
+        assert_eq!(plan_loaded_courier_path([0,70,0], [1,71,0], step_world),
+                   Some(vec![[0,70,0], [1,71,0]]));
+        let ceiling = |p: [i32; 3]| {
+            if p == [0,72,0] { Some("minecraft:stone".into()) }
+            else { step_world(p) }
+        };
+        assert_eq!(plan_loaded_courier_path([0,70,0], [1,71,0], ceiling), None);
+    }
+
+    #[test]
+    fn unknown_chunk_wall_and_invalid_standing_cell_fail_closed() {
+        let unloaded = |p: [i32; 3]| {
+            if p[0] > 0 { None } else { flat(p) }
+        };
+        assert_eq!(plan_loaded_courier_path([0,70,0], [3,70,0], unloaded), None);
+        let blocked_goal = |p: [i32; 3]| {
+            if p == [3,70,0] { Some("minecraft:chest".into()) }
+            else { flat(p) }
+        };
+        assert_eq!(plan_loaded_courier_path([0,70,0], [3,70,0], blocked_goal), None);
+        assert!(!courier_walkable([3,70,0], blocked_goal));
+        assert!(courier_walkable([2,70,0], flat));
+        assert_eq!(plan_loaded_courier_path([0,70,0], [200,70,0],
+                                            |_| panic!("out-of-range probe")), None);
+    }
+
+    #[test]
+    fn standing_and_waypoints_cannot_jump_diagonally_through_a_corner() {
+        let full = plan_loaded_courier_path([0,70,0], [1,70,1], flat).unwrap();
+        assert_eq!(full.len(), 3);
+        let checkpoints = courier_route_checkpoints(&full);
+        assert_eq!(checkpoints.len(), 2);
+        assert_eq!(checkpoints.last(), Some(&[1,70,1]));
+        assert!(full.windows(2).all(|pair|
+            pair[0][0].abs_diff(pair[1][0])
+                + pair[0][2].abs_diff(pair[1][2]) == 1));
+    }
+
+    #[test]
+    fn monitor_advances_only_near_loaded_waypoints_no_stock_side_effect() {
+        let (mut monitor, _) = CourierRouteMonitor::start([0.5,70.0,0.5], 20.0, 0).unwrap();
+        monitor.set_waypoints(0, vec![[6,70,0], [12,70,0], [18,70,0]]);
+        assert_eq!(monitor.next_waypoint([0.5,70.0,0.5]), Some([6,70,0]));
+        assert_eq!(monitor.waypoint_cursor, 0);
+        assert_eq!(monitor.next_waypoint([6.5,70.0,0.5]), Some([12,70,0]));
+        assert_eq!(monitor.waypoint_cursor, 1);
+        assert_eq!(monitor.next_waypoint([11.5,70.0,0.5]), Some([18,70,0]));
+        assert_eq!(monitor.next_waypoint([18.5,70.0,0.5]), None);
+        assert_eq!(monitor.waypoint_cursor, 3);
+        assert_eq!(monitor.next_waypoint([f64::NAN,70.0,0.5]), None);
+    }
+
+    #[test]
+    fn genuine_movement_preserves_active_alternative_and_retry_replans() {
+        let (mut monitor, _) = CourierRouteMonitor::start([0.5,70.0,0.5], 50.0, 0).unwrap();
+        monitor.set_waypoints(2, vec![[6,70,0], [12,70,0]]);
+        assert_eq!(monitor.observe([0.5,70.0,0.5], 50.0, 100),
+                   CourierNavAction::Navigate { alternative: 2 });
+        assert_eq!(monitor.observe([3.5,70.0,0.5], 50.3, 120),
+                   CourierNavAction::Wait);
+        assert_eq!(monitor.reroutes, 0);
+        assert_eq!(monitor.route_alternative, Some(2));
+        assert_eq!(monitor.observe([3.5,70.0,0.5], 50.3, 220),
+                   CourierNavAction::Navigate { alternative: 2 });
+        assert_eq!(monitor.observe([3.5,70.0,0.5], 50.3, 540),
+                   CourierNavAction::Navigate { alternative: 3 });
+        monitor.set_waypoints(3, vec![[5,70,1]]);
+        assert_eq!(monitor.route_alternative, Some(3));
+        assert_eq!(monitor.waypoint_cursor, 0);
+    }
+}
+
+#[cfg(test)]
 mod native_courier_stall_monitor_tests {
     use super::*;
 
