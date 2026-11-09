@@ -375,9 +375,10 @@ impl CourierRouteMonitor {
             self.reroutes = 0;
             return CourierNavAction::Navigate { alternative: 0 };
         }
-        let movement_sq = position.iter().zip(self.motion_anchor)
-            .map(|(current, anchor)| (current - anchor) * (current - anchor))
-            .sum::<f64>();
+        let dx = position[0] - self.motion_anchor[0];
+        let dy = position[1] - self.motion_anchor[1];
+        let dz = position[2] - self.motion_anchor[2];
+        let movement_sq = dx * dx + dy * dy + dz * dz;
         if self.best_distance - distance >= COURIER_PROGRESS_METERS
             || movement_sq >= COURIER_MOVEMENT_METERS * COURIER_MOVEMENT_METERS {
             self.best_distance = self.best_distance.min(distance);
@@ -8740,6 +8741,90 @@ mod autonomous_frontier_tests {
         assert_eq!(decoded.settlements[&1].founder, NPC_FOUNDER);
         assert!(decoded.players.is_empty());
         assert_eq!(decoded.settlements[&1].residents.len(), 10);
+    }
+}
+
+#[cfg(test)]
+mod native_courier_stall_monitor_tests {
+    use super::*;
+
+    fn fresh() -> CourierRouteMonitor {
+        let (monitor, first) = CourierRouteMonitor::start([0.0, 70.0, 0.0], 50.0, 0).unwrap();
+        assert_eq!(first, CourierNavAction::Navigate { alternative: 0 });
+        monitor
+    }
+
+    #[test]
+    fn first_route_is_immediate_but_subsequent_refreshes_are_rate_limited() {
+        let mut m = fresh();
+        assert_eq!(m.observe([0.0,70.0,0.0], 50.0, 20), CourierNavAction::Wait);
+        assert_eq!(m.observe([0.0,70.0,0.0], 50.0, 99), CourierNavAction::Wait);
+        assert_eq!(m.observe([0.0,70.0,0.0], 50.0, 100),
+                   CourierNavAction::Navigate { alternative: 0 });
+        assert_eq!(m.observe([0.0,70.0,0.0], 50.0, 120), CourierNavAction::Wait);
+        assert_eq!(m.reroutes, 0);
+    }
+
+    #[test]
+    fn one_meter_toward_town_resets_stall_and_retry_count() {
+        let mut m = fresh();
+        assert_eq!(m.observe([0.0,70.0,0.0], 50.0, 420),
+                   CourierNavAction::Navigate { alternative: 1 });
+        assert_eq!(m.reroutes, 1);
+        let _ = m.observe([0.0,70.0,0.0], 49.0, 440);
+        assert_eq!(m.last_progress_tick, 440);
+        assert_eq!(m.reroutes, 0);
+        assert_eq!(m.best_distance, 49.0);
+        assert_eq!(m.observe([0.0,70.0,0.0], 49.0, 460), CourierNavAction::Wait);
+    }
+
+    #[test]
+    fn a_three_meter_sideways_detour_counts_but_submeter_jitter_does_not() {
+        let mut m = fresh();
+        assert_eq!(m.observe([0.3,70.0,0.4], 50.4, 100),
+                   CourierNavAction::Navigate { alternative: 0 });
+        assert_eq!(m.last_progress_tick, 0);
+        assert_eq!(m.observe([0.0,70.0,3.1], 51.0, 180),
+                   CourierNavAction::Wait);
+        assert_eq!(m.last_progress_tick, 180);
+        assert_eq!(m.best_distance, 50.0);
+        assert_eq!(m.reroutes, 0);
+        assert_eq!(m.observe([0.2,70.0,3.2], 51.0, 220), CourierNavAction::Wait);
+        assert_eq!(m.last_progress_tick, 180);
+    }
+
+    #[test]
+    fn bounded_alternative_retries_exhaust_to_help_without_mutating_cargo() {
+        let mut m = fresh();
+        for (tick, step) in [(420,1),(540,2),(660,3),(780,4)] {
+            assert_eq!(m.observe([0.0,70.0,0.0], 50.0, tick),
+                       CourierNavAction::Navigate { alternative: step });
+        }
+        assert_eq!(m.observe([0.0,70.0,0.0], 50.0, 900),
+                   CourierNavAction::NeedsHelp);
+        assert_eq!(m.observe([0.0,70.0,0.0], 50.0, 1200),
+                   CourierNavAction::NeedsHelp);
+        assert_eq!(m.reroutes, COURIER_MAX_REROUTES);
+        // Genuine movement restarts navigation. Simply waiting does not.
+        assert_eq!(m.observe([0.0,70.0,3.5], 51.0, 1220),
+                   CourierNavAction::Navigate { alternative: 0 });
+        assert_eq!(m.reroutes, 0);
+    }
+
+    #[test]
+    fn invalid_input_and_tick_epoch_reset_do_not_look_like_delivery() {
+        let mut m = fresh();
+        assert_eq!(m.observe([f64::NAN,70.0,0.0], 40.0, 100),
+                   CourierNavAction::NeedsHelp);
+        assert_eq!(m.observe([0.0,70.0,0.0], f64::INFINITY, 200),
+                   CourierNavAction::NeedsHelp);
+        assert!(CourierRouteMonitor::start([0.0, f64::NAN, 0.0], 1.0, 0).is_none());
+        assert_eq!(m.observe([0.0,70.0,0.0], 50.0, 420),
+                   CourierNavAction::Navigate { alternative: 1 });
+        assert_eq!(m.observe([0.0,70.0,0.0], 50.0, 1),
+                   CourierNavAction::Navigate { alternative: 0 });
+        assert_eq!(m.reroutes, 0);
+        assert_eq!(m.last_progress_tick, 1);
     }
 }
 
