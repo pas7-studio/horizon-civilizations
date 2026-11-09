@@ -194,6 +194,7 @@ pub fn register(commands: &mut Vec<NativeCommand>) {
         "civ reconcile <name:word>",
         "civ recoveractor <name:word> <resident:integer> <confirm:word>",
         "civ retirecargo <name:word> <good:word> <confirm:word>",
+        "civ retryroute <name:word> <resident:integer> <confirm:word>",
         "civ day [days:integer]", "civ construct <name:word>",
         "civ post <name:word> <kind:word>",
         "civ approvehouse <name:word> <slot:integer> <y:integer>",
@@ -1533,7 +1534,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
     let actor = format!("{:032x}", player.uuid);
     let action = args.next().unwrap_or("help");
     if action == "help" {
-        reply(game, "Civilizations: /civ list | nearby | requests <name> | service <name> | logistics <name> | routes <name> | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | hall <name> | warehouse <name> | meals <name> | posts <name> | roles <name> | status <name> | chunks <name> | diagnose <name> | buyplot <name> | buyhouse <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, recoveractor <name> <resident-id> attempt, barrelcheck <name>, resolvebarrel <name> confirm|cancel <observed_count>, gathercheck <name>, discardgather <name> intact|empty, day [days], construct <name>, post <name> lumber|quarry|sand|dirt, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>, retirecargo <name> wheat|bread confirm. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
+        reply(game, "Civilizations: /civ list | nearby | requests <name> | service <name> | logistics <name> | routes <name> | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | hall <name> | warehouse <name> | meals <name> | posts <name> | roles <name> | status <name> | chunks <name> | diagnose <name> | buyplot <name> | buyhouse <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, recoveractor <name> <resident-id> attempt, barrelcheck <name>, resolvebarrel <name> confirm|cancel <observed_count>, gathercheck <name>, discardgather <name> intact|empty, day [days], construct <name>, post <name> lumber|quarry|sand|dirt, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>, retirecargo <name> wheat|bread confirm, retryroute <name> <resident-id> confirm. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
         return;
     }
     if action == "list" {
@@ -1608,6 +1609,65 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
         reply(game, format!(
             "Your service to {}: {} delivered physical items, {} standing, {}. Contributions: [{}]. Credits follow the existing real-item sale receipt; you must be at the actual NPC to trade.",
             village.name, total, tier.label(), next, goods
+        ));
+        return;
+    }
+    if action == "retryroute" {
+        // Manual ONLY: re-request route navigation after the operator
+        // physically clears a blocked path. Reset volatile path telemetry,
+        // NEVER the resource receipt, worker assignment or native inventory.
+        if player.permission < 2 {
+            error(game, "only an OP may reset a blocked native courier route");
+            return;
+        }
+        let name = args.next().unwrap_or("");
+        let resident = args.next().and_then(|text| text.parse::<u64>().ok());
+        if args.next() != Some("confirm") || args.next().is_some() {
+            error(game, "usage: /civ retryroute <name> <resident-id> confirm");
+            return;
+        }
+        let Some(village) = world.by_name(name) else {
+            error(game, "unknown settlement");
+            return;
+        };
+        if village.dimension != player.dimension
+            || !player.position.iter().all(|n| n.is_finite()) {
+            error(game, "inspect the settlement in the correct native dimension");
+            return;
+        }
+        let dx = player.position[0] - f64::from(village.center[0]);
+        let dz = player.position[2] - f64::from(village.center[2]);
+        if dx * dx + dz * dz > 32.0 * 32.0 {
+            error(game, "OP must inspect the hall within 32 blocks before retrying");
+            return;
+        }
+        let Some(resident_id) = resident else {
+            error(game, "resident ID must be an unsigned integer");
+            return;
+        };
+        let Some(citizen) = village.residents.iter()
+            .find(|r| r.id == resident_id && r.alive)
+        else {
+            error(game, "unknown or deceased resident");
+            return;
+        };
+        if crate::game::civilizations_core::resident_verified_cargo(village, citizen).is_none() {
+            error(game, "no verified physical cargo owned by this resident");
+            return;
+        }
+        if !loaded_actors(game, world, village.id)
+            .iter().any(|(bound_id, _)| *bound_id == resident_id) {
+            error(game, "original UUID-bound courier is not loaded; no route reset issued");
+            return;
+        }
+        let Some(uuid) = citizen.entity_uuid else {
+            error(game, "courier has no saved native UUID");
+            return;
+        };
+        let had_tracker = state.courier_routes.remove(&uuid).is_some();
+        reply(game, format!(
+            "{}#{}: volatile route attempts reset={had_tracker}. Next navigation tick may retry a clear loaded hall approach. Physical goods remain with the same resident; no inventory or ledger edits.",
+            citizen.name, resident_id,
         ));
         return;
     }
