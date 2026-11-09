@@ -52,7 +52,7 @@ class PitCourierAndMealShiftContracts(unittest.TestCase):
         )
         self.assertIn("let profession = role;", executor)
         self.assertIn("r.job == role && r.id == assigned", executor)
-        self.assertIn("native_worker_near(actor.pos, v.center, 8.0, 4.0)", executor)
+        self.assertIn("native_courier_at_receiving(game, &dimension, v.center, actor.pos)", executor)
         self.assertNotIn("let profession = job.good.job().unwrap_or(Job::Miner)", executor)
 
     def test_food_cannot_keep_every_worker_at_hall_for_the_entire_day(self):
