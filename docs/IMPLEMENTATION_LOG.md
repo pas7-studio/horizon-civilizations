@@ -1070,3 +1070,27 @@ native menu is deliberately not claimed. Native compilation/E2E pending.
   This is loaded-cell path planning + native waypoint requests,
   not proof of the engine's own pathfinding success or actual
   equipped cargo.
+
+
+## 2026-11-09 — close premature native cargo receipt at hall radius (PR #35)
+
+- During A* integration audit found that three physical delivery
+  executors (gather, farmer wheat and baker bread) still used the
+  old center-radius 8-block test; a worker could stand behind a
+  hall wall and get credited without approaching a real doorway.
+- Added native_courier_at_receiving, requiring the same loaded
+  UUID actor to stand within 1.25m horizontal/vertical of an
+  already-loaded, grounded, clear 2-high official hall approach.
+  Exact original same-worker receipt remains required separately.
+- Changed all three real goods-delivery executors, the returning
+  courier navigation stop and the read-only /civ routes arrival
+  report to the SAME strict native-entry check. Unrelated meal
+  attendance and warehouse steward proximity checks intentionally
+  remain unchanged.
+- Updated the earlier static source tests for miner/digger,
+  farmer, baker and route inspection; added four more source
+  contracts. TEST_PLAN #447–451 covers blocked wall, alternative
+  doorway, unloaded approaches and exactly-once receipt.
+- No compilation or native gameplay evidence claimed. Block/actor
+  geometry will need actual Minecraft-world verification in the
+  user's later source-to-play gate.
