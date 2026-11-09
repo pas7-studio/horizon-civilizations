@@ -415,13 +415,18 @@ impl CourierRouteMonitor {
             }
             self.reroutes += 1;
             self.last_request_tick = now;
-            return CourierNavAction::Navigate { alternative: self.reroutes };
+            let alternative = self.route_alternative
+                .map(|old| old.saturating_add(1))
+                .unwrap_or(self.reroutes);
+            return CourierNavAction::Navigate { alternative };
         }
         // A moving actor may need its native navigation request refreshed,
         // but not every 20 ticks: repeated commands can reset its path.
         if since_request >= COURIER_REPATH_TICKS {
             self.last_request_tick = now;
-            return CourierNavAction::Navigate { alternative: self.reroutes };
+            return CourierNavAction::Navigate {
+                alternative: self.route_alternative.unwrap_or(self.reroutes),
+            };
         }
         CourierNavAction::Wait
     }
