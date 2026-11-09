@@ -8641,6 +8641,148 @@ mod autonomous_frontier_tests {
 }
 
 #[cfg(test)]
+mod verified_dialog_cargo_tests {
+    use super::*;
+
+    fn town() -> (World, u64) {
+        let mut world = World::default();
+        let id = world.found("CargoTown", "minecraft:overworld", [0, 70, 0], "owner").unwrap();
+        let village = world.settlements.get_mut(&id).unwrap();
+        village.actors_spawned = true;
+        for (index, resident) in village.residents.iter_mut().enumerate() {
+            resident.entity_uuid = Some((index + 1) as u128);
+        }
+        world.validate().unwrap();
+        (world, id)
+    }
+
+    #[test]
+    fn gather_icon_appears_only_after_native_witness_and_not_after_block() {
+        let (mut world, id) = town();
+        let miner = world.settlements[&id].residents.iter()
+            .find(|r| r.job == Job::Miner).unwrap().id;
+        let v = world.settlements.get_mut(&id).unwrap();
+        v.gather_job = Some(GatherJob {
+            position: [20, 70, 0], stand: [21, 70, 0],
+            good: Good::Stone, worker_id: Some(miner),
+            issued: true, native_edit_confirmed: true,
+            pickup_witnessed: false, blocked: false,
+        });
+        let resident = v.residents.iter().find(|r| r.id == miner).unwrap().clone();
+        assert_eq!(resident_verified_cargo(v, &resident), None);
+        v.gather_job.as_mut().unwrap().pickup_witnessed = true;
+        assert_eq!(resident_verified_cargo(v, &resident), Some((Good::Stone, 1)));
+        v.gather_job.as_mut().unwrap().blocked = true;
+        assert_eq!(resident_verified_cargo(v, &resident), None);
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn farmer_dialogue_never_credits_or_displays_someone_elses_grain() {
+        let (mut world, id) = town();
+        let v = world.settlements.get_mut(&id).unwrap();
+        let farmers: Vec<_> = v.residents.iter().filter(|r| r.job == Job::Farmer)
+            .map(|r| r.id).collect();
+        let first = farmers[0];
+        let second = farmers[1];
+        v.wheat_in_transit = 8;
+        v.wheat_carrier_id = Some(first);
+        let owner = v.residents.iter().find(|r| r.id == first).unwrap().clone();
+        let stranger = v.residents.iter().find(|r| r.id == second).unwrap().clone();
+        assert_eq!(resident_verified_cargo(v, &owner), Some((Good::Wheat, 8)));
+        assert_eq!(resident_verified_cargo(v, &stranger), None);
+        assert_eq!(v.warehouse_quantity(Good::Wheat), 0);
+        v.wheat_carrier_id = None;
+        assert_eq!(resident_verified_cargo(v, &owner), None);
+        v.wheat_carrier_id = Some(first);
+        let mut no_uuid = owner.clone();
+        no_uuid.entity_uuid = None;
+        assert_eq!(resident_verified_cargo(v, &no_uuid), None);
+        let mut dead = owner.clone();
+        dead.alive = false;
+        assert_eq!(resident_verified_cargo(v, &dead), None);
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn baker_dialogue_shows_saved_bread_cargo_but_not_fake_equipment() {
+        let (mut world, id) = town();
+        let village = world.settlements.get_mut(&id).unwrap();
+        village.hall_complete = true;
+        let baker = village.residents.iter().find(|r| r.job == Job::Baker)
+            .unwrap().clone();
+        village.bakery = Some(BakeryWorkshop {
+            origin: [24, 70, 0], building: None, complete: true,
+            supplies_reserved: true, construction_escrow: BTreeMap::new(),
+            wheat_escrow: 0, bread_in_transit: 2, batches: 2,
+        });
+        village.bread_carrier_id = Some(baker.id);
+        assert_eq!(resident_verified_cargo(village, &baker), Some((Good::Bread, 2)));
+        let input = DialogueInput {
+            village, resident: &baker, is_member: false,
+            routine: "work shift".into(), on_duty: true, wants: &[],
+            stock_known: true, wood_missing: 0, stone_missing: 0,
+            carried: &[], notice: None,
+        };
+        let dialog = build_dialog(TalkPage::Main, &input);
+        assert_eq!(dialog.portrait, "minecraft:bread");
+        assert!(dialog.portrait_caption.contains("receipt bread x2"));
+        assert!(dialog.paragraphs.iter().any(|(text, _)|
+            text.contains("Verified delivery record: 2 bread")));
+        let visual = dialog_snbt(&dialog);
+        assert!(visual.contains("minecraft:item"));
+        assert!(!visual.contains("weapon.mainhand"));
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn after_delivery_no_cargo_icon_or_report_survives() {
+        let (mut world, id) = town();
+        let baker = world.settlements[&id].residents.iter()
+            .find(|r| r.job == Job::Baker).unwrap().clone();
+        let village = world.settlements.get_mut(&id).unwrap();
+        village.hall_complete = true;
+        village.bakery = Some(BakeryWorkshop {
+            origin: [24, 70, 0], building: None, complete: true,
+            supplies_reserved: true, construction_escrow: BTreeMap::new(),
+            wheat_escrow: 0, bread_in_transit: 0, batches: 1,
+        });
+        assert_eq!(resident_verified_cargo(village, &baker), None);
+        let input = DialogueInput {
+            village, resident: &baker, is_member: true,
+            routine: "work shift".into(), on_duty: true, wants: &[],
+            stock_known: true, wood_missing: 0, stone_missing: 0,
+            carried: &[], notice: None,
+        };
+        let dialog = build_dialog(TalkPage::Main, &input);
+        assert_eq!(dialog.portrait, job_icon(Job::Baker));
+        assert!(!dialog.portrait_caption.contains("(receipt"));
+        assert!(!dialog.paragraphs.iter()
+            .any(|(text, _)| text.contains("Verified delivery record")));
+        world.validate().unwrap();
+    }
+
+    #[test]
+    fn old_unbound_loaf_never_hides_physical_food_shortage() {
+        let (mut world, id) = town();
+        let village = world.settlements.get_mut(&id).unwrap();
+        village.hall_complete = true;
+        village.bakery = Some(BakeryWorkshop {
+            origin: [24, 70, 0], building: None, complete: true,
+            supplies_reserved: true, construction_escrow: BTreeMap::new(),
+            wheat_escrow: 0, bread_in_transit: 3, batches: 3,
+        });
+        let baker = village.residents.iter().find(|r| r.job == Job::Baker)
+            .unwrap().clone();
+        let target = physical_bread_target(village);
+        assert!(needs_real_bread(village, target - 3));
+        village.bread_carrier_id = Some(baker.id);
+        assert!(!needs_real_bread(village, target - 3));
+        world.validate().unwrap();
+    }
+}
+
+#[cfg(test)]
 mod same_uuid_courier_custody_tests {
     use super::*;
 
