@@ -302,7 +302,11 @@ fn loaded_civic_receiving_goal(
 
 /// Profession-aware day/night routing, limited to loaded UUID-bound actors.
 /// This does not implement actual sleeping or independent resource generation.
-fn guide_actors(game: &mut Game<'_>, world: &World) {
+fn guide_actors(
+    game: &mut Game<'_>, world: &World,
+    courier_routes: &mut BTreeMap<u128, CourierRouteMonitor>, physical_ticks: u64,
+) {
+    let mut observed_couriers = BTreeSet::new();
     let current_dim = game.dim.id().to_owned();
     let phase = DailyPhase::at(game.world.day_time);
     let mut targets = Vec::new();
@@ -336,11 +340,38 @@ fn guide_actors(game: &mut Game<'_>, world: &World) {
                 village, resident,
             ).is_some();
             let pos = if delivery_due {
-                // A recorded cargo never gets a blind "walk into the
-                // wall" target: pick a clear, grounded, loaded entrance,
-                // otherwise leave its source receipt untouched for review.
+                // A real, UUID-bound actor supplies progress observations.
+                // Only a signed source/crafting receipt enters this monitor.
+                let Some(uuid) = resident.entity_uuid else { continue };
+                let Some(mob) = game.native_mob(&current_dim, mob_id) else { continue };
+                if native_worker_near(mob.pos, village.center, 8.0, 4.0) {
+                    // The existing exact-UUID receiving executor now owns
+                    // credit; stop trying to move an already-arrived worker.
+                    continue;
+                }
+                let dx = mob.pos[0] - (f64::from(village.center[0]) + 0.5);
+                let dy = mob.pos[1] - f64::from(village.center[1]);
+                let dz = mob.pos[2] - (f64::from(village.center[2]) + 0.5);
+                let distance = (dx * dx + dy * dy + dz * dz).sqrt();
+                if !distance.is_finite() { continue; }
+                observed_couriers.insert(uuid);
+                let decision = if let Some(monitor) = courier_routes.get_mut(&uuid) {
+                    monitor.observe(distance, physical_ticks)
+                } else {
+                    let Some((monitor, action)) =
+                        CourierRouteMonitor::start(distance, physical_ticks)
+                    else { continue };
+                    courier_routes.insert(uuid, monitor);
+                    action
+                };
+                let alternative = match decision {
+                    CourierNavAction::Navigate { alternative } => alternative,
+                    CourierNavAction::Wait | CourierNavAction::NeedsHelp => continue,
+                };
+                // Four bounded retries rotate entrance priority; neither
+                // a stuck timeout nor a destination check fabricates a good.
                 let Some(goal) = loaded_civic_receiving_goal(
-                    game, &current_dim, village.center,
+                    game, &current_dim, village.center, alternative,
                 ) else { continue };
                 goal
             } else if meal_due {
@@ -471,6 +502,9 @@ fn guide_actors(game: &mut Game<'_>, world: &World) {
             targets.push((mob_id, pos));
         }
     }
+    // Unloaded/delivered/deceased/changed UUID actors lose volatile
+    // monitoring state. Actual receipts remain in persistent World.
+    courier_routes.retain(|uuid, _| observed_couriers.contains(uuid));
     for (mob_id, pos) in targets {
         // Never ask the native pathfinder to route to an unloaded goal or
         // invalid coordinate. Loaded village ticket coverage is best effort
@@ -4835,7 +4869,9 @@ pub fn level_tick(game: &mut Game<'_>, dimension: &str) {
     // Navigation is bounded and only touches loaded actors in the current
     // dimension; it is not an offscreen tick or a physical gathering action.
     if state.physical_ticks % 20 == 0 {
-        if let Some(world) = &state.world { guide_actors(game, world); }
+        if let Some(world) = &state.world {
+            guide_actors(game, world, &mut state.courier_routes, state.physical_ticks);
+        }
     }
     if state.physical_ticks % 4 == 0 {
         if let Err(error) = build_town_hall_one_step(game, state) {
