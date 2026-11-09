@@ -356,10 +356,10 @@ fn guide_actors(
                 if !distance.is_finite() { continue; }
                 observed_couriers.insert(uuid);
                 let decision = if let Some(monitor) = courier_routes.get_mut(&uuid) {
-                    monitor.observe(distance, physical_ticks)
+                    monitor.observe(mob.pos, distance, physical_ticks)
                 } else {
                     let Some((monitor, action)) =
-                        CourierRouteMonitor::start(distance, physical_ticks)
+                        CourierRouteMonitor::start(mob.pos, distance, physical_ticks)
                     else { continue };
                     courier_routes.insert(uuid, monitor);
                     action
@@ -1628,6 +1628,23 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             let Some((good, count)) =
                 crate::game::civilizations_core::resident_verified_cargo(village, resident)
             else { continue };
+            let telemetry = resident.entity_uuid
+                .and_then(|uuid| state.courier_routes.get(&uuid));
+            let route_health = if let Some(monitor) = telemetry {
+                let quiet = state.physical_ticks.saturating_sub(monitor.last_progress_tick);
+                let since_request = state.physical_ticks.saturating_sub(monitor.last_request_tick);
+                if monitor.reroutes >= crate::game::civilizations_core::COURIER_MAX_REROUTES
+                    && quiet >= crate::game::civilizations_core::COURIER_STALL_TICKS
+                    && since_request >= crate::game::civilizations_core::COURIER_RETRY_COOLDOWN_TICKS {
+                    format!("STALLED: {} reroutes exhausted, no confirmed movement for {quiet} server ticks; inspect native terrain",
+                        monitor.reroutes)
+                } else {
+                    format!("observed movement {quiet} ticks ago, alternative {}/{}; native path result unknown",
+                        monitor.reroutes, crate::game::civilizations_core::COURIER_MAX_REROUTES)
+                }
+            } else {
+                "not currently monitored (new cargo, unloaded actor or already at receiving area)".to_owned()
+            };
             let report = match linked.iter().find(|(known, _)| *known == resident.id) {
                 None => "UNLOADED actor: custody saved, no automatic delivery".to_owned(),
                 Some((_, mob_id)) => match game.native_mob(&village.dimension, *mob_id) {
@@ -1643,7 +1660,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
                             let dz = actor.pos[2] - destination[2];
                             let distance = (dx * dx + dy * dy + dz * dz).sqrt();
                             format!(
-                                "moving toward clear loaded hall approach ({distance:.1}m direct distance); native path success unknown"
+                                "clear loaded hall approach ({distance:.1}m direct distance); {route_health}"
                             )
                         } else {
                             "no clear LOADED receiving approach; inspect terrain/chunks, never credit cargo by timer".to_owned()
