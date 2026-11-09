@@ -119,7 +119,7 @@ class OffShiftCourierRouteContracts(unittest.TestCase):
         self.assertIn("village.dimension != player.dimension", cmd)
         self.assertIn("native_worker_near(actor.pos, village.center, 8.0, 4.0)", cmd)
         self.assertIn("actor.pos.iter().all(|n| n.is_finite())", cmd)
-        self.assertIn("loaded_civic_receiving_goal(game, &village.dimension, village.center)", cmd)
+        self.assertIn("loaded_civic_receiving_goal(game, &village.dimension, village.center, 0)", cmd)
 
     def test_only_original_uuid_can_confirm_delivery_not_route_ui(self):
         self.assertIn("deliver_farm_wheat_from(id, carrier)", GLUE)
