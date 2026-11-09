@@ -1471,3 +1471,67 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
      contracts, native Horizon build and disposable-world
      route/obstacle E2E. The source milestone here did not
      execute these gates or prove real native pathfinding.
+
+
+## Loaded native-ground courier waypoints (PR #35 — SOURCE ONLY)
+
+431. Build a disposable, flat, already-loaded 35-block corridor
+     between a confirmed native courier and the civic receiving
+     approach. The pure planner should find cardinal steps and
+     compress them into checkpoints no more than six flat blocks
+     apart, ending at the real observed hall landing.
+432. Add a solid two-high wall across the direct approach with a
+     genuinely walkable open route around its edge. Route planning
+     must bend around the wall using observed native ground and
+     air, not send the courier through a solid block.
+433. Make an one-block rise in terrain with real support, empty
+     actor body/head blocks and overhead clearance. A native
+     courier may climb it; a solid ceiling above the departure
+     position must prevent that same ascent.
+434. Put a corner obstacle in a diagonal shortcut. Every planned
+     move must be cardinal rather than passing diagonally
+     through two blocked adjacent cells.
+435. Remove one required chunk or block observation in a narrow
+     corridor. The planner must return UNKNOWN/UNAVAILABLE,
+     never an invented air tile or a straight-line fallback.
+436. Replace the target standing cell with a chest, door, fence,
+     water or any non-two-high-open geometry. The checkpoint must
+     not be approved or used to generate physical cargo.
+437. When a worker begins on farmland or uneven native ground,
+     allow only a very close, verified two-air-high supported
+     cell as the A* starting candidate. Do not teleport the mob
+     to that cell, change it or silently load chunks.
+438. Have a courier follow a real route with multiple bends.
+     Only when its original loaded UUID is observed close to
+     the current checkpoint may it advance to the next one.
+439. Restart during a multi-checkpoint delivery. Route memory
+     may be discarded and recalculated from the real new actor
+     position. Saved cargo, worker UUID and physical warehouse
+     state must remain unchanged and never double-credit.
+440. Alter a checkpoint with a player-built block after its route
+     was first surveyed. The bridge must not send a new native
+     navigate request to a non-walkable target; stall recovery
+     may attempt another fully verified route.
+441. With multiple villages and many loaded carrying residents,
+     verify that at most two full native A* path surveys are
+     attempted per 20-tick navigation cycle. Couriers whose
+     survey was deferred must keep their saved cargo.
+442. Create an unreachable or overly distant (>112 blocks
+     horizontal-span) hall route. Bounded A* must stop without
+     burning arbitrary CPU, modifying blocks or creating goods.
+443. Inspect /civ routes NAME while a courier has an active
+     planned path. It should show verified checkpoint index
+     and next position; with no confirmed path, clearly report
+     NO VERIFIED WALKWAY, never a false native success.
+444. Exhaust the four existing bounded reroutes with real
+     obstacles, then use OP /civ retryroute NAME ID confirm
+     after actually opening the path. Only volatile route state
+     resets. The original cargo remains with the same UUID.
+445. Verify meal/night priority, native bread/wheat delivery
+     and actual gather receipts remain untouched. The route
+     finder cannot itself confirm arrival, spawn items, mint
+     food or move villagers without a native navigation call.
+446. Run the local Rust and Python regression gates, native
+     Horizon build and actual loaded-world gameplay **later**.
+     This milestone authored code/tests/docs but executed no
+     compiler, test runner or native Minecraft session.
