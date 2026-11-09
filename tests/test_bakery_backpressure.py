@@ -34,11 +34,11 @@ class NativeBakeryBackpressureContracts(unittest.TestCase):
         self.assertIn("physical_barrel_stock(game, &dimension, village.center)", section)
         self.assertIn("needs_real_bread(village, physical_bread)", section)
         self.assertLess(section.index("needs_real_bread(village, physical_bread)"),
-                        section.index("craft_bread(id)?"))
+                        section.index("craft_bread_with_carrier(id, baker_id)?"))
 
-    def test_bread_delivery_is_unchanged_and_happens_before_restock_guard(self):
+    def test_matching_baker_delivery_happens_before_restock_guard(self):
         section = GLUE.split("fn baker_one_step(", 1)[1].split("\n}", 1)[0]
-        self.assertLess(section.index("deliver_bakery_bread(id)?"),
+        self.assertLess(section.index("deliver_bakery_bread_from(id, carrier)?"),
                         section.index("needs_real_bread(village, physical_bread)"))
         self.assertIn("b.bread_in_transit > 0", section)
 
