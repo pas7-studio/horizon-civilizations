@@ -1369,3 +1369,52 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
 404. Confirm with the local Horizon first-play gate and live-world
      observation after the user builds the mod. Neither these Rust
      regressions nor Python source contracts were executed here.
+
+
+## Off-shift courier returns and loaded receiving routes (PR #35 — source only)
+
+405. Create a real, UUID-bound lumberjack carrying one witnessed
+     oak log. Set the native clock to Evening with a pending meal.
+     Route the NPC to the hall receiving area first, NOT to the
+     dining lane. Only the same loaded worker may credit that log.
+406. Repeat with a miner/digger after the Work shift has ended and
+     a home slot exists. The overnight route must prioritize delivery
+     over sleep while the physical receipt is still held.
+407. Restart after saving a GatherJob with native_edit_confirmed=true
+     and pickup_witnessed=true. Without issuing a new block edit, the
+     existing returned worker may confirm the exactly-once receipt
+     after hours. A second confirmation must fail.
+408. Have a genuine Farmer A finish a full eight-wheat observed harvest
+     immediately before night. Delivery into the receiving queue must
+     be possible after shift, but new farm block edits MUST remain
+     gated by the Farmer's normal work schedule.
+409. Have Baker A craft one bread from three extracted vanilla wheat
+     items before the bakery shift ends. The *same* baker may return
+     bread after shift; new bread crafting remains work-shift-only.
+410. Keep meal_day current and a pending meal in the Dawn/Evening window.
+     A carrying NPC delivers first, then resumes ordinary meal
+     scheduling after the receipt is durably cleared.
+411. Obstruct the primary front-of-hall landing in a disposable world.
+     Native courier navigation should choose a different one of the
+     explicitly bounded, loaded, 2-air-high, solid-ground approaches.
+412. Obstruct all allowed receiving points. No unsafe teleport, world
+     edit, extra inventory credit or artificial success timer is
+     allowed. /civ routes NAME must identify that no clear loaded
+     receiving approach is available.
+413. Unload a destination chunk. The navigation planner must skip
+     that goal without force-loading it or faking an empty route;
+     existing verified receipts stay persisted and unaltered.
+414. With two real workers of the same profession, only the exact
+     UUID-linked worker with a stored pickup may be reported as
+     returning. The other worker must neither earn the receipt
+     nor receive a cargo route override.
+415. Use /civ routes NAME as a visitor and as a joined member:
+     the read-only output must show current loaded couriers,
+     item counts, actual native proximity and straight-line
+     distance, but never claim pathfinding success from distance.
+416. Check a missing, unloaded, dead or out-of-range courier: source
+     receipt persists; the route report must not claim arrival.
+     There is no wall-clock timeout that credits or removes goods.
+417. Repeat all above after actual native Horizon build and
+     disposable-world first-play E2E. The source contract tests
+     were AUTHORED but not executed in this assistant run.
