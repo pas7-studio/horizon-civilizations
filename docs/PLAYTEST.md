@@ -1,3 +1,33 @@
+## UUID-bound wheat/bread courier E2E — later local run
+
+After the user's own native build succeeds, use a disposable world.
+This source milestone was not built or executed in this chat.
+
+1. Create or discover a functioning settlement with a completed
+   physical farm, bakery, hall, and at least two UUID-linked Farmers
+   plus two UUID-linked Bakers.
+2. Let Farmer A finish the observed eight-crop harvest, then move
+   Farmer B to the village hall. /civ logistics NAME should retain
+   Farmer A as the cargo owner and show no warehouse credit from B.
+3. Let Farmer A walk home; verify one and only one batch reaches the
+   hall steward queue, then actual vanilla barrel stock.
+4. Let Baker A craft using three actual native wheat items. Move
+   Baker B to the hall: no bread credit. When Baker A returns,
+   credit exactly one bread receipt; then observe barrel insertion.
+5. Restart at each intermediate stage and verify carrier IDs,
+   pending amounts and receipt sequence remain monotonic. Disable
+   or unload the carrier: no substitute is allowed.
+6. To test legacy compatibility, use an old throwaway save with
+   nonempty unbound transit. The OP command /civ retirecargo NAME
+   wheat|bread confirm (choose one) may explicitly lose only that
+   ambiguous receipt with no new goods. Never use without backing
+   up and inspecting the save.
+7. Unload a civic barrel while a dirt/sand workpost is active:
+   unknown stock must pause further resource-demand planning.
+
+See TEST_PLAN 379-392. Native gameplay correctness, visible carried
+items and multi-process crash consistency remain unverified.
+
 ## Supplier standing and courier ledger — later manual acceptance
 
 Source-only milestone. The mod is NOT compiled, tested, or declared
