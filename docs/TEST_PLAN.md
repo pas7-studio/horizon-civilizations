@@ -1327,3 +1327,45 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
 392. Run native client build, actual plot movement, inventory accounting,
      tests and full gameplay E2E separately on a disposable world.
      This source milestone does NOT claim these checks have run.
+
+
+## Verified NPC delivery icons in native dialogue (PR #35 — source only)
+
+393. Let an assigned lumberjack/miner/digger begin work at the
+     recorded natural block. Before the physical native edit is
+     confirmed AND the same UUID-linked worker witnesses pickup,
+     their dialogue must show the normal profession icon, not cargo.
+394. After witnessed pickup is saved, talk to that same loaded worker:
+     their native dialogue must show the actual Good's Minecraft item
+     icon and a text description of exactly ONE saved receipt in transit.
+     The icon is UI only, NOT an equipped native inventory stack.
+395. Talk to a different resident of the same profession. They must
+     not show the first NPC's item receipt or receive warehouse stock.
+396. Mark a gather Blocked / unconfirmed, then inspect the worker's
+     dialogue. No carrying icon or text should be shown for an
+     uncertain or quarantined native block edit.
+397. With Farmer A holding a bound verified eight-wheat harvest, talk
+     to Farmer A and Farmer B in the same village. Only A's dialogue
+     should show a wheat icon and x8 verified delivery text.
+398. With Baker A carrying two previously crafted native loaves,
+     their dialogue must show a bread icon and x2 saved transit;
+     another baker must not advertise the batch.
+399. After the original farmer/baker reaches the receiving area and
+     their receipt is saved as delivered, the dialog must return
+     to the ordinary profession icon/caption and remove cargo text.
+400. Unload/remove the actor's UUID, or mark the resident dead in a
+     disposable save. Their dialog must never display an active
+     carried-good record without a living UUID-bound native actor.
+401. Restart between pickup and delivery; the same cargo icon and
+     count must reappear for the same saved resident. Do not display
+     legacy unbound wheat/bread transit on any nearby villager.
+402. Native Minecraft inventory/equipment must not change when
+     viewing these dialogs. Item icons are native dialogue widgets,
+     not item drops, mobs with new equipment, or synthetic goods.
+403. Physical bread restock planning must not count an unbound
+     legacy baked-loaf receipt as available food; only native
+     barrels, verified warehouse receipts and carrier-bound loaves
+     may satisfy its buffer.
+404. Confirm with the local Horizon first-play gate and live-world
+     observation after the user builds the mod. Neither these Rust
+     regressions nor Python source contracts were executed here.
