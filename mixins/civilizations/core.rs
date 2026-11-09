@@ -2031,8 +2031,11 @@ pub fn physical_supply_requests(
     if village.population() > 0 {
         let bread_available = have(Good::Bread)
             .saturating_add(village.warehouse_quantity(Good::Bread))
-            .saturating_add(village.bakery.as_ref()
-                .map_or(0, |bakery| bakery.bread_in_transit));
+            // An older unbound courier receipt is not reliably incoming
+            // stock: do not reduce player supply demand on its behalf.
+            .saturating_add(if village.bread_carrier_id.is_some() {
+                village.bakery.as_ref().map_or(0, |bakery| bakery.bread_in_transit)
+            } else { 0 });
         let bread_missing = physical_bread_target(village)
             .saturating_sub(bread_available);
         if bread_missing > 0 {
@@ -2048,7 +2051,9 @@ pub fn physical_supply_requests(
                     .saturating_mul(BREAD_WHEAT_RECIPE);
                 let available_wheat = have(Good::Wheat)
                     .saturating_add(village.warehouse_quantity(Good::Wheat))
-                    .saturating_add(village.wheat_in_transit)
+                    .saturating_add(if village.wheat_carrier_id.is_some() {
+                        village.wheat_in_transit
+                    } else { 0 })
                     .saturating_add(bakery.wheat_escrow);
                 let wheat_missing = target_wheat.saturating_sub(available_wheat);
                 if wheat_missing > 0 {
