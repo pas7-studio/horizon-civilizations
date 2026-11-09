@@ -2133,6 +2133,16 @@ pub struct Settlement {
     /// UUID-linked farmers toward the central village receiving area.
     #[serde(default)]
     pub wheat_in_transit: u32,
+    /// Exact UUID-bound farmer resident ID who physically witnessed the
+    /// latest finished crop receipt. Old saves leave legacy transit unbound:
+    /// no other farmer may claim those goods merely by standing at the hall.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub wheat_carrier_id: Option<u64>,
+    /// The specific living baker at the real workshop who crafted the
+    /// bread now travelling to the hall. Does not represent native NPC
+    /// equipment and never grants an item by itself.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub bread_carrier_id: Option<u64>,
     /// One physical bakery, built and operated by actual NPC workers.
     #[serde(default)]
     pub bakery: Option<BakeryWorkshop>,
@@ -2360,6 +2370,21 @@ impl Settlement {
                 }
                 chosen.insert(worker, job);
             }
+        }
+        // Finished crop and bread receipts must stay assigned to their
+        // actual courier across staffing changes and server restarts.
+        for (worker, role) in [
+            (self.wheat_carrier_id, Job::Farmer),
+            (self.bread_carrier_id, Job::Baker),
+        ] {
+            let Some(worker) = worker else { continue };
+            if !alive.contains(&worker) || chosen.contains_key(&worker) {
+                continue;
+            }
+            if let Some(seats) = remaining.get_mut(&role) {
+                *seats = seats.saturating_sub(1);
+            }
+            chosen.insert(worker, role);
         }
         // 1. A camp keeps the same worker so receipts stay attributable.
         for post in &self.posts {
@@ -2845,6 +2870,20 @@ impl World {
             if village.wheat_in_transit > 10_000_000 {
                 return Err("wheat in physical transit exceeds cap".into());
             }
+            // Legacy receipts with no recorded courier are deliberately
+            // loadable but never auto-deliverable. Saved nonempty bindings
+            // must refer to a historic roster ID, even if that worker died.
+            for (carrier, pending, label) in [
+                (village.wheat_carrier_id, village.wheat_in_transit, "wheat"),
+                (village.bread_carrier_id, village.bakery.as_ref()
+                    .map_or(0, |b| b.bread_in_transit), "bread"),
+            ] {
+                if let Some(resident) = carrier {
+                    if pending == 0 || !village.residents.iter().any(|r| r.id == resident) {
+                        return Err(format!("invalid {label} courier custody binding"));
+                    }
+                }
+            }
             if village.build_escrow.values().any(|&amount| amount > 10_000_000) {
                 return Err("physical builder escrow entry too large".into());
             }
@@ -3087,6 +3126,7 @@ impl World {
             let delivered = v.wheat_in_transit;
             v.warehouse.insert(Good::Wheat, next);
             v.wheat_in_transit = 0;
+            v.wheat_carrier_id = None;
             (v.name.clone(), delivered)
         };
         self.event(format!(
@@ -3178,6 +3218,8 @@ impl World {
             barrel_transfer: None,
             market_purchase: None,
             wheat_in_transit: 0,
+            wheat_carrier_id: None,
+            bread_carrier_id: None,
             bakery: None,
             hall_job: None,
             hall_complete: false,
@@ -3403,9 +3445,122 @@ impl World {
         v.warehouse_credit(Good::Bread, pending)?;
         let b = v.bakery.as_mut().unwrap();
         b.bread_in_transit = 0;
+        v.bread_carrier_id = None;
         let name = v.name.clone();
         self.event(format!("{name}: baker delivered {pending} crafted bread to the hall"));
         Ok(true)
+    }
+
+
+    /// The bridge must have seen a specific loaded UUID-linked farmer
+    /// working at the actual plot. A second harvest can only join an
+    /// existing transit batch if the SAME farmer already owns it.
+    /// This commits the newly observed harvest and its carrier ID in one
+    /// save; older bare advance_farm() fixtures remain unbound, not trusted
+    /// by the native delivery adapter.
+    pub fn advance_farm_with_carrier(
+        &mut self, village_id: u64, decision: FarmDecision, worker_id: u64,
+    ) -> Result<bool, String> {
+        let v = self.settlements.get(&village_id).ok_or("unknown village")?;
+        let receipt = matches!(decision, FarmDecision::StageComplete)
+            && v.farm.as_ref().is_some_and(|f| f.stage == FarmStage::Harvesting);
+        if receipt {
+            if !v.residents.iter().any(|r| r.id == worker_id && r.alive
+                && r.job == Job::Farmer && r.entity_uuid.is_some()) {
+                return Err("crop courier must be a living UUID-linked farmer".into());
+            }
+            if v.wheat_in_transit > 0 && v.wheat_carrier_id != Some(worker_id) {
+                return Err("earlier wheat transit belongs to another or unbound courier".into());
+            }
+        }
+        let progressed = self.advance_farm(village_id, decision)?;
+        if receipt && progressed {
+            self.settlements.get_mut(&village_id).unwrap().wheat_carrier_id = Some(worker_id);
+        }
+        Ok(progressed)
+    }
+
+    /// Domain authorization following a REAL witnessed return of the
+    /// same native villager UUID, not any farmer standing at the hall.
+    pub fn deliver_farm_wheat_from(
+        &mut self, village_id: u64, worker_id: u64,
+    ) -> Result<bool, String> {
+        let v = self.settlements.get(&village_id).ok_or("unknown village")?;
+        if v.wheat_in_transit == 0 { return Ok(false); }
+        if v.wheat_carrier_id != Some(worker_id)
+            || !v.residents.iter().any(|r| r.id == worker_id && r.alive
+                && r.job == Job::Farmer && r.entity_uuid.is_some()) {
+            return Err("farm wheat is not owned by this verified courier".into());
+        }
+        self.deliver_farm_wheat(village_id)
+    }
+
+    /// A real baker at a loaded, intact workshop accepts custody of the
+    /// output generated by the existing extracted-three-wheat recipe.
+    /// An unresolved legacy loaf cannot be claimed by a random baker.
+    pub fn craft_bread_with_carrier(
+        &mut self, village_id: u64, worker_id: u64,
+    ) -> Result<bool, String> {
+        let v = self.settlements.get(&village_id).ok_or("unknown village")?;
+        if !v.residents.iter().any(|r| r.id == worker_id && r.alive
+            && r.job == Job::Baker && r.entity_uuid.is_some()) {
+            return Err("bread courier must be a living UUID-linked baker".into());
+        }
+        if v.bakery.as_ref().is_some_and(|b| b.bread_in_transit > 0)
+            && v.bread_carrier_id != Some(worker_id) {
+            return Err("existing bread transit belongs to another or unbound baker".into());
+        }
+        let crafted = self.craft_bread(village_id)?;
+        if crafted {
+            self.settlements.get_mut(&village_id).unwrap().bread_carrier_id = Some(worker_id);
+        }
+        Ok(crafted)
+    }
+
+    pub fn deliver_bakery_bread_from(
+        &mut self, village_id: u64, worker_id: u64,
+    ) -> Result<bool, String> {
+        let v = self.settlements.get(&village_id).ok_or("unknown village")?;
+        if v.bakery.as_ref().map_or(0, |b| b.bread_in_transit) == 0 {
+            return Ok(false);
+        }
+        if v.bread_carrier_id != Some(worker_id)
+            || !v.residents.iter().any(|r| r.id == worker_id && r.alive
+                && r.job == Job::Baker && r.entity_uuid.is_some()) {
+            return Err("bakery bread is not owned by this verified courier".into());
+        }
+        self.deliver_bakery_bread(village_id)
+    }
+
+    /// Controlled OP loss of *unbound legacy* transit. It writes off the
+    /// uncertain virtual custody without adding inventory, rather than
+    /// attaching an unproven receipt to an unrelated living NPC.
+    pub fn retire_unbound_cargo(
+        &mut self, village_id: u64, good: Good,
+    ) -> Result<u32, String> {
+        let v = self.settlements.get_mut(&village_id).ok_or("unknown village")?;
+        let amount = match good {
+            Good::Wheat if v.wheat_carrier_id.is_none() && v.wheat_in_transit > 0 => {
+                let n = v.wheat_in_transit;
+                v.wheat_in_transit = 0;
+                n
+            }
+            Good::Bread if v.bread_carrier_id.is_none() => {
+                let b = v.bakery.as_mut().ok_or("no bakery")?;
+                if b.bread_in_transit == 0 {
+                    return Err("no unbound bakery bread in transit".into());
+                }
+                let n = b.bread_in_transit;
+                b.bread_in_transit = 0;
+                n
+            }
+            _ => return Err("only unbound legacy wheat or bread may be retired".into()),
+        };
+        let name = v.name.clone();
+        self.event(format!(
+            "{name}: operator retired {amount} unbound {good:?} from legacy courier transit, zero warehouse credit"
+        ));
+        Ok(amount)
     }
 
     /// Reserve the actual resource budget for the village's one central hall.
