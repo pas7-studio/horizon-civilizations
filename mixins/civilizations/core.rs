@@ -8583,6 +8583,145 @@ mod autonomous_frontier_tests {
 }
 
 #[cfg(test)]
+mod same_uuid_courier_custody_tests {
+    use super::*;
+
+    fn town() -> (World, u64, u64, u64, u64, u64) {
+        let mut w = World::default();
+        let id = w.found("CarrierTown", "minecraft:overworld", [0, 70, 0], "owner").unwrap();
+        let v = w.settlements.get_mut(&id).unwrap();
+        let farmer_ids: Vec<_> = v.residents.iter()
+            .filter(|r| r.job == Job::Farmer).map(|r| r.id).take(2).collect();
+        let baker_ids: Vec<_> = v.residents.iter()
+            .filter(|r| r.job == Job::Baker).map(|r| r.id).take(2).collect();
+        for (index, resident) in v.residents.iter_mut().enumerate() {
+            resident.entity_uuid = Some((index + 1) as u128);
+        }
+        w.validate().unwrap();
+        (w, id, farmer_ids[0], farmer_ids[1], baker_ids[0], baker_ids[1])
+    }
+
+    #[test]
+    fn harvest_receipt_binds_the_exact_farmer_through_restart_and_delivery() {
+        let (mut w, id, farmer, other, baker, _) = town();
+        w.settlements.get_mut(&id).unwrap().farm = Some(FarmPlot {
+            origin: [25, 70, 0], stage: FarmStage::Harvesting, cursor: 8,
+            blocked: false, completed_cycles: 0,
+            harvest_sequence: 0, harvest_receipts: Vec::new(),
+        });
+        assert!(w.advance_farm_with_carrier(id, FarmDecision::StageComplete, baker).is_err());
+        assert!(w.advance_farm_with_carrier(id, FarmDecision::StageComplete, farmer).unwrap());
+        assert_eq!(w.settlements[&id].wheat_in_transit, 8);
+        assert_eq!(w.settlements[&id].wheat_carrier_id, Some(farmer));
+        assert_eq!(w.settlements[&id].warehouse_quantity(Good::Wheat), 0);
+        let mut reloaded: World = serde_json::from_str(&serde_json::to_string(&w).unwrap()).unwrap();
+        reloaded.validate().unwrap();
+        assert!(reloaded.deliver_farm_wheat_from(id, other).is_err());
+        assert_eq!(reloaded.settlements[&id].warehouse_quantity(Good::Wheat), 0);
+        assert_eq!(reloaded.deliver_farm_wheat_from(id, farmer), Ok(true));
+        assert_eq!(reloaded.deliver_farm_wheat_from(id, farmer), Ok(false));
+        assert_eq!(reloaded.settlements[&id].wheat_carrier_id, None);
+        assert_eq!(reloaded.settlements[&id].warehouse_quantity(Good::Wheat), 8);
+        reloaded.validate().unwrap();
+    }
+
+    #[test]
+    fn baker_recipe_output_is_bound_to_the_one_uuid_linked_creator() {
+        let (mut w, id, farmer, _, baker, other) = town();
+        w.settlements.get_mut(&id).unwrap().bakery = Some(BakeryWorkshop {
+            origin: [24, 70, 0], building: None, complete: true,
+            supplies_reserved: true, construction_escrow: BTreeMap::new(),
+            wheat_escrow: BREAD_WHEAT_RECIPE, bread_in_transit: 0, batches: 0,
+        });
+        w.settlements.get_mut(&id).unwrap().hall_complete = true;
+        assert!(w.craft_bread_with_carrier(id, farmer).is_err());
+        assert_eq!(w.craft_bread_with_carrier(id, baker), Ok(true));
+        assert_eq!(w.settlements[&id].bread_carrier_id, Some(baker));
+        assert_eq!(w.settlements[&id].bakery.as_ref().unwrap().bread_in_transit, 1);
+        assert!(w.deliver_bakery_bread_from(id, other).is_err());
+        assert_eq!(w.settlements[&id].warehouse_quantity(Good::Bread), 0);
+        let mut reloaded: World = serde_json::from_str(&serde_json::to_string(&w).unwrap()).unwrap();
+        reloaded.validate().unwrap();
+        assert_eq!(reloaded.deliver_bakery_bread_from(id, baker), Ok(true));
+        assert_eq!(reloaded.deliver_bakery_bread_from(id, baker), Ok(false));
+        assert_eq!(reloaded.settlements[&id].bread_carrier_id, None);
+        assert_eq!(reloaded.settlements[&id].warehouse_quantity(Good::Bread), 1);
+        reloaded.validate().unwrap();
+    }
+
+    #[test]
+    fn older_unbound_transit_is_loadable_but_not_auto_deliverable() {
+        let (mut w, id, farmer, _, baker, _) = town();
+        w.settlements.get_mut(&id).unwrap().wheat_in_transit = 8;
+        w.settlements.get_mut(&id).unwrap().bakery = Some(BakeryWorkshop {
+            origin: [24, 70, 0], building: None, complete: true,
+            supplies_reserved: true, construction_escrow: BTreeMap::new(),
+            wheat_escrow: 0, bread_in_transit: 1, batches: 1,
+        });
+        w.settlements.get_mut(&id).unwrap().hall_complete = true;
+        let mut old = serde_json::to_value(&w).unwrap();
+        let village = old["settlements"].as_object_mut().unwrap()
+            .get_mut(&id.to_string()).unwrap().as_object_mut().unwrap();
+        village.remove("wheat_carrier_id");
+        village.remove("bread_carrier_id");
+        let mut loaded: World = serde_json::from_value(old).unwrap();
+        loaded.validate().unwrap();
+        assert!(loaded.deliver_farm_wheat_from(id, farmer).is_err());
+        assert!(loaded.deliver_bakery_bread_from(id, baker).is_err());
+        assert_eq!(loaded.settlements[&id].warehouse_quantity(Good::Wheat), 0);
+        assert_eq!(loaded.settlements[&id].warehouse_quantity(Good::Bread), 0);
+        assert_eq!(loaded.retire_unbound_cargo(id, Good::Wheat), Ok(8));
+        assert_eq!(loaded.retire_unbound_cargo(id, Good::Bread), Ok(1));
+        assert!(loaded.retire_unbound_cargo(id, Good::Wheat).is_err());
+        assert!(loaded.retire_unbound_cargo(id, Good::Stone).is_err());
+        loaded.validate().unwrap();
+    }
+
+    #[test]
+    fn staffing_preserves_an_active_courier_role_and_rejects_unknown_ids() {
+        let (mut w, id, farmer, _, baker, _) = town();
+        let v = w.settlements.get_mut(&id).unwrap();
+        v.wheat_in_transit = 8;
+        v.wheat_carrier_id = Some(farmer);
+        v.bakery = Some(BakeryWorkshop {
+            origin: [24, 70, 0], building: None, complete: true,
+            supplies_reserved: true, construction_escrow: BTreeMap::new(),
+            wheat_escrow: 0, bread_in_transit: 1, batches: 1,
+        });
+        v.hall_complete = true;
+        v.bread_carrier_id = Some(baker);
+        v.residents.iter_mut().find(|r| r.id == farmer).unwrap().job = Job::Laborer;
+        v.residents.iter_mut().find(|r| r.id == baker).unwrap().job = Job::Laborer;
+        v.staff_workplaces();
+        assert_eq!(v.residents.iter().find(|r| r.id == farmer).unwrap().job, Job::Farmer);
+        assert_eq!(v.residents.iter().find(|r| r.id == baker).unwrap().job, Job::Baker);
+        w.validate().unwrap();
+        w.settlements.get_mut(&id).unwrap().wheat_carrier_id = Some(u64::MAX);
+        assert!(w.validate().is_err());
+    }
+
+    #[test]
+    fn registered_cargo_cannot_be_retired_without_the_bound_courier() {
+        let (mut w, id, farmer, _, baker, _) = town();
+        let v = w.settlements.get_mut(&id).unwrap();
+        v.wheat_in_transit = 8;
+        v.wheat_carrier_id = Some(farmer);
+        v.bakery = Some(BakeryWorkshop {
+            origin: [24, 70, 0], building: None, complete: true,
+            supplies_reserved: true, construction_escrow: BTreeMap::new(),
+            wheat_escrow: 0, bread_in_transit: 1, batches: 1,
+        });
+        v.bread_carrier_id = Some(baker);
+        v.hall_complete = true;
+        assert!(w.retire_unbound_cargo(id, Good::Wheat).is_err());
+        assert!(w.retire_unbound_cargo(id, Good::Bread).is_err());
+        assert_eq!(w.settlements[&id].wheat_in_transit, 8);
+        assert_eq!(w.settlements[&id].bakery.as_ref().unwrap().bread_in_transit, 1);
+        w.validate().unwrap();
+    }
+}
+
+#[cfg(test)]
 mod physical_civic_service_tests {
     use super::*;
 
