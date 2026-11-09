@@ -286,7 +286,21 @@ fn guide_actors(game: &mut Game<'_>, world: &World) {
                 && matches!(phase, DailyPhase::Dawn | DailyPhase::Evening)
                 && village.meal_day == Some(game.world.day_time.div_euclid(24_000))
                 && !village.meal_served.contains(&resident.id);
-            let pos = if meal_due {
+            // A worker who has a durable, verified pickup/craft receipt
+            // must finish that delivery even after shift end or when the
+            // next meal starts. Otherwise meal/home routing can orphan a
+            // real cargo receipt for an entire night or indefinitely.
+            // The source -> hall journal still requires the native UUID
+            // actor to physically reach the receiving area; this priority
+            // does NOT grant warehouse credit or teleport any NPC.
+            let delivery_due = crate::game::civilizations_core::resident_verified_cargo(
+                village, resident,
+            ).is_some();
+            let pos = if delivery_due {
+                [f64::from(village.center[0]) + 0.5,
+                 f64::from(village.center[1]),
+                 f64::from(village.center[2] - 3) + 0.5]
+            } else if meal_due {
                 // Citizens actually walk to the public dining/warehouse
                 // entrance before one real loaf can be taken for them.
                 // Spread waiting citizens over five approach positions.
@@ -415,6 +429,13 @@ fn guide_actors(game: &mut Game<'_>, world: &World) {
         }
     }
     for (mob_id, pos) in targets {
+        // Never ask the native pathfinder to route to an unloaded goal or
+        // invalid coordinate. Loaded village ticket coverage is best effort
+        // and can change while actors are moving; this is a read-only gate.
+        if !pos.iter().all(|component| component.is_finite())
+            || !game.world.loaded(pos[0].floor() as i32, pos[2].floor() as i32) {
+            continue;
+        }
         if let Some(mob) = game.native_mob(&current_dim, mob_id) {
             let dx = mob.pos[0] - pos[0];
             let dy = mob.pos[1] - pos[1];
@@ -3490,7 +3511,9 @@ fn resident_meal_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Resul
 /// One physical farmer delivery per village, after an actual UUID-linked
 /// villager has returned from a fully confirmed crop harvest to the hall.
 fn farmer_delivery_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), String> {
-    if !DailyPhase::at(game.world.day_time).on_shift(Job::Farmer) { return Ok(()); }
+    // Committing a pre-existing, witnessed crop receipt is NOT new
+    // farming. An actual UUID-bound farmer may return after their shift,
+    // otherwise the delivery remains stranded through night/meal hours.
     let dim = game.dim.id().to_owned();
     let ids: Vec<u64> = state.world.as_ref().unwrap().settlements.values()
         .filter(|v| v.dimension == dim && v.wheat_delivery_pending() > 0)
@@ -3525,7 +3548,8 @@ fn farmer_delivery_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Res
 /// is physically working at the native bakery; bread is made available only
 /// after this same baker returns to the hall and the steward stocks a barrel.
 fn baker_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), String> {
-    if !DailyPhase::at(game.world.day_time).on_shift(Job::Baker) { return Ok(()); }
+    // Delivery of already crafted bread is allowed off-shift, but
+    // creating NEW bread remains strictly work-shift restricted below.
     let dimension = game.dim.id().to_owned();
     let ids: Vec<u64> = state.world.as_ref().unwrap().settlements.values()
         .filter(|v| v.dimension == dimension && v.bakery.as_ref().is_some_and(|b| b.complete))
@@ -3551,6 +3575,9 @@ fn baker_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), St
                 save_autonomous(state, old)?;
             }
             return Ok(());
+        }
+        if !DailyPhase::at(game.world.day_time).on_shift(Job::Baker) {
+            continue;
         }
         if b.wheat_escrow < crate::game::civilizations_core::BREAD_WHEAT_RECIPE {
             continue;
@@ -4417,9 +4444,8 @@ fn gather_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
     };
     let (id, job) = eligible[slot].clone();
     let Some(role) = job.good.job() else { return Ok(()); };
-    if !DailyPhase::at(game.world.day_time).on_shift(role) {
-        return Ok(());
-    }
+    // Reconcile/witness/deliver an ALREADY issued physical extraction
+    // regardless of shift. A new native block edit is work, not delivery.
     let observed = world_block(game, &dimension, job.position);
     let Some(name) = observed else { return Ok(()); };
     let before = state.world.as_ref().unwrap().clone();
@@ -4477,6 +4503,9 @@ fn gather_one_step(game: &mut Game<'_>, state: &mut ActiveWorld) -> Result<(), S
             state.world.as_mut().unwrap().block_gather(id)?;
         }
         return save_autonomous(state, before);
+    }
+    if !DailyPhase::at(game.world.day_time).on_shift(role) {
+        return Ok(());
     }
     let saved_stem = state.world.as_ref().unwrap().settlements[&id].oak_stem.as_ref();
     let valid_resource = if let Some(stem) = saved_stem {
