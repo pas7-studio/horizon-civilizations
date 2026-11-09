@@ -1,3 +1,24 @@
+## PR #35 — same-UUID courier custody (source-only)
+
+- [x] Correct a real custody gap: finished physical wheat and real
+  baked bread now bind to the exact UUID-linked source worker.
+- [x] Same worker must be observed at the hall before warehouse credit.
+  Other villagers of the same profession cannot impersonate a courier.
+- [x] Save-worker identity with the receipt, preserve role during active
+  transport, retain the binding through restart and clear only on delivery.
+- [x] Old unbound transit remains loadable but not auto-deliverable;
+  explicit OP loss/write-off available without stock creation.
+- [x] Display bound/unbound status in /civ logistics; unbound legacy
+  stock is not treated as incoming supply for /civ requests.
+- [x] Pause sand/dirt pit planning when native barrels are unavailable.
+- [x] Five authored Rust regressions and twelve Python static contracts.
+- [ ] Local Rust compile/unit suite and real Horizon loaded-world E2E
+  with two farmers and two bakers, multiple restart/crash points.
+- [ ] Future: native NPC equipment/item-in-hand visuals, true courier
+  inventories, actual drop/pickup stacks and persistent transport carts.
+  The present custody record is proof of observed native work and return,
+  not a native inventory item or physics simulation.
+
 ## PR #35 source milestone — civic supplier standing and delivery visibility
 
 - [x] Remove malformed duplicate Settlement struct so branch has
