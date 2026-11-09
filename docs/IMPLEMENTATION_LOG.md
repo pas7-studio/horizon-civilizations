@@ -1026,3 +1026,47 @@ native menu is deliberately not claimed. Native compilation/E2E pending.
 - User explicitly requests SOURCE-ONLY: no Rust/Python test
   execution, no Horizon build, no native gameplay E2E. PR #35
   remains Draft; main and Actions untouched.
+
+
+## 2026-11-09 — actual loaded-ground courier waypoint planning (Draft PR #35)
+
+- Addressed a genuine navigation gap: the previous bounded retry
+  system rotated only the destination in front of the hall, leaving
+  a courier unable to reason about a wall along the intervening
+  route. Added a pure, bounded A* over actual loaded native block
+  samples from worker to selected hall receiving approach.
+- Walkability is conservative: actual solid observed ground,
+  two full air cells at feet/head, cardinal movement, flat ground
+  or at most one vertical block per step, and overhead clearance
+  on climbs. Unknown chunks, full-body obstacles and unsupported
+  standing cells are never treated as walkable. No block edits.
+- Search has strict 4,096 expanded-node and 112-block horizontal,
+  8-block vertical spans. Native worksite start is the worker's
+  actual feet coordinate or an immediately adjacent verified
+  supported cell; no teleport or out-of-range start estimate.
+- Completed paths become close native navigation checkpoints at
+  bends, elevation changes and at most six straight steps. The
+  existing UUID-bound courier monitor keeps temporary waypoints
+  and advances only when the same loaded actor is observed near
+  each checkpoint. Previous exact-native receipt checks remain
+  solely authoritative for real warehouse credit.
+- On a long stall, capped retries rotate the hall's loaded safe
+  approach and resurvey the real walking route. A failed survey
+  is cached and **never** falls back to a blind straight-line
+  walk through unknown terrain. Only two complete path surveys
+  are allowed per 20-tick navigation pass to bound workload.
+- Fixed progress/refresh behavior so genuine movement preserves
+  the already observed alternative path rather than rebuilding
+  a direct route every refresh; reroutes advance from the active
+  approach, not from a stale counter after a detour.
+- /civ routes NAME now indicates the next planned checkpoint
+  and whether a safe observed walkway is unavailable; its
+  command remains read-only with native path result unknown.
+- Seven Rust regressions and 13 Python static source contracts
+  authored. Updated earlier route retry source contract.
+  TEST_PLAN grew through 446 and PLAYTEST describes native E2E.
+- **No compiler, Rust/Python test runner, native Horizon build
+  or Minecraft session was executed**, per user requirement.
+  This is loaded-cell path planning + native waypoint requests,
+  not proof of the engine's own pathfinding success or actual
+  equipped cargo.
