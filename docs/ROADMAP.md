@@ -1,3 +1,24 @@
+## PR #35 — deliveries across meals and night (source-only)
+
+- [x] Give durable, witnessed cargo precedence over meal/home routes;
+  one loaded UUID-linked NPC must deliver their own goods first.
+- [x] Continue native reception of already-issued gathers, farm wheat
+  and crafted bread after shifts; forbid new gathering/crafting then.
+- [x] Find a bounded clear/loaded, two-block-high stable approach to
+  the civic warehouse entrance. No teleport or chunk creation.
+- [x] Read-only `/civ routes NAME` shows exact loaded courier,
+  verified cargo and reachable landing status. Never infer native
+  pathfinding success merely from straight-line distance.
+- [x] Add source regression contracts and local acceptance tests
+  for shift boundaries, lunch priority, restart and obstructed doors.
+- [ ] Execute later on user's machine: Rust compile/unit suite,
+  Python tests, native Horizon client build, real arrival E2E.
+- [ ] True path-result telemetry / stuck-timeout tracking, multiple
+  waypoints and obstacle recovery require native path API evidence;
+  current command reports live position, not movement success.
+- [ ] Visibly equipped goods on actual NPC bodies remain separate
+  from the in-dialogue item icon.
+
 ## PR #35 — honest visual cargo through NPC dialogues (source only)
 
 - [x] Display the confirmed resource item icon and exact receipt
