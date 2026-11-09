@@ -885,3 +885,40 @@ native menu is deliberately not claimed. Native compilation/E2E pending.
   one atomic transaction; this milestone reuses the current guarded
   sale path rather than falsely claiming that limitation is solved.
 - Draft PR #35 remains unmerged; main and GitHub Actions unchanged.
+
+
+## 2026-11-09 — UUID-bound crop and bakery couriers (PR #35)
+
+- Audited the native source-to-hall path: gathered logs/stone/sand/dirt
+  already pin one resident ID, but finished wheat could previously be
+  delivered by ANY living Farmer at the hall, and crafted bread by ANY
+  Baker. These were concrete identity/custody gaps.
+- Added backward-compatible Settlement.wheat_carrier_id and
+  bread_carrier_id. A finished real eight-crop harvest now commits the
+  exact UUID-bound Farmer's resident ID in the SAME JSON save as its
+  existing crop receipt/transfer tally. Actual real bakery crafting
+  records the UUID-linked Baker who stood at an intact workshop.
+- Native routes and delivery decisions now require the ORIGINAL worker's
+  loaded UUID, correct job and return near the hall; another farmer or
+  baker cannot claim their coworker's receipt.
+- Worker staffing pins live pending Farmer/Baker couriers across job
+  recalculation and restart. Unloaded/dead workers remain unresolved
+  rather than being silently replaced. Transit with no saved carrier
+  remains loadable for backward compatibility but is never auto-credited.
+- Added OP-only /civ retirecargo NAME wheat|bread confirm near the actual
+  village for explicit WRITE-OFF of unbound legacy transit; only if no
+  external warehouse transaction is unresolved. Never creates items,
+  rebinds a stranger, or retires a bound resident's cargo.
+- Physical supply requests no longer count unverifiable unbound wheat or
+  bread toward reliable inbound stock. Exposed carrier identities and
+  unbound status in /civ logistics. A missing/unloaded public barrel now
+  suspends sand/dirt pit demand instead of assuming empty storage.
+- Added five Rust domain regression cases, twelve Python source
+  contracts and E2E test scenarios 379-392.
+- **No builds or executable tests run**, per user's source-only
+  development request. Actual native entity navigation, item counts,
+  Windows builds, Rust compile and save/crash E2E are still unverified.
+- No true native held-stack rendering: carrying is a saved receipt and
+  observed UUID movement, not an item physically equipped in a slot.
+  World JSON and Minecraft native saves are not a single atomic commit.
+- Work stayed on Draft PR #35. main and GitHub Actions unchanged.
