@@ -1758,13 +1758,26 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             let route_health = if let Some(monitor) = telemetry {
                 let quiet = state.physical_ticks.saturating_sub(monitor.last_progress_tick);
                 let since_request = state.physical_ticks.saturating_sub(monitor.last_request_tick);
+                let walkway = if let Some(alternative) = monitor.route_alternative {
+                    if monitor.waypoints.is_empty() {
+                        format!("NO VERIFIED WALKWAY for approach {alternative} (unknown/blocked/budget exhausted)")
+                    } else if let Some(next) = monitor.waypoints.get(monitor.waypoint_cursor) {
+                        format!("loaded walkway checkpoint {}/{} -> {:?}",
+                            monitor.waypoint_cursor.saturating_add(1),
+                            monitor.waypoints.len(), next)
+                    } else {
+                        "all loaded walkway checkpoints observed; awaiting exact UUID receipt".to_owned()
+                    }
+                } else {
+                    "loaded walkway survey not yet attempted".to_owned()
+                };
                 if monitor.reroutes >= crate::game::civilizations_core::COURIER_MAX_REROUTES
                     && quiet >= crate::game::civilizations_core::COURIER_STALL_TICKS
                     && since_request >= crate::game::civilizations_core::COURIER_RETRY_COOLDOWN_TICKS {
-                    format!("STALLED: {} reroutes exhausted, no confirmed movement for {quiet} server ticks; inspect native terrain",
+                    format!("STALLED: {} reroutes exhausted, no confirmed movement for {quiet} server ticks; {walkway}; inspect native terrain",
                         monitor.reroutes)
                 } else {
-                    format!("observed movement {quiet} ticks ago, alternative {}/{}; native path result unknown",
+                    format!("observed movement {quiet} ticks ago, alternative {}/{}; {walkway}; native path result unknown",
                         monitor.reroutes, crate::game::civilizations_core::COURIER_MAX_REROUTES)
                 }
             } else {
