@@ -188,6 +188,7 @@ pub fn register(commands: &mut Vec<NativeCommand>) {
         "civ found <name:word>", "civ actors <name:word>",
         "civ reconcile <name:word>",
         "civ recoveractor <name:word> <resident:integer> <confirm:word>",
+        "civ retirecargo <name:word> <good:word> <confirm:word>",
         "civ day [days:integer]", "civ construct <name:word>",
         "civ post <name:word> <kind:word>",
         "civ approvehouse <name:word> <slot:integer> <y:integer>",
@@ -1428,7 +1429,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
     let actor = format!("{:032x}", player.uuid);
     let action = args.next().unwrap_or("help");
     if action == "help" {
-        reply(game, "Civilizations: /civ list | nearby | requests <name> | service <name> | logistics <name> | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | hall <name> | warehouse <name> | meals <name> | posts <name> | roles <name> | status <name> | chunks <name> | diagnose <name> | buyplot <name> | buyhouse <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, recoveractor <name> <resident-id> attempt, barrelcheck <name>, resolvebarrel <name> confirm|cancel <observed_count>, gathercheck <name>, discardgather <name> intact|empty, day [days], construct <name>, post <name> lumber|quarry|sand|dirt, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
+        reply(game, "Civilizations: /civ list | nearby | requests <name> | service <name> | logistics <name> | info [name] | roster <name> | schedule <name> | homes <name> | survey <name> | council <name> | forecast <name> | plots <name> | development <name> | hall <name> | warehouse <name> | meals <name> | posts <name> | roles <name> | status <name> | chunks <name> | diagnose <name> | buyplot <name> | buyhouse <name> | commission <name> | construction <name> | farming <name> | harvests <name> | join <name> | title | promote | history | buy/sell <good> <1..64> | (OP) found <name>, actors <name>, reconcile <name>, recoveractor <name> <resident-id> attempt, barrelcheck <name>, resolvebarrel <name> confirm|cancel <observed_count>, gathercheck <name>, discardgather <name> intact|empty, day [days], construct <name>, post <name> lumber|quarry|sand|dirt, approvehouse <name> <slot> <y>, autonomy <name> on/off, farm <name>, recoverfarm <name>, war/peace <from> <to>, retirecargo <name> wheat|bread confirm. Goods: wheat, bread, wood (oak logs), stone (cobble), iron.");
         return;
     }
     if action == "list" {
@@ -1548,9 +1549,21 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             "not constructed (incoming goods fund first hall)".to_owned()
         } else { "other dimension (not observed)".to_owned() };
         let bakery_carry = v.bakery.as_ref().map_or(0, |b| b.bread_in_transit);
+        let carrier = |id: Option<u64>| id
+            .and_then(|worker| v.residents.iter().find(|r| r.id == worker)
+                .map(|r| format!("{}#{} ({})", r.name, worker,
+                    if r.alive { "alive" } else { "deceased" })))
+            .unwrap_or_else(|| "UNBOUND: no automatic delivery; OP /civ retirecargo if legacy".into());
+        let farm_custody = if v.wheat_in_transit > 0 {
+            carrier(v.wheat_carrier_id)
+        } else { "empty".to_owned() };
+        let bakery_custody = if bakery_carry > 0 {
+            carrier(v.bread_carrier_id)
+        } else { "empty".to_owned() };
         reply(game, format!(
-            "{} PHYSICAL logistics: source [{}]; farmer carries {} wheat, baker carries {} bread; awaiting steward [{}]; live barrels [{}]; native journal [{}]. These are saved receipts and loaded-world observations, NOT rendered NPC inventories.",
-            v.name, gather, v.wheat_in_transit, bakery_carry,
+            "{} PHYSICAL logistics: source [{}]; farmer wheat x{} courier [{}], baker bread x{} courier [{}]; awaiting steward [{}]; live barrels [{}]; native journal [{}]. These are saved receipts and loaded-world observations, NOT rendered NPC inventories.",
+            v.name, gather, v.wheat_in_transit, farm_custody, bakery_carry,
+            bakery_custody,
             if waiting.is_empty() { "none".to_owned() } else { waiting.join(", ") },
             actual_storage, real_transfers
         ));
@@ -2584,6 +2597,37 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
             if days == 0 || days > MAX_SIM_DAYS { return Err("days must be 1..30".into()); }
             state.world.as_mut().unwrap().advance(days)?;
             Ok(format!("Advanced {days} days. /civ info and /civ history show the result."))
+        })(),
+        "retirecargo" if player.permission >= 2 => (|| {
+            let name = args.next().ok_or("usage: /civ retirecargo <name> wheat|bread confirm")?;
+            let good = Good::parse(args.next().ok_or("choose wheat or bread")?)
+                .ok_or("invalid cargo good")?;
+            if !matches!(good, Good::Wheat | Good::Bread) {
+                return Err("only wheat or bread legacy transit may be retired".into());
+            }
+            if args.next() != Some("confirm") || args.next().is_some() {
+                return Err("explicit OP confirmation required: /civ retirecargo <name> wheat|bread confirm".into());
+            }
+            let village = previous.by_name(name).ok_or("unknown settlement")?;
+            if village.dimension != player.dimension {
+                return Err("enter the settlement dimension first".into());
+            }
+            if !player.position.iter().all(|value| value.is_finite()) {
+                return Err("invalid operator position".into());
+            }
+            let dx = player.position[0] - f64::from(village.center[0]);
+            let dz = player.position[2] - f64::from(village.center[2]);
+            if dx * dx + dz * dz > 16.0 * 16.0 {
+                return Err("stand within 16 blocks of the village hall to write off legacy cargo".into());
+            }
+            if village.barrel_transfer.is_some() || village.market_purchase.is_some() {
+                return Err("resolve outstanding warehouse transaction before retiring legacy cargo".into());
+            }
+            let dropped = state.world.as_mut().unwrap().retire_unbound_cargo(village.id, good)?;
+            Ok(format!(
+                "{}: wrote off {} unbound legacy {} receipts with ZERO stock credit. Use /civ logistics {} to inspect future UUID-bound deliveries.",
+                name, dropped, good.as_str(), name,
+            ))
         })(),
         "war" | "peace" if player.permission >= 2 => (|| {
             let from = args.next().ok_or("first settlement required")?;
