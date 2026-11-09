@@ -6,7 +6,7 @@ use crate::game::{
         is_rooted_oak_harvest_origin, short_oak_stem_height, inspect_oak_stem,
         native_worker_near, native_worker_reaches_block, PostKind, POST_RADIUS, MAX_QUARRY_STEPS, gather_turn_index,
         BuildInspection, DailyPhase, FarmBlock, FarmDecision, FarmStage, Good, HomeSlot, Job, VisualBuildJob,
-        World, inspect_home, hall_board_positions, HOUSING_PLOT_OFFSETS, MAX_HOUSING_SURVEY_RESULTS,
+        World, CourierNavAction, CourierRouteMonitor, inspect_home, hall_board_positions, HOUSING_PLOT_OFFSETS, MAX_HOUSING_SURVEY_RESULTS,
         MAX_SIM_DAYS},
     native_mobs::NativeSpawn,
     native_server::{NativeCommand, NativeServerPlayer},
@@ -16,7 +16,7 @@ use horizon_client::text::{self, Text};
 use horizon_client::items::ItemStack;
 use horizon_core::geometry::Direction;
 use horizon_world::nbt::{Compound, Tag};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 use std::fs;
 use std::io::Write;
 use std::path::PathBuf;
@@ -31,6 +31,9 @@ struct ActiveWorld {
     world: Option<World>,
     problem: Option<String>,
     physical_ticks: u64,
+    /// Volatile, current-loaded-UUID navigation telemetry. Never written to
+    /// world.json: restarting resets retries but never resets actual cargo.
+    courier_routes: BTreeMap<u128, CourierRouteMonitor>,
 }
 
 static ACTIVE: Mutex<Option<ActiveWorld>> = Mutex::new(None);
@@ -46,7 +49,8 @@ fn load(path: PathBuf) -> ActiveWorld {
             let message = format!(
                 "interrupted save detected ({remnant}). Back up the world folder and inspect primary/backup/temporary save files before restarting"
             );
-            return ActiveWorld { path, world: None, problem: Some(message), physical_ticks: 0 };
+            return ActiveWorld { path, world: None, problem: Some(message), physical_ticks: 0,
+                courier_routes: BTreeMap::new() };
         }
     }
     let result = match fs::read_to_string(&file) {
@@ -64,7 +68,8 @@ fn load(path: PathBuf) -> ActiveWorld {
             (None, Some(error))
         }
     };
-    ActiveWorld { path, world, problem, physical_ticks: 0 }
+    ActiveWorld { path, world, problem, physical_ticks: 0,
+        courier_routes: BTreeMap::new() }
 }
 
 fn active(path: PathBuf) -> MutexGuard<'static, Option<ActiveWorld>> {
@@ -267,16 +272,20 @@ fn loaded_home_target(game: &Game<'_>, dimension: &str, home: HomeSlot) -> Optio
 /// teleport NPCs or load a foreign chunk to invent a traversable target.
 /// This verifies only the LANDING, not that a full native route exists.
 fn loaded_civic_receiving_goal(
-    game: &Game<'_>, dimension: &str, center: [i32; 3],
+    game: &Game<'_>, dimension: &str, center: [i32; 3], alternative: u8,
 ) -> Option<[f64; 3]> {
     let y = center[1];
     let (Some(head), Some(floor)) = (y.checked_add(1), y.checked_sub(1))
     else { return None };
-    for (dx, dz) in [
-        (0_i32, -3_i32), (-1, -3), (1, -3),
+    const APPROACHES: [(i32, i32); 10] = [
+        (0, -3), (-1, -3), (1, -3),
         (-2, -3), (2, -3), (0, -4), (-1, -4), (1, -4),
         (-3, -3), (3, -3),
-    ] {
+    ];
+    // A stuck loaded courier probes a different valid entrance first.
+    // No obstacle is edited; the fallback itself is still checked.
+    for i in 0..APPROACHES.len() {
+        let (dx, dz) = APPROACHES[(i + usize::from(alternative)) % APPROACHES.len()];
         let (Some(x), Some(z)) = (center[0].checked_add(dx), center[2].checked_add(dz))
         else { continue };
         let ground = world_block(game, dimension, [x, floor, z]);
@@ -1579,7 +1588,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
         // actor UUIDs. Proximity is NOT evidence that a native path exists
         // and this command never creates or retries a delivery.
         let linked = loaded_actors(game, world, village.id);
-        let goal = loaded_civic_receiving_goal(game, &village.dimension, village.center);
+        let goal = loaded_civic_receiving_goal(game, &village.dimension, village.center, 0);
         let mut routes = Vec::new();
         for resident in village.residents.iter().filter(|r| r.alive) {
             let Some((good, count)) =
@@ -4994,6 +5003,7 @@ mod interrupted_first_save_tests {
             world: Some(World::default()),
             problem: None,
             physical_ticks: 0,
+            courier_routes: BTreeMap::new(),
         };
         let failure = save(&state).unwrap_err();
         assert!(failure.contains("world.json.tmp"));
