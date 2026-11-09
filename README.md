@@ -1,3 +1,30 @@
+## Stuck delivery recovery — safe native routing (Draft PR #35)
+
+Previously the game could reissue native navigation every 20 ticks
+without knowing whether a loaded courier was moving. A source-verified,
+UUID-linked NPC carrying genuine gathered items, wheat or bread now
+has a **volatile movement monitor**: navigation refresh is throttled,
+measurable progress resets the stall counter, and long stalls trigger
+at most four alternative loaded/clear hall approaches. Genuine
+sideways movement counts, so real detours are not mistaken for
+standing still.
+
+After retry exhaustion the same saved resource receipt **remains
+with the original NPC**. No timer grants goods, teleports a worker,
+edits terrain or abandons inventory. Use the read-only
+`/civ routes NAME` to inspect the progress age and STALLED status.
+An OP standing near the village may explicitly retry navigation
+for a loaded UUID-verified courier with
+`/civ retryroute NAME RESIDENT_ID confirm`. This resets ONLY
+temporary path attempts, not the saved goods.
+
+The monitor is not a native pathfinder result or multi-waypoint
+road-building engine. It is intentionally reset when actors
+unload/server restarts, and it cannot prove that a wall has a
+walkable bypass. Five Rust tests and twelve source-level Python
+contracts were authored but **not run**; no native Horizon build
+or gameplay run occurred. TEST_PLAN 418-430 covers later E2E.
+
 ## Courier delivery across shifts (Draft PR #35)
 
 A worker carrying an **already verified** oak/stone/sand/dirt pickup,
