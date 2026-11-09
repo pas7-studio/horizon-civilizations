@@ -1,3 +1,34 @@
+## Courier roads: loaded terrain checkpoints (Draft PR #35)
+
+Verified couriers now use a bounded **real loaded-block walking
+route** to the civic hall instead of aiming directly at the door.
+The route planner checks actual solid support under each step,
+two blocks of air for the NPC, one-block maximum climbs/descents
+and cardinal travel around obstacles. Missing chunks or unknown
+blocks fail closed; the mod will never silently assume that a
+blocked/unloaded corridor is empty.
+
+An A* survey yields native checkpoints at each bend, height change
+or up to six straight blocks. The same UUID-linked courier must
+physically move near its next checkpoint before continuing.
+Every route stays in volatile server memory. A saved source
+receipt and the inventory/warehouse checks remain the ONLY
+authorities for physical goods: plotting a route grants nothing.
+
+Stall retries may replan using a different loaded receiving
+approach; up to two full A* surveys per 20-tick navigation cycle
+bound the cost. When no trustworthy loaded route exists, the
+bridge does not fall back to an unsafe direct navigation request.
+Use /civ routes NAME to inspect the actual next checkpoint
+or NO VERIFIED WALKWAY, and /civ retryroute NAME ID confirm
+as OP only after inspecting a blocked route.
+
+This still does **not** build native roads, equip item stacks
+on mobs, support carts or certify real native pathfinding
+success. Seven Rust regression cases and 13 Python static
+contracts are authored but not executed, and no native
+Horizon build/gameplay test was run. TEST_PLAN 431–446.
+
 ## Stuck delivery recovery — safe native routing (Draft PR #35)
 
 Previously the game could reissue native navigation every 20 ticks
