@@ -305,6 +305,92 @@ pub fn native_worker_reaches_block(
     dx * dx + dy * dy + dz * dz <= reach * reach
 }
 
+/// Local-only navigation telemetry for a *previously verified* physical
+/// courier receipt. No goods, world block, or native mob state is changed by
+/// this pure monitor; it cannot certify success or authorize a delivery.
+/// Restart/unload intentionally resets this volatile record, not custody.
+pub const COURIER_STALL_TICKS: u64 = 400;
+pub const COURIER_REPATH_TICKS: u64 = 100;
+pub const COURIER_RETRY_COOLDOWN_TICKS: u64 = 120;
+pub const COURIER_MAX_REROUTES: u8 = 4;
+pub const COURIER_PROGRESS_METERS: f64 = 1.0;
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum CourierNavAction {
+    Wait,
+    Navigate { alternative: u8 },
+    NeedsHelp,
+}
+
+#[derive(Clone, Debug)]
+pub struct CourierRouteMonitor {
+    /// Best observed straight-line distance to the fixed civic hall center.
+    /// This only measures progress; it does NOT prove path connectivity.
+    pub best_distance: f64,
+    pub last_progress_tick: u64,
+    pub last_request_tick: u64,
+    pub reroutes: u8,
+}
+
+impl CourierRouteMonitor {
+    pub fn start(distance: f64, now: u64) -> Option<(Self, CourierNavAction)> {
+        if !distance.is_finite() || distance < 0.0 { return None; }
+        Some((Self {
+            best_distance: distance,
+            last_progress_tick: now,
+            last_request_tick: now,
+            reroutes: 0,
+        }, CourierNavAction::Navigate { alternative: 0 }))
+    }
+
+    /// A full second or more of server-tick observations is measured from
+    /// a real loaded worker. Only an actual >=1m decrease in distance to
+    /// the unchanged village center counts as progress; oscillating between
+    /// two neighboring blocks cannot grant infinite "progress" resets.
+    /// Every retry is rate-limited and bounded. Exhaustion pauses automatic
+    /// requests (not the worker, source job or saved receipt) until real
+    /// movement is witnessed. No time threshold credits/loses any item.
+    pub fn observe(&mut self, distance: f64, now: u64) -> CourierNavAction {
+        if !distance.is_finite() || distance < 0.0 {
+            return CourierNavAction::NeedsHelp;
+        }
+        if now < self.last_progress_tick || now < self.last_request_tick {
+            // Tick epoch may reset at server restart; do not interpret a
+            // stale time delta as an enormous blocked route.
+            self.best_distance = distance;
+            self.last_progress_tick = now;
+            self.last_request_tick = now;
+            self.reroutes = 0;
+            return CourierNavAction::Navigate { alternative: 0 };
+        }
+        if self.best_distance - distance >= COURIER_PROGRESS_METERS {
+            self.best_distance = distance;
+            self.last_progress_tick = now;
+            self.reroutes = 0;
+        }
+        let since_progress = now.saturating_sub(self.last_progress_tick);
+        let since_request = now.saturating_sub(self.last_request_tick);
+        if since_progress >= COURIER_STALL_TICKS {
+            if since_request < COURIER_RETRY_COOLDOWN_TICKS {
+                return CourierNavAction::Wait;
+            }
+            if self.reroutes >= COURIER_MAX_REROUTES {
+                return CourierNavAction::NeedsHelp;
+            }
+            self.reroutes += 1;
+            self.last_request_tick = now;
+            return CourierNavAction::Navigate { alternative: self.reroutes };
+        }
+        // A moving actor may need its native navigation request refreshed,
+        // but not every 20 ticks: repeated commands can reset its path.
+        if since_request >= COURIER_REPATH_TICKS {
+            self.last_request_tick = now;
+            return CourierNavAction::Navigate { alternative: self.reroutes };
+        }
+        CourierNavAction::Wait
+    }
+}
+
 /// Choose one loaded, active village gather per native gather tick. The
 /// bridge calls this once every 8 authoritative level ticks, so the
 /// division advances the round-robin exactly once per opportunity.
