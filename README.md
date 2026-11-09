@@ -1,3 +1,26 @@
+## Live NPC delivery indicator — in-game dialog (Draft PR #35)
+
+Talking to an actual UUID-bound village worker now shows a Minecraft
+item icon and the saved quantity when a **verified physical delivery
+receipt** is still in their custody: witnessed oak/cobblestone/sand/dirt
+pickup, confirmed farmer wheat, or real baker bread. When the item
+has been delivered, blocked, or its ownership is unknown, the
+ordinary profession icon reappears.
+
+This uses the existing native Minecraft **dialogue item widget** and
+does not equip the villager or spawn an item entity in the world. The
+line explicitly describes a verified delivery *record*, so it never
+confuses a journal witness with a real NPC inventory/equipment item.
+
+Orphaned old bread receipts without a saved baker carrier ID no longer
+reduce physical bread-restocking demand. As before, the old transit
+needs OP review rather than being credited to an arbitrary worker.
+
+This is committed source, NOT a tested Minecraft feature yet. Five
+Rust regressions and twelve Python source contracts were authored;
+none were executed, and neither Rust nor Horizon was built. Local
+acceptance scenarios are in TEST_PLAN 393-404.
+
 ## UUID-verified crop and bread couriers (Draft PR #35)
 
 The physical crop and bakery pipeline now saves the **specific farmer
