@@ -59,7 +59,9 @@ class PitCourierAndMealShiftContracts(unittest.TestCase):
         route = routine(GLUE, "fn guide_actors(")
         self.assertIn("matches!(phase, DailyPhase::Dawn | DailyPhase::Evening)", route)
         self.assertIn("village.meal_day == Some(game.world.day_time.div_euclid(24_000))", route)
-        self.assertIn("let pos = if meal_due {", route)
+        self.assertIn("let pos = if delivery_due {", route)
+        self.assertIn("} else if meal_due {", route)
+        self.assertLess(route.index("if delivery_due {"), route.index("else if meal_due {"))
         self.assertIn("phase.on_shift(resident.job) && resident.job == Job::Farmer", route)
         self.assertIn("phase.on_shift(resident.job) && resident.job == Job::Baker", route)
 
