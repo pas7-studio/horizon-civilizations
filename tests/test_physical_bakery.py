@@ -52,7 +52,7 @@ class PhysicalBakerySourceContracts(unittest.TestCase):
         self.assertIn("world_block(game, &dimension, step.pos)", method)
         self.assertIn("loaded_actors(game, world, id)", method)
         self.assertIn("game.native_mob(&dimension, *mob)", method)
-        self.assertIn("craft_bread(id)?", method)
+        self.assertIn("craft_bread_with_carrier(id, baker_id)?", method)
         self.assertIn("save_autonomous(state, before)?", method)
 
     def test_baker_hauls_bread_back_to_town_hall_before_deposit(self):
@@ -62,8 +62,9 @@ class PhysicalBakerySourceContracts(unittest.TestCase):
         self.assertIn("bakery.wheat_escrow < ", routes)
         self.assertIn("bakery.origin[0]", routes)
         method = GLUE.split("fn baker_one_step(",1)[1].split("\n}",1)[0]
-        self.assertIn("storage_worker_near(game, world, id, Job::Baker)", method)
-        self.assertIn("deliver_bakery_bread(id)?", method)
+        self.assertIn("village.bread_carrier_id", method)
+        self.assertIn("native_worker_near(actor.pos, village.center", method)
+        self.assertIn("deliver_bakery_bread_from(id, carrier)?", method)
         self.assertIn("v.warehouse_credit(Good::Bread, pending)?", CORE)
 
     def test_native_bread_created_only_as_bounded_verified_deposit(self):
