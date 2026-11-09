@@ -314,6 +314,7 @@ pub const COURIER_REPATH_TICKS: u64 = 100;
 pub const COURIER_RETRY_COOLDOWN_TICKS: u64 = 120;
 pub const COURIER_MAX_REROUTES: u8 = 4;
 pub const COURIER_PROGRESS_METERS: f64 = 1.0;
+pub const COURIER_MOVEMENT_METERS: f64 = 3.0;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CourierNavAction {
@@ -327,16 +328,22 @@ pub struct CourierRouteMonitor {
     /// Best observed straight-line distance to the fixed civic hall center.
     /// This only measures progress; it does NOT prove path connectivity.
     pub best_distance: f64,
+    /// Moving sideways through a real detour may increase hall distance.
+    /// A net 3m displacement from this anchor is also genuine movement.
+    pub motion_anchor: [f64; 3],
     pub last_progress_tick: u64,
     pub last_request_tick: u64,
     pub reroutes: u8,
 }
 
 impl CourierRouteMonitor {
-    pub fn start(distance: f64, now: u64) -> Option<(Self, CourierNavAction)> {
-        if !distance.is_finite() || distance < 0.0 { return None; }
+    pub fn start(position: [f64; 3], distance: f64, now: u64)
+        -> Option<(Self, CourierNavAction)> {
+        if !distance.is_finite() || distance < 0.0
+            || !position.iter().all(|n| n.is_finite()) { return None; }
         Some((Self {
             best_distance: distance,
+            motion_anchor: position,
             last_progress_tick: now,
             last_request_tick: now,
             reroutes: 0,
@@ -344,27 +351,37 @@ impl CourierRouteMonitor {
     }
 
     /// A full second or more of server-tick observations is measured from
-    /// a real loaded worker. Only an actual >=1m decrease in distance to
-    /// the unchanged village center counts as progress; oscillating between
-    /// two neighboring blocks cannot grant infinite "progress" resets.
+    /// a real loaded worker. A >=1m reduction in distance to the
+    /// unchanged village center OR a >=3m displacement from the previous
+    /// movement anchor counts; this also allows a real sideways detour.
+    /// Tiny oscillations/jitter cannot keep resetting the stall clock.
     /// Every retry is rate-limited and bounded. Exhaustion pauses automatic
     /// requests (not the worker, source job or saved receipt) until real
     /// movement is witnessed. No time threshold credits/loses any item.
-    pub fn observe(&mut self, distance: f64, now: u64) -> CourierNavAction {
-        if !distance.is_finite() || distance < 0.0 {
+    pub fn observe(
+        &mut self, position: [f64; 3], distance: f64, now: u64,
+    ) -> CourierNavAction {
+        if !distance.is_finite() || distance < 0.0
+            || !position.iter().all(|n| n.is_finite()) {
             return CourierNavAction::NeedsHelp;
         }
         if now < self.last_progress_tick || now < self.last_request_tick {
             // Tick epoch may reset at server restart; do not interpret a
             // stale time delta as an enormous blocked route.
             self.best_distance = distance;
+            self.motion_anchor = position;
             self.last_progress_tick = now;
             self.last_request_tick = now;
             self.reroutes = 0;
             return CourierNavAction::Navigate { alternative: 0 };
         }
-        if self.best_distance - distance >= COURIER_PROGRESS_METERS {
-            self.best_distance = distance;
+        let movement_sq = position.iter().zip(self.motion_anchor)
+            .map(|(current, anchor)| (current - anchor) * (current - anchor))
+            .sum::<f64>();
+        if self.best_distance - distance >= COURIER_PROGRESS_METERS
+            || movement_sq >= COURIER_MOVEMENT_METERS * COURIER_MOVEMENT_METERS {
+            self.best_distance = self.best_distance.min(distance);
+            self.motion_anchor = position;
             self.last_progress_tick = now;
             self.reroutes = 0;
         }
