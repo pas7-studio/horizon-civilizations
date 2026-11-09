@@ -1,3 +1,30 @@
+## PR #35 — loaded-world walking route checkpoints (source only)
+
+- [x] Pure budgeted A* plans actual cardinal, loaded, 2-high
+  walkable native terrain instead of sending couriers blindly
+  through solid blocks or missing chunks.
+- [x] Survey nearby safe starting ground at the actual UUID
+  actor location; require one-block maximum elevation steps.
+- [x] Preserve every turn/elevation change and compress straight
+  verified segments into up-to-six-block native waypoints.
+- [x] Advance a waypoint only from current native actor position,
+  with no implicit item delivery or fake inventory.
+- [x] Recompute a bounded route on genuine stalls / alternate
+  entrance choice; reuse a valid plan across normal refreshes.
+- [x] Cache unverified route failure without unsafe direct
+  fallback; throttle at most two A* surveys per navigation tick.
+- [x] Expose verified checkpoint index or NO VERIFIED WALKWAY
+  in read-only /civ routes NAME.
+- [x] Seven authored Rust and 13 authored Python checks;
+  E2E test scenarios 431–446.
+- [ ] User-run local compilation, automated suites and full
+  native Horizon world test including uneven terrain and
+  terrain modified while a courier moves.
+- [ ] World-generation road networks, longer-distance caravan
+  graph, native equipment-held goods and pathfinder callbacks
+  are separate unimplemented mechanics. Waypoints are not
+  proof of a native entity's eventual arrival.
+
 ## PR #35 — measured courier stalls and bounded recovery
 
 - [x] Track real source-verified loaded UUID couriers in volatile
