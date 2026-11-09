@@ -1535,3 +1535,28 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
      Horizon build and actual loaded-world gameplay **later**.
      This milestone authored code/tests/docs but executed no
      compiler, test runner or native Minecraft session.
+
+
+## Exact native courier receiving-area witness (PR #35 — source only)
+
+447. Stand the original UUID-bound real wheat, bread or mined-item
+     courier 6–8 blocks from the village center *behind a solid
+     hall wall*, not at an inspected front entrance. No goods may
+     enter the warehouse based solely on center-radius proximity.
+448. Bring the exact same loaded actor within 1.25 horizontal
+     and 1.25 vertical blocks of a currently clear, grounded,
+     two-air-high official front receiving approach. Only now
+     may the existing exact-worker domain receipt credit the
+     correct incoming warehouse quantity, exactly once.
+449. Block the primary entrance and leave a verified alternative
+     open. An actor who physically reaches that alternative may
+     complete their own delivery; a bystander on the wrong side
+     of a blocked wall cannot. No teleport or player-block edits.
+450. Load an old receipt or unload every official approach.
+     The native receiving check must fail closed and never mint
+     wheat, bread or gathered resources. /civ routes NAME must
+     use the same arrival criterion as the actual executor.
+451. Execute the full local build plus real native-entity and
+     physical-barrel E2E after the user starts testing. These
+     strict entrance assertions are authored source contracts,
+     not executed native gameplay evidence.
