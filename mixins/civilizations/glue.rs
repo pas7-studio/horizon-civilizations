@@ -6,7 +6,9 @@ use crate::game::{
         is_rooted_oak_harvest_origin, short_oak_stem_height, inspect_oak_stem,
         native_worker_near, native_worker_reaches_block, PostKind, POST_RADIUS, MAX_QUARRY_STEPS, gather_turn_index,
         BuildInspection, DailyPhase, FarmBlock, FarmDecision, FarmStage, Good, HomeSlot, Job, VisualBuildJob,
-        World, CourierNavAction, CourierRouteMonitor, inspect_home, hall_board_positions, HOUSING_PLOT_OFFSETS, MAX_HOUSING_SURVEY_RESULTS,
+        World, CourierNavAction, CourierRouteMonitor, courier_walkable,
+        plan_loaded_courier_path, courier_route_checkpoints,
+        inspect_home, hall_board_positions, HOUSING_PLOT_OFFSETS, MAX_HOUSING_SURVEY_RESULTS,
         MAX_SIM_DAYS},
     native_mobs::NativeSpawn,
     native_server::{NativeCommand, NativeServerPlayer},
@@ -301,6 +303,33 @@ fn loaded_civic_receiving_goal(
     None
 }
 
+/// Native UUID actor may stand on a ledge/plot which is not a full-solid
+/// waypoint cell (e.g. farmland). Survey only the actor's currently loaded
+/// feet cell and immediate neighbors, with strict 3D proximity. This is a
+/// *candidate start* for native walking, not proof the actor has arrived.
+fn loaded_courier_route_start(
+    game: &Game<'_>, dimension: &str, actor: [f64; 3],
+) -> Option<[i32; 3]> {
+    if !actor.iter().all(|v| v.is_finite()) { return None; }
+    let p = [actor[0].floor() as i32, actor[1].floor() as i32,
+             actor[2].floor() as i32];
+    for (dx, dy, dz) in [
+        (0, 0, 0), (1, 0, 0), (-1, 0, 0), (0, 0, 1), (0, 0, -1),
+        (0, 1, 0), (0, -1, 0),
+        (1, 1, 0), (-1, 1, 0), (0, 1, 1), (0, 1, -1),
+    ] {
+        let (Some(x), Some(y), Some(z)) = (
+            p[0].checked_add(dx), p[1].checked_add(dy), p[2].checked_add(dz),
+        ) else { continue };
+        let candidate = [x, y, z];
+        if native_worker_near(actor, candidate, 1.9, 1.5)
+            && courier_walkable(candidate, |pos| world_block(game, dimension, pos)) {
+            return Some(candidate);
+        }
+    }
+    None
+}
+
 /// Profession-aware day/night routing, limited to loaded UUID-bound actors.
 /// This does not implement actual sleeping or independent resource generation.
 fn guide_actors(
@@ -375,12 +404,42 @@ fn guide_actors(
                     CourierNavAction::Navigate { alternative } => alternative,
                     CourierNavAction::Wait | CourierNavAction::NeedsHelp => continue,
                 };
-                // Four bounded retries rotate entrance priority; neither
-                // a stuck timeout nor a destination check fabricates a good.
+                // The native pathfinder receives one VERIFIED checkpoint
+                // at a time, never an unobserved straight-line instruction
+                // through unknown chunks or solid player construction.
                 let Some(goal) = loaded_civic_receiving_goal(
                     game, &current_dim, village.center, alternative,
                 ) else { continue };
-                goal
+                let monitor = courier_routes.get_mut(&uuid)
+                    .expect("just-started verified courier monitor exists");
+                if monitor.route_alternative != Some(alternative) {
+                    let route = loaded_courier_route_start(
+                        game, &current_dim, mob.pos,
+                    ).and_then(|start| {
+                        let dest = [goal[0].floor() as i32, goal[1].floor() as i32,
+                                    goal[2].floor() as i32];
+                        plan_loaded_courier_path(start, dest, |pos|
+                            world_block(game, &current_dim, pos))
+                    }).map(|full| courier_route_checkpoints(&full))
+                      .unwrap_or_default();
+                    // Cache failures too; only a bounded reroute (or OP)
+                    // probes again. Never fall back to an unsafe direct
+                    // straight-line goal after a failed terrain survey.
+                    monitor.set_waypoints(alternative, route);
+                }
+                let Some(checkpoint) = monitor.next_waypoint(mob.pos)
+                else { continue };
+                if !courier_walkable(checkpoint, |pos| {
+                    world_block(game, &current_dim, pos)
+                }) {
+                    // Dynamic player edits can invalidate a planned
+                    // waypoint; wait for the next bounded retry to survey
+                    // real terrain again, without altering cargo.
+                    continue;
+                }
+                [f64::from(checkpoint[0]) + 0.5,
+                 f64::from(checkpoint[1]),
+                 f64::from(checkpoint[2]) + 0.5]
             } else if meal_due {
                 // Citizens actually walk to the public dining/warehouse
                 // entrance before one real loaf can be taken for them.
