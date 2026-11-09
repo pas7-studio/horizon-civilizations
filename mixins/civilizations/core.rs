@@ -3467,7 +3467,7 @@ impl World {
         &mut self, village_id: u64, decision: FarmDecision, worker_id: u64,
     ) -> Result<bool, String> {
         let v = self.settlements.get(&village_id).ok_or("unknown village")?;
-        let receipt = matches!(decision, FarmDecision::StageComplete)
+        let receipt = matches!(&decision, FarmDecision::StageComplete)
             && v.farm.as_ref().is_some_and(|f| f.stage == FarmStage::Harvesting);
         if receipt {
             if !v.residents.iter().any(|r| r.id == worker_id && r.alive
