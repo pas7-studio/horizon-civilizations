@@ -27,6 +27,10 @@ use std::sync::{Mutex, MutexGuard};
 const MOD_ID: &str = "civilizations";
 const DIR: &str = "horizon-civilizations";
 const SAVE: &str = "world.json";
+/// Full, loaded-block surveys are costly. At most two A* route plans per
+/// 20-tick navigation turn; remaining verified couriers retain custody and
+/// retry on a later normal refresh instead of blocking the server tick.
+const COURIER_MAX_PATH_SURVEYS_PER_NAV_TICK: usize = 2;
 
 struct ActiveWorld {
     path: PathBuf,
@@ -337,6 +341,7 @@ fn guide_actors(
     courier_routes: &mut BTreeMap<u128, CourierRouteMonitor>, physical_ticks: u64,
 ) {
     let mut observed_couriers = BTreeSet::new();
+    let mut route_surveys_remaining = COURIER_MAX_PATH_SURVEYS_PER_NAV_TICK;
     let current_dim = game.dim.id().to_owned();
     let phase = DailyPhase::at(game.world.day_time);
     let mut targets = Vec::new();
@@ -413,6 +418,13 @@ fn guide_actors(
                 let monitor = courier_routes.get_mut(&uuid)
                     .expect("just-started verified courier monitor exists");
                 if monitor.route_alternative != Some(alternative) {
+                    if route_surveys_remaining == 0 {
+                        // The previous request consumed its tick, but the
+                        // next capped refresh can plan this worker. Never
+                        // fallback to unverified direct native navigation.
+                        continue;
+                    }
+                    route_surveys_remaining -= 1;
                     let route = loaded_courier_route_start(
                         game, &current_dim, mob.pos,
                     ).and_then(|start| {
