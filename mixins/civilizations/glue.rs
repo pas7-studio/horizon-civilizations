@@ -1666,7 +1666,7 @@ pub fn perform(game: &mut Game<'_>, player: &NativeServerPlayer, command: &str, 
                             let dz = actor.pos[2] - destination[2];
                             let distance = (dx * dx + dy * dy + dz * dz).sqrt();
                             format!(
-                                "clear loaded hall approach ({distance:.1}m direct distance); {route_health}"
+                                "clear loaded hall approach ({distance:.1}m direct distance); {route_health}; native path success unknown"
                             )
                         } else {
                             "no clear LOADED receiving approach; inspect terrain/chunks, never credit cargo by timer".to_owned()
