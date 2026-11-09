@@ -922,3 +922,33 @@ native menu is deliberately not claimed. Native compilation/E2E pending.
   observed UUID movement, not an item physically equipped in a slot.
   World JSON and Minecraft native saves are not a single atomic commit.
 - Work stayed on Draft PR #35. main and GitHub Actions unchanged.
+
+
+## 2026-11-09 — receipt-backed NPC cargo portraits (PR #35)
+
+- Inspected existing Horizon adapter. A native villager navigation API and
+  a safe item-ICON widget in the existing /dialog show UI are available.
+  No independently verified native equipment API suitable for safely
+  attaching, recovering and de-duplicating physical held stacks was
+  found. This milestone deliberately does NOT fake held items, mutate
+  actual mob equipment, spawn display entities or create loot drops.
+- Added pure `resident_verified_cargo(village, resident)`: a verified,
+  alive, UUID-bound worker's in-transit cargo only. Native block gathers
+  need Issued + post-edit acknowledgement + source pickup witness +
+  unblocked exact worker binding. Farmer wheat and baker bread need
+  their already-persisted same-worker carrier ID and nonzero transit.
+- Reused the existing native item portrait widget in `build_dialog` to
+  show the actual item ICON for a verified in-transit receipt, plus
+  its exact quantity, worker and a clearly labelled receipt explanation.
+  Other residents and those with unbound/blocked/unwitnessed receipts
+  keep ordinary job portraits, not fake goods.
+- Fixed `needs_real_bread` to exclude unbound old bakery transit from
+  available bread so orphaned legacy loaves do not hide player supply
+  shortages. Updated existing Rust backpressure expectations.
+- Added five Rust domain/dialog regressions and twelve authored Python
+  static contracts; TEST_PLAN now includes cases 393-404.
+- Source-only GitHub commits, Draft PR #35; **no Cargo, Python tests,
+  native build or Minecraft gameplay was executed**.
+- Future genuine in-world equipped cargo needs a validated Horizon
+  entity-equipment interface, item-loss/restart reconciliation and
+  no-drop/no-duplication design before enabling it.
