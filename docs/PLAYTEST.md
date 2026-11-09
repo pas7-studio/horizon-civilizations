@@ -1,3 +1,25 @@
+## Dialogue cargo icon E2E — later local build
+
+Source-only feature: no native Horizon build or gameplay check was run.
+
+- Watch a miner/lumberjack dig and talk before then after the exact
+  saved native pickup witness. Only after pickup should the in-game
+  conversation portrait switch to the mined/harvested item.
+- Talk to unrelated miners/lumberjacks: their portraits must stay
+  their ordinary profession portraits. Cargo counts must be exact.
+- Let one farmer harvest a real field, and one baker finish a real
+  three-wheat recipe. Only the specific loaded UUID owners may show
+  wheat/bread cargo in their conversations.
+- After the worker comes home and their physical receiving receipt
+  commits, open the dialog again: no lingering cargo message.
+- On a disposable world, restart during delivery, simulate an old
+  unbound receipt and an issued-but-blocked gather: none may
+  fabricate an in-game cargo indicator or warehouse goods.
+- Inspect actual villager equipment/loot: this milestone MUST NOT
+  have changed their real main-hand slots or item-drop behavior.
+- Recheck bakery stock with an unbound historical loaf: it cannot
+  satisfy the available-bread buffer. See TEST_PLAN 393-404.
+
 ## UUID-bound wheat/bread courier E2E — later local run
 
 After the user's own native build succeeds, use a disposable world.
