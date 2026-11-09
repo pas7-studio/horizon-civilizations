@@ -1,7 +1,8 @@
 // Civilization domain model. Deliberately independent from Minecraft/Horizon APIs.
 // This source is also compiled as a standalone Cargo library for tests.
 use serde::{Deserialize, Serialize};
-use std::collections::{BTreeMap, BTreeSet};
+use std::cmp::Reverse;
+use std::collections::{BTreeMap, BTreeSet, BinaryHeap};
 
 pub const SCHEMA: u32 = 1;
 pub const MAX_SETTLEMENTS: usize = 64;
@@ -315,6 +316,10 @@ pub const COURIER_RETRY_COOLDOWN_TICKS: u64 = 120;
 pub const COURIER_MAX_REROUTES: u8 = 4;
 pub const COURIER_PROGRESS_METERS: f64 = 1.0;
 pub const COURIER_MOVEMENT_METERS: f64 = 3.0;
+pub const COURIER_PATH_MAX_EXPANSIONS: usize = 4_096;
+pub const COURIER_PATH_MAX_SPAN: u32 = 112;
+pub const COURIER_PATH_MAX_ELEVATION: u32 = 8;
+pub const COURIER_ROUTE_WAYPOINT_SPACING: usize = 6;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum CourierNavAction {
@@ -334,6 +339,13 @@ pub struct CourierRouteMonitor {
     pub last_progress_tick: u64,
     pub last_request_tick: u64,
     pub reroutes: u8,
+    /// Ephemeral, native-world-observed walking checkpoints. A persisted
+    /// resource receipt never depends on this route existing.
+    pub waypoints: Vec<[i32; 3]>,
+    pub waypoint_cursor: usize,
+    /// Which of the loaded hall entrances this path was checked against.
+    /// Even a failed plan is cached until the next bounded retry.
+    pub route_alternative: Option<u8>,
 }
 
 impl CourierRouteMonitor {
@@ -347,6 +359,9 @@ impl CourierRouteMonitor {
             last_progress_tick: now,
             last_request_tick: now,
             reroutes: 0,
+            waypoints: Vec::new(),
+            waypoint_cursor: 0,
+            route_alternative: None,
         }, CourierNavAction::Navigate { alternative: 0 }))
     }
 
@@ -373,6 +388,9 @@ impl CourierRouteMonitor {
             self.last_progress_tick = now;
             self.last_request_tick = now;
             self.reroutes = 0;
+            self.waypoints.clear();
+            self.waypoint_cursor = 0;
+            self.route_alternative = None;
             return CourierNavAction::Navigate { alternative: 0 };
         }
         let dx = position[0] - self.motion_anchor[0];
@@ -407,6 +425,148 @@ impl CourierRouteMonitor {
         }
         CourierNavAction::Wait
     }
+
+    /// Mark the result of one bounded, fully observed native block survey.
+    /// Empty means no proven route, never "send directly anyway".
+    pub fn set_waypoints(&mut self, alternative: u8, waypoints: Vec<[i32; 3]>) {
+        self.route_alternative = Some(alternative);
+        self.waypoints = waypoints;
+        self.waypoint_cursor = 0;
+    }
+
+    /// The native actor's CURRENT loaded coordinates are the only basis
+    /// for advancing the next checkpoint. This is not inventory delivery.
+    pub fn next_waypoint(&mut self, actor: [f64; 3]) -> Option<[i32; 3]> {
+        if !actor.iter().all(|n| n.is_finite()) { return None; }
+        while let Some(target) = self.waypoints.get(self.waypoint_cursor) {
+            if !native_worker_near(actor, *target, 1.8, 1.5) { break; }
+            self.waypoint_cursor += 1;
+        }
+        self.waypoints.get(self.waypoint_cursor).copied()
+    }
+
+}
+
+/// One conservative, loaded-world walkable block: real solid native ground
+/// and two blocks of actual air at the actor's feet/head. Unknown chunks,
+/// water, fences, doors, player containers and slab geometry are NOT guessed
+/// traversable. A corridor may be passable to Horizon and still fail here;
+/// uncertain routes are paused rather than approving phantom goods.
+pub fn courier_walkable(
+    feet: [i32; 3], mut read: impl FnMut([i32; 3]) -> Option<String>,
+) -> bool {
+    let (Some(floor), Some(head)) = (feet[1].checked_sub(1), feet[1].checked_add(1))
+    else { return false };
+    let ground = read([feet[0], floor, feet[2]]);
+    let supported = ground.as_deref().is_some_and(|name|
+        is_ground(name) || matches!(name, "minecraft:oak_planks" | "minecraft:cobblestone"));
+    supported
+        && read(feet).as_deref() == Some("minecraft:air")
+        && read([feet[0], head, feet[2]]).as_deref() == Some("minecraft:air")
+}
+
+/// Bounded A* on real, ALREADY LOADED, 2-high walkable block coordinates.
+/// Only cardinal horizontal motion and flat or one-block-height steps are
+/// allowed, with a conservative headroom check when climbing. No diagonal
+/// shortcuts, no vertical flight, no offscreen block assumptions, no
+/// world edits or new resources. Search aborts when the strict budget
+/// expires; None is UNKNOWN/UNSAFE, not proof that a route is impossible.
+pub fn plan_loaded_courier_path(
+    start: [i32; 3], goal: [i32; 3],
+    mut read: impl FnMut([i32; 3]) -> Option<String>,
+) -> Option<Vec<[i32; 3]>> {
+    if start[0].abs_diff(goal[0]) > COURIER_PATH_MAX_SPAN
+        || start[2].abs_diff(goal[2]) > COURIER_PATH_MAX_SPAN
+        || start[1].abs_diff(goal[1]) > COURIER_PATH_MAX_ELEVATION {
+        return None;
+    }
+    if !courier_walkable(start, &mut read) || !courier_walkable(goal, &mut read) {
+        return None;
+    }
+    let heuristic = |a: [i32; 3]| -> u32 {
+        a[0].abs_diff(goal[0]).saturating_add(a[2].abs_diff(goal[2]))
+            .saturating_mul(10)
+    };
+    let mut pending = BinaryHeap::new();
+    let mut scores: BTreeMap<[i32; 3], u32> = BTreeMap::new();
+    let mut parent: BTreeMap<[i32; 3], [i32; 3]> = BTreeMap::new();
+    scores.insert(start, 0);
+    pending.push(Reverse((heuristic(start), 0_u32, start)));
+    let mut expanded = 0_usize;
+    while let Some(Reverse((_, cost, at))) = pending.pop() {
+        if scores.get(&at) != Some(&cost) { continue; }
+        if at == goal {
+            let mut path = vec![goal];
+            let mut step = goal;
+            while step != start {
+                step = *parent.get(&step)?;
+                path.push(step);
+                if path.len() > COURIER_PATH_MAX_EXPANSIONS { return None; }
+            }
+            path.reverse();
+            return Some(path);
+        }
+        expanded += 1;
+        if expanded > COURIER_PATH_MAX_EXPANSIONS { return None; }
+        for (dx, dz) in [(0_i32,-1_i32), (-1,0), (1,0), (0,1)] {
+            let (Some(x), Some(z)) = (at[0].checked_add(dx), at[2].checked_add(dz))
+            else { continue };
+            if x.abs_diff(start[0]) > COURIER_PATH_MAX_SPAN
+                || z.abs_diff(start[2]) > COURIER_PATH_MAX_SPAN { continue; }
+            for dy in [0_i32, 1, -1] {
+                let Some(y) = at[1].checked_add(dy) else { continue };
+                if y.abs_diff(start[1]) > COURIER_PATH_MAX_ELEVATION
+                    || y.abs_diff(goal[1]) > COURIER_PATH_MAX_ELEVATION {
+                    continue;
+                }
+                let next = [x,y,z];
+                if !courier_walkable(next, &mut read) { continue; }
+                if dy == 1 {
+                    // Climbing into a full block requires free headroom
+                    // at the old position as the villager steps up.
+                    let Some(above) = at[1].checked_add(2) else { continue };
+                    if read([at[0], above, at[2]]).as_deref() != Some("minecraft:air") {
+                        continue;
+                    }
+                }
+                let next_cost = cost.saturating_add(if dy == 0 { 10 } else { 15 });
+                if scores.get(&next).is_some_and(|best| *best <= next_cost) {
+                    continue;
+                }
+                scores.insert(next, next_cost);
+                parent.insert(next, at);
+                pending.push(Reverse((next_cost.saturating_add(heuristic(next)), next_cost, next)));
+            }
+        }
+    }
+    None
+}
+
+/// Split a completely loaded and validated cardinal path into close native
+/// navigation goals: every bend, elevation change or six straight blocks.
+/// Excludes the origin, includes the destination, never skips a corner.
+pub fn courier_route_checkpoints(full: &[[i32; 3]]) -> Vec<[i32; 3]> {
+    if full.len() <= 1 { return Vec::new(); }
+    let delta = |a: [i32; 3], b: [i32; 3]| -> [i64; 3] {
+        [i64::from(b[0]) - i64::from(a[0]),
+         i64::from(b[1]) - i64::from(a[1]),
+         i64::from(b[2]) - i64::from(a[2])]
+    };
+    let mut out = Vec::new();
+    let mut from = 0_usize;
+    let mut direction = delta(full[0], full[1]);
+    for index in 2..full.len() {
+        let next_direction = delta(full[index-1], full[index]);
+        if next_direction != direction
+            || index - 1 - from >= COURIER_ROUTE_WAYPOINT_SPACING {
+            out.push(full[index-1]);
+            from = index-1;
+        }
+        direction = next_direction;
+    }
+    let end = *full.last().expect("nonempty route");
+    if out.last() != Some(&end) { out.push(end); }
+    out
 }
 
 /// Choose one loaded, active village gather per native gather tick. The
