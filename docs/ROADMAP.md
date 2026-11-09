@@ -1,3 +1,24 @@
+## PR #35 — honest visual cargo through NPC dialogues (source only)
+
+- [x] Display the confirmed resource item icon and exact receipt
+  count in the existing in-game NPC conversation widget.
+- [x] Only an alive UUID-bound worker with a witnessed gather pickup,
+  assigned wheat harvest, or assigned crafted bread can show cargo.
+- [x] Unknown, blocked, unconfirmed, unbound, delivered or unrelated
+  workers cannot borrow another resident's cargo portrait.
+- [x] Reuse existing Horizon dialog item widget: no additional entities,
+  native equipment modification or inventory creation.
+- [x] Old bakery bread transit without a verified baker ID no longer
+  suppresses genuine physical bread restock demand.
+- [x] Five Rust domain/display regressions and twelve Python contracts
+  authored, with TEST_PLAN 393-404.
+- [ ] User-run native Horizon compile, in-game dialogs and receipt
+  persistence checks after actual block pickup/delivery.
+- [ ] True item shown in the NPC's HAND: identify an engine-supported
+  visual/equipment API, implement safe UUID-targeted writes, drop
+  protection, crash reconciliation and cleanup. The dialogue icon
+  is *not* an in-world equipped object.
+
 ## PR #35 — same-UUID courier custody (source-only)
 
 - [x] Correct a real custody gap: finished physical wheat and real
