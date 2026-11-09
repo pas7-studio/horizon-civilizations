@@ -1418,3 +1418,56 @@ These now have pure Rust state-machine tests, not in-game proofs; keep valuable 
 417. Repeat all above after actual native Horizon build and
      disposable-world first-play E2E. The source contract tests
      were AUTHORED but not executed in this assistant run.
+
+
+## Bounded courier stall detection and safe retries (PR #35 — SOURCE ONLY)
+
+418. Have a confirmed UUID-bound worker carry one native-verified
+     oak/stone/sand/dirt receipt at least 8 blocks from the town
+     center. Confirm the initial native navigation request happens
+     promptly, but repeated requests are throttled rather than sent
+     on every 20-tick planning step.
+419. Move the worker at least one real meter closer to the town:
+     the monitor must reset the stall timer and alternative-attempt
+     counter, without changing its receipt or any native inventory.
+420. Force a safe sideways detour of at least three meters without
+     approaching the village. This counts as real movement and
+     prevents a false stall; submeter back-and-forth jitter does not.
+421. Hold a verified courier still for at least 400 server ticks.
+     The bridge may retry the native route only on a bounded
+     cooldown and should rotate among observed loaded, clear hall
+     approaches, never teleport, edit blocks or grant goods.
+422. With every retry unsuccessful, the monitor must stop issuing
+     automatic route requests after four alternative retries.
+     /civ routes NAME reports STALLED and the attempt count,
+     while the original world.json resource receipt remains intact.
+423. Keep a loaded stalled worker stationary for many more ticks.
+     The retry budget stays exhausted; no unattended timer or
+     counter rollover may credit, delete, reassign or drop cargo.
+424. Clear an obstructing block and have the worker genuinely move
+     one meter closer or three meters from its movement anchor.
+     Monitoring may resume and retry budget resets from actual
+     native position evidence, not just elapsed time.
+425. Unload the worker/entity chunk, remove actor visibility or
+     unload all safe receiving approaches. Volatile route telemetry
+     must disappear or pause; the durable UUID custody, native
+     source evidence and warehouse counts remain unchanged.
+426. Restart the server between retry attempts: the volatile
+     monitor restarts at zero, but the same saved courier ID
+     and exact warehouse receipt remain, with no extra items.
+427. As an OP physically within 32 blocks of the matching hall,
+     use /civ retryroute NAME RESIDENT_ID confirm for a genuinely
+     loaded original UUID-linked courier with saved verified cargo.
+     The command only resets its volatile navigation state; it
+     cannot edit receipts, inventories, village stock or UUIDs.
+428. Attempt /civ retryroute as a non-OP, in another dimension,
+     while far away, for an unloaded actor, a deceased resident
+     or one without verified cargo. All must be refused.
+429. Inspect /civ routes NAME as an ordinary visitor: show
+     observed movement age and retry count, report exhausted
+     routes clearly, and never claim the native pathfinder has
+     proven a route to the hall solely from a direct distance.
+430. Run later on the user's machine: Rust tests, Python source
+     contracts, native Horizon build and disposable-world
+     route/obstacle E2E. The source milestone here did not
+     execute these gates or prove real native pathfinding.
