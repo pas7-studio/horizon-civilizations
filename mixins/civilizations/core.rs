@@ -8789,7 +8789,7 @@ mod native_courier_stall_monitor_tests {
         assert_eq!(m.last_progress_tick, 180);
         assert_eq!(m.best_distance, 50.0);
         assert_eq!(m.reroutes, 0);
-        assert_eq!(m.observe([0.2,70.0,3.2], 51.0, 220), CourierNavAction::Wait);
+        assert_eq!(m.observe([0.2,70.0,3.2], 51.0, 190), CourierNavAction::Wait);
         assert_eq!(m.last_progress_tick, 180);
     }
 
