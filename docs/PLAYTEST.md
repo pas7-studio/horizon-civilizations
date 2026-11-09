@@ -1,3 +1,34 @@
+## Nighttime courier route and arrival E2E — after local build
+
+Source-only milestone. Do NOT assume the branch compiles or the game
+works without the user's own tests and native build.
+
+1. In a disposable loaded town, use two lumberjacks/miners. Have
+   only Worker A perform and witness the native block pickup.
+   Set night/dinner time: A must navigate toward the physical hall
+   without an additional block edit or credit from Worker B.
+2. Complete one real farm harvest just before night. Watch the
+   same UUID-bound farmer return after shift and confirm exactly
+   one batch, then inspect actual warehouse/barrel receipts.
+3. Repeat with one baker and three physically extracted wheat
+   ingredients. Delivery after shift is legal; NEW bread crafting
+   during off-shift remains forbidden.
+4. Obstruct the receiving area's main safe block, keeping a
+   nearby side approach clear. The worker should be routed toward
+   an alternative loaded, stable, two-air-high target.
+5. Obstruct/unload all safe approaches: movement must pause with
+   intact saved custody and no fake resource creation. Read
+   /civ routes NAME and /civ logistics NAME for independent views.
+6. Restart during the carried state. The return target should
+   resume when chunks load; neither a timeout nor reading
+   /civ routes can credit the saved goods.
+7. A path may still be blocked between worker and hall. The
+   route diagnostic only proves current UUID position and goal
+   visibility, not actual pathfinder reachability. Watch the
+   native actor and server logs before declaring success.
+
+See TEST_PLAN 405-417. Native tests/builds were not run here.
+
 ## Dialogue cargo icon E2E — later local build
 
 Source-only feature: no native Horizon build or gameplay check was run.
