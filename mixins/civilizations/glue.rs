@@ -344,6 +344,12 @@ fn guide_actors(
                 // Only a signed source/crafting receipt enters this monitor.
                 let Some(uuid) = resident.entity_uuid else { continue };
                 let Some(mob) = game.native_mob(&current_dim, mob_id) else { continue };
+                // No loaded receiving point means we have no evidence of
+                // a navigable destination. Pause (and drop volatile stall
+                // timer) rather than exhausting attempts on unloaded land.
+                if loaded_civic_receiving_goal(
+                    game, &current_dim, village.center, 0,
+                ).is_none() { continue; }
                 if native_worker_near(mob.pos, village.center, 8.0, 4.0) {
                     // The existing exact-UUID receiving executor now owns
                     // credit; stop trying to move an already-arrived worker.
