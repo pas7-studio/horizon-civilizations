@@ -1,3 +1,36 @@
+## UUID-verified crop and bread couriers (Draft PR #35)
+
+The physical crop and bakery pipeline now saves the **specific farmer
+or baker** responsible for each in-transit batch. A different NPC with
+the same profession cannot turn somebody else's crop or bread receipt
+into warehouse items by standing at the hall.
+
+Farm completion binds the exact loaded UUID-linked worker, and a baker
+crafting at an intact real workshop binds the same identity to the
+finished bread. They must return to the hall before that specific
+receipt enters the existing physical storage delivery queue. While
+carrying, their job assignment remains pinned; they cannot be
+automatically replaced when offline.
+
+**Legacy worlds:** older pending wheat/bread without a carrier ID can
+still load but the goods are deliberately quarantined from automatic
+warehouse credit. Inspect `/civ logistics NAME`; if the missing
+worker identity cannot be proven, an OP can deliberately write off
+the old unbound transit from near the hall with
+`/civ retirecargo NAME wheat confirm` or
+`/civ retirecargo NAME bread confirm`. This permanently discards
+the unverified receipt; it does NOT put items into a barrel. Bound
+live-courier receipts cannot be retired by this command.
+
+A native barrel that is unloaded/unavailable no longer looks like
+zero sand/dirt stock and cannot drive unnecessary pit digging.
+
+The changes are **source-only**. Five Rust tests and twelve Python
+contracts were written, not executed; no native Horizon client build
+or Minecraft world E2E was performed. NPC carried-item graphics and
+native equipment inventory are still not implemented. See
+TEST_PLAN 379-392.
+
 ## Civic supplier progression and physical logistics (Draft PR #35)
 
 Contributing **real Minecraft items** to a town is now tracked per
