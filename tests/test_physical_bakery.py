@@ -63,7 +63,7 @@ class PhysicalBakerySourceContracts(unittest.TestCase):
         self.assertIn("bakery.origin[0]", routes)
         method = GLUE.split("fn baker_one_step(",1)[1].split("\n}",1)[0]
         self.assertIn("village.bread_carrier_id", method)
-        self.assertIn("native_worker_near(actor.pos, village.center", method)
+        self.assertIn("native_courier_at_receiving(game, &dimension, village.center, actor.pos)", method)
         self.assertIn("deliver_bakery_bread_from(id, carrier)?", method)
         self.assertIn("v.warehouse_credit(Good::Bread, pending)?", CORE)
 
